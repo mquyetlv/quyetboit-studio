@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .models import ProjectModel
+from .persistence import ProjectStore
+from .vietsub import VietSubPage
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Quyết Bồ IT Studio")
+        self.resize(1440, 900); self.setMinimumSize(1100, 700)
+        self.project = ProjectModel(); self.project_path: Path | None = None; self.dirty = False
+        self.store = ProjectStore(); self.autosave_path = Path.cwd() / ".quyetboit-autosave.json"
+        self._build_menu(); self._build_ui()
+        self.autosave_timer = QTimer(self); self.autosave_timer.setInterval(15_000); self.autosave_timer.timeout.connect(self._autosave); self.autosave_timer.start()
+
+    def _build_menu(self) -> None:
+        menu = self.menuBar().addMenu("Tệp")
+        actions = (("Dự án mới", "Ctrl+N", self.new_project), ("Mở project…", "Ctrl+O", self.open_project),
+                   ("Lưu", "Ctrl+S", self.save_project), ("Lưu thành…", "Ctrl+Shift+S", self.save_project_as))
+        for text, shortcut, slot in actions:
+            action = QAction(text, self); action.setShortcut(shortcut); action.triggered.connect(slot); menu.addAction(action)
+        recover = QAction("Khôi phục autosave", self); recover.triggered.connect(self.recover_autosave); menu.addAction(recover)
+        menu.addSeparator(); close = QAction("Thoát", self); close.triggered.connect(self.close); menu.addAction(close)
+
+    def _build_ui(self) -> None:
+        central = QWidget(); central.setObjectName("AppRoot"); self.setCentralWidget(central)
+        root = QHBoxLayout(central); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
+        self.sidebar = QFrame(); self.sidebar.setObjectName("Sidebar"); self.sidebar.setFixedWidth(236)
+        nav = QVBoxLayout(self.sidebar); nav.setContentsMargins(12,16,12,16); nav.setSpacing(6)
+        brand = QHBoxLayout(); self.logo = QLabel("QB"); self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter); self.logo.setFixedSize(36,36); self.logo.setStyleSheet("background:#5b5ce2;color:white;border-radius:10px;font-weight:800;")
+        self.brand_name = QLabel("Quyết Bồ IT Studio"); self.brand_name.setObjectName("SectionTitle")
+        self.toggle = QPushButton("☰"); self.toggle.setFixedWidth(34); self.toggle.clicked.connect(self.toggle_sidebar)
+        brand.addWidget(self.logo); brand.addWidget(self.brand_name, 1); brand.addWidget(self.toggle); nav.addLayout(brand); nav.addSpacing(18)
+        self.vietsub_nav = self._nav_button("🎬  VietSub", "VietSub"); self.audio_nav = self._nav_button("♫  Audio Creator", "Audio Creator")
+        self.vietsub_nav.setChecked(True); self.vietsub_nav.clicked.connect(lambda: self._set_page(0)); self.audio_nav.clicked.connect(lambda: self._set_page(1))
+        nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addStretch()
+        version = QLabel("Prototype v0.1"); version.setObjectName("Subtitle"); version.setAlignment(Qt.AlignmentFlag.AlignCenter); nav.addWidget(version); self.version_label = version
+        root.addWidget(self.sidebar)
+        self.pages = QStackedWidget(); self.vietsub = VietSubPage(self.project); self.vietsub.dirty_changed.connect(self.set_dirty)
+        self.vietsub.request_new.connect(self.new_project); self.vietsub.request_open.connect(self.open_project); self.vietsub.request_save.connect(self.save_project)
+        self.pages.addWidget(self.vietsub); self.pages.addWidget(self._audio_placeholder()); root.addWidget(self.pages, 1)
+
+    def _nav_button(self, text: str, tooltip: str) -> QPushButton:
+        b = QPushButton(text); b.setObjectName("NavButton"); b.setCheckable(True); b.setToolTip(tooltip); b.setMinimumHeight(44); return b
+
+    def _audio_placeholder(self) -> QWidget:
+        page = QWidget(); page.setObjectName("AppRoot"); layout = QVBoxLayout(page); layout.setContentsMargins(50,50,50,50)
+        card = QFrame(); card.setObjectName("Card"); card.setMaximumWidth(620); card_layout = QVBoxLayout(card); card_layout.setContentsMargins(36,42,36,42)
+        icon = QLabel("♫"); icon.setStyleSheet("font-size:54px;color:#6366f1;"); icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = QLabel("Audio Creator"); title.setObjectName("Title"); title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub = QLabel("Tính năng đang được phát triển"); sub.setObjectName("Subtitle"); sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(icon); card_layout.addWidget(title); card_layout.addWidget(sub); layout.addStretch(); layout.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter); layout.addStretch(); return page
+
+    def _set_page(self, index: int) -> None:
+        self.pages.setCurrentIndex(index); self.vietsub_nav.setChecked(index == 0); self.audio_nav.setChecked(index == 1)
+
+    def toggle_sidebar(self) -> None:
+        collapsed = self.sidebar.width() > 100
+        self.sidebar.setFixedWidth(76 if collapsed else 236); self.brand_name.setVisible(not collapsed); self.version_label.setVisible(not collapsed)
+        self.vietsub_nav.setText("🎬" if collapsed else "🎬  VietSub"); self.audio_nav.setText("♫" if collapsed else "♫  Audio Creator")
+        self.vietsub_nav.setStyleSheet("text-align:center;" if collapsed else ""); self.audio_nav.setStyleSheet("text-align:center;" if collapsed else "")
+
+    def set_dirty(self, dirty: bool = True) -> None:
+        self.dirty = dirty; marker = " • Chưa lưu" if dirty else " • Đã lưu"
+        self.vietsub.project_label.setText(f"{self.project.name}{marker}"); self.setWindowTitle(f"Quyết Bồ IT Studio{' *' if dirty else ''}")
+
+    def _confirm_discard(self) -> bool:
+        if not self.dirty: return True
+        result = QMessageBox.question(self, "Thay đổi chưa lưu", "Project có thay đổi chưa lưu. Bạn có muốn lưu trước khi tiếp tục?", QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
+        if result == QMessageBox.StandardButton.Cancel: return False
+        if result == QMessageBox.StandardButton.Save: return self.save_project()
+        return True
+
+    def new_project(self) -> None:
+        if not self._confirm_discard(): return
+        self.project = ProjectModel(); self.project_path = None; self.vietsub.set_project(self.project); self.set_dirty(False)
+
+    def open_project(self) -> None:
+        if not self._confirm_discard(): return
+        path, _ = QFileDialog.getOpenFileName(self, "Mở project", "", "Quyết Bồ Project (*.qbstudio.json *.json)")
+        if not path: return
+        try: project = self.store.load(path)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Không thể mở project", str(exc)); return
+        self.project = project; self.project_path = Path(path); self.vietsub.set_project(project); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
+
+    def save_project(self) -> bool:
+        if self.project_path is None: return self.save_project_as()
+        try: self.store.save(self.project, self.project_path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Không thể lưu", str(exc)); return False
+        self.set_dirty(False); self.statusBar().showMessage(f"Đã lưu {self.project_path}", 4000); return True
+
+    def save_project_as(self) -> bool:
+        path, _ = QFileDialog.getSaveFileName(self, "Lưu project", f"{self.project.name}.qbstudio.json", "Quyết Bồ Project (*.qbstudio.json)")
+        if not path: return False
+        if not path.endswith(".json"): path += ".qbstudio.json"
+        self.project_path = Path(path); self.project.name = self.project_path.name.removesuffix(".qbstudio.json"); return self.save_project()
+
+    def _autosave(self) -> None:
+        if self.dirty:
+            try: self.store.autosave(self.project, self.autosave_path)
+            except OSError: pass
+
+    def recover_autosave(self) -> None:
+        if not self.autosave_path.exists():
+            QMessageBox.information(self, "Autosave", "Không có phiên autosave để khôi phục.")
+            return
+        if not self._confirm_discard(): return
+        try: project = self.store.load(self.autosave_path)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Autosave bị lỗi", str(exc)); return
+        self.project = project; self.project_path = None; self.vietsub.set_project(project); self.set_dirty(True)
+        self.statusBar().showMessage("Đã khôi phục phiên autosave", 5000)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._confirm_discard(): event.accept()
+        else: event.ignore()

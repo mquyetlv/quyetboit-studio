@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
+import tempfile
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +17,17 @@ import httpx
 from ...core.models import AudioArtifact, CancellationToken, PipelineError, SrtCue
 from ...core.retry import RetryPolicy, retry_call
 from .auth import CapCutSession
-from .config import ACCOUNT_INFO, AID, APPVR_AIGC, APPVR_ASSET, EDIT_API, USER_AGENT
+from .config import (
+    ACCOUNT_INFO,
+    AID,
+    APPVR_AIGC,
+    APPVR_ASSET,
+    EDIT_API,
+    USER_AGENT,
+    VOICE_API_VERSION,
+    VOICE_CATEGORIES,
+    VOICE_REGION,
+)
 
 
 def make_sign(path: str, appvr: str, now: int | None = None) -> dict[str, str]:
@@ -34,6 +48,7 @@ class Voice:
     lang: str = "vi"
     category: str = "vietnamese"
     gender: str = ""
+    categories: tuple[str, ...] = ()
 
 
 class CapCutEditClient:
@@ -140,15 +155,24 @@ class CapCutEditClient:
             return None
         platform_name = str(tone.get("platform") or "").lower()
         platform = 2 if "11labs" in platform_name else 1
+        gender = str(extra.get("gender") or "")
+        if not gender and category == "female_voice":
+            gender = "female"
+        elif not gender and category == "male_voice":
+            gender = "male"
+        languages = {
+            "vietnamese": "vi", "english": "en", "zhongwen": "zh",
+            "indonesian": "id", "taiyu": "th",
+        }
         return Voice(str(common.get("title") or speaker), speaker, platform,
                      str(common.get("effect_id") or ""), str(common.get("third_resource_id_str") or ""),
-                     category="vietnamese" if category == "vietnamese" else category,
-                     gender=str(extra.get("gender") or ""))
+                     lang=languages.get(category, ""), category=category, gender=gender,
+                     categories=(category,))
 
     def list_voices(self, category: str = "vietnamese") -> list[Voice]:
         path = "/artist/v1/effect/get_resources_by_category_id"
-        params = {"aid": AID, "version_name": "19.3.0", "version_code": "11.0.0", "sdk_version": "19.3.0",
-                  "effect_sdk_version": "19.3.0", "device_platform": "web", "region": "VN", "language": "en",
+        params = {"aid": AID, "version_name": VOICE_API_VERSION, "version_code": "11.0.0", "sdk_version": VOICE_API_VERSION,
+                  "effect_sdk_version": VOICE_API_VERSION, "device_platform": "web", "region": VOICE_REGION, "language": "en",
                   "device_type": "web", "channel": "online"}
         body = {"panel": "tone", "category_id": None, "category_key": category, "panel_source": "heycan",
                 "pack_optional": {"need_tag": True, "need_thumb": True, "thumb_opt": '{"is_support_webp":1}',
@@ -162,25 +186,43 @@ class CapCutEditClient:
                 unique[voice.speaker] = voice
         return list(unique.values())
 
+    @staticmethod
+    def _audio_url(payload: dict[str, Any]) -> str:
+        data = payload.get("data") or {}
+        collections = ("tts_materials", "auditions", "audition_list", "tts_list", "list", "speakers", "results")
+        direct = ("audio_url", "url", "play_url", "tts_url")
+        nested = ("audio_info", "meta_data", "audio", "tts_material")
+        candidates = [data] if isinstance(data, dict) else []
+        for collection in collections:
+            candidates.extend(data.get(collection) or [])
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            for key in direct:
+                if item.get(key):
+                    return str(item[key])
+            for container in nested:
+                child = item.get(container) or {}
+                for key in direct:
+                    if child.get(key):
+                        return str(child[key])
+        raise PipelineError("capcut_tts_schema", "CapCut không trả URL audio TTS.", provider="capcut")
+
     def tts_url(self, text: str, voice: Voice, rate: float = 1.0, volume: int = 100) -> str:
         path = "/storyboard/v1/tts/multi_platform"
         payload = self.request("POST", path, json={"texts": [text], "tts_conf": {
             "speaker": voice.speaker, "rate": round(rate, 2), "volume": volume, "name": voice.name,
             "platform": "sami" if voice.platform == 1 else "11labs", "effect_id": voice.effect_id,
             "resource_id": voice.resource_id, "is_clone": False}, "need_url": True})
-        data = payload.get("data") or {}
-        collections = ("tts_materials", "auditions", "audition_list", "tts_list", "list", "speakers", "results")
-        direct = ("audio_url", "url", "play_url", "tts_url")
-        nested = ("audio_info", "meta_data", "audio", "tts_material")
-        for collection in collections:
-            for item in data.get(collection) or []:
-                for key in direct:
-                    if item.get(key): return str(item[key])
-                for container in nested:
-                    child = item.get(container) or {}
-                    for key in direct:
-                        if child.get(key): return str(child[key])
-        raise PipelineError("capcut_tts_schema", "CapCut không trả URL audio TTS.", provider="capcut")
+        return self._audio_url(payload)
+
+    def audition_url(self, voice: Voice, text: str = "Xin chào, đây là giọng đọc thử.") -> str:
+        path = "/lv/v2/intelligence/tts/mget_audition"
+        payload = self.request("POST", path, json={"speakers": [{
+            "speaker": voice.speaker, "platform": voice.platform, "text": text,
+            "lan": voice.lang or "vi",
+        }]})
+        return self._audio_url(payload)
 
 
 class CapCutCaptionService:
@@ -228,11 +270,136 @@ class CapCutCaptionService:
 
 
 class CapCutTtsService:
-    def __init__(self, client: CapCutEditClient, retry_policy: RetryPolicy | None = None) -> None:
-        self.client = client; self.retry_policy = retry_policy or RetryPolicy(max_attempts=3)
+    def __init__(
+        self, client: CapCutEditClient, retry_policy: RetryPolicy | None = None,
+        *, cache_path: str | Path | None = None, categories: tuple[str, ...] = VOICE_CATEGORIES,
+        catalog_concurrency: int = 4,
+    ) -> None:
+        self.client = client
+        self.retry_policy = retry_policy or RetryPolicy(max_attempts=3)
+        cache_root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        self.cache_path = Path(cache_path) if cache_path else cache_root / "QuyetBoITStudio" / "cache" / "capcut_voices_cache.json"
+        self.categories = categories
+        self.catalog_concurrency = max(1, min(4, catalog_concurrency))
+        self.catalog_fetched_at = 0.0
 
     def list_voices(self, refresh: bool = False) -> list[Voice]:
-        return self.client.list_voices("vietnamese")
+        if not refresh:
+            cached = self._load_voice_cache()
+            if cached is not None:
+                return cached
+
+        def fetch(category: str) -> list[Voice]:
+            return retry_call(
+                lambda: self.client.list_voices(category),
+                policy=self.retry_policy,
+            )
+
+        by_category: dict[str, list[Voice]] = {}
+        with ThreadPoolExecutor(max_workers=self.catalog_concurrency, thread_name_prefix="capcut-voice") as executor:
+            futures = {executor.submit(fetch, category): category for category in self.categories}
+            for future in as_completed(futures):
+                by_category[futures[future]] = future.result()
+        by_speaker: dict[str, Voice] = {}
+        for category in self.categories:
+            for voice in by_category.get(category, []):
+                current = by_speaker.get(voice.speaker)
+                if current is None:
+                    by_speaker[voice.speaker] = voice
+                    continue
+                categories = tuple(dict.fromkeys((*current.categories, *voice.categories)))
+                by_speaker[voice.speaker] = replace(
+                    current,
+                    lang=current.lang or voice.lang,
+                    gender=current.gender or voice.gender,
+                    categories=categories,
+                )
+        voices = sorted(by_speaker.values(), key=lambda item: item.name.casefold())
+        self._save_voice_cache(voices)
+        return voices
+
+    def _load_voice_cache(self) -> list[Voice] | None:
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            valid = (
+                payload.get("schema_version") in {1, 2}
+                and payload.get("app_version") == VOICE_API_VERSION
+                and payload.get("region") == VOICE_REGION
+            )
+            if not valid:
+                return None
+            self.catalog_fetched_at = float(
+                payload.get("fetched_at", payload.get("created_at", 0))
+            )
+            return [
+                Voice(**{**item, "categories": tuple(item.get("categories") or ())})
+                for item in payload.get("voices", [])
+                if isinstance(item, dict) and item.get("speaker")
+            ]
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    def _save_voice_cache(self, voices: list[Voice]) -> None:
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 2,
+            "app_version": VOICE_API_VERSION,
+            "region": VOICE_REGION,
+            "fetched_at": time.time(),
+            "voices": [asdict(voice) for voice in voices],
+        }
+        self.catalog_fetched_at = payload["fetched_at"]
+        fd, temporary = tempfile.mkstemp(prefix=".capcut-voices.", suffix=".tmp", dir=self.cache_path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(payload, stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.cache_path)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+    def preview_url(self, voice: Voice, *, cancel: CancellationToken | None = None) -> str:
+        return retry_call(
+            lambda: self.client.audition_url(voice),
+            policy=self.retry_policy,
+            cancel=cancel,
+        )
+
+    def synthesize_batch(
+        self,
+        requests: list[tuple[str, Voice, Path, float, int]],
+        *,
+        concurrency: int = 25,
+        cancel: CancellationToken | None = None,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> list[AudioArtifact]:
+        results: list[AudioArtifact | None] = [None] * len(requests)
+        completed = 0
+
+        def execute(index: int) -> tuple[int, AudioArtifact]:
+            text, voice, output, rate, volume = requests[index]
+            return index, self.synthesize(
+                text, voice, output, rate=rate, volume=volume, cancel=cancel
+            )
+
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(50, concurrency)), thread_name_prefix="capcut-tts"
+        ) as executor:
+            futures = [executor.submit(execute, index) for index in range(len(requests))]
+            for future in as_completed(futures):
+                if cancel:
+                    cancel.raise_if_cancelled()
+                index, artifact = future.result()
+                results[index] = artifact
+                completed += 1
+                if progress:
+                    progress(completed, len(requests))
+        return [item for item in results if item is not None]
 
     def synthesize(self, text: str, voice: Voice, output: str | Path, *, rate: float = 1.0, volume: int = 100, cancel: CancellationToken | None = None) -> AudioArtifact:
         def operation() -> bytes:

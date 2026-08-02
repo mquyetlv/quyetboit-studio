@@ -13,3 +13,9 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+VOICE_API_VERSION = "19.3.0"
+VOICE_REGION = "VN"
+VOICE_CATEGORIES = (
+    "vietnamese", "english", "female_voice", "male_voice", "zhongwen", "indonesian",
+    "taiyu", "trend", "TikTok", "narration", "anime",
+)

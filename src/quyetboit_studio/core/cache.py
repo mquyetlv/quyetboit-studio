@@ -42,6 +42,28 @@ class ArtifactCache:
         if not record:
             return None
         artifact = Artifact.from_dict(record)
+        return self._validated(artifact)
+
+    def find(self, step: int, *, filename: str | None = None) -> list[Artifact]:
+        """Return valid artifacts for a step, including records from an earlier app run."""
+        prefix = f"{step:02d}:"
+        with self._lock:
+            records = [
+                record for key, record in self._manifest["artifacts"].items()
+                if key.startswith(prefix)
+                and (filename is None or Path(record.get("path", "")).name == filename)
+            ]
+        artifacts: list[Artifact] = []
+        for record in records:
+            try:
+                artifact = self._validated(Artifact.from_dict(record))
+            except (TypeError, ValueError):
+                artifact = None
+            if artifact is not None:
+                artifacts.append(artifact)
+        return artifacts
+
+    def _validated(self, artifact: Artifact) -> Artifact | None:
         try:
             resolved = artifact.path.resolve()
             resolved.relative_to(self.workspace)

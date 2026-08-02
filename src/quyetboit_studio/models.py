@@ -96,7 +96,7 @@ class ProjectModel:
         "chunk_min_seconds": 180, "chunk_max_seconds": 300, "overlap_ms": 250
     })
     tts_settings: dict = field(default_factory=lambda: {
-        "voice": "", "speed": 1.0, "pitch": 0, "volume": 100, "concurrency": 2
+        "voice": "", "speed": 1.0, "pitch": 0, "volume": 100, "concurrency": 25
     })
     mix_settings: dict = field(default_factory=lambda: {
         "keep_original": True, "original_volume": 25, "voice_volume": 100

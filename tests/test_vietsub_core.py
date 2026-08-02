@@ -1,12 +1,26 @@
+import json
+import threading
+import time
 from datetime import UTC, datetime
 
 import pytest
 
-from quyetboit_studio.core import Artifact, ArtifactCache, PipelineError, SrtCue
+from quyetboit_studio.core import (
+    Artifact,
+    ArtifactCache,
+    AudioArtifact,
+    AudioChunk,
+    PipelineError,
+    SrtCue,
+)
+from quyetboit_studio.core.retry import RetryPolicy
 from quyetboit_studio.models import ProjectModel
+from quyetboit_studio.pipeline import VietSubPipeline
 from quyetboit_studio.services.capcut import (
     AwsV4Signer,
+    CapCutTtsService,
     StsCredentials,
+    Voice,
     crc32_hex,
     make_sign,
     xor5_hex,
@@ -99,6 +113,118 @@ def test_artifact_cache_checks_checksum_and_invalidates_downstream(tmp_path):
     first.write_text("tampered", encoding="utf-8")
     assert cache.get(1, "a", "b") is None
     assert cache.invalidate(2) == [second.resolve()]
+
+
+def test_artifact_cache_restores_typed_chunks_and_pipeline_dependency(tmp_path):
+    cache = ArtifactCache(tmp_path)
+    chunk_path = tmp_path / "audio_001.m4a"
+    chunk_path.write_bytes(b"audio")
+    chunk = AudioChunk(
+        chunk_path, input_hash="audio", config_hash="split", index=0,
+        source_start_ms=0, source_end_ms=1000,
+    )
+    cache.put(1, chunk, item_id="chunk-0")
+    mixed_path = tmp_path / "mixed.mp4"
+    mixed_path.write_bytes(b"video")
+    cache.put(5, Artifact(mixed_path, input_hash="video", config_hash="mix"))
+
+    restored = ArtifactCache(tmp_path).find(1)
+    assert len(restored) == 1
+    assert isinstance(restored[0], AudioChunk)
+    assert restored[0].source_end_ms == 1000
+
+    pipeline = VietSubPipeline(ProjectModel(workspace_path=str(tmp_path)), workspace=tmp_path)
+    assert pipeline._previous_artifact(5).path == mixed_path.resolve()
+
+
+class FakeVoiceClient:
+    def __init__(self) -> None:
+        self.calls: dict[str, int] = {}
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+
+    def list_voices(self, category: str) -> list[Voice]:
+        with self.lock:
+            self.calls[category] = self.calls.get(category, 0) + 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.02)
+            if category == "english" and self.calls[category] == 1:
+                raise PipelineError("temporary", "Thử lại", retryable=True)
+            return [Voice("Shared", "speaker-1", category=category, categories=(category,))]
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+def test_capcut_voice_catalog_is_concurrent_retried_merged_and_cached(tmp_path):
+    client = FakeVoiceClient()
+    service = CapCutTtsService(
+        client,  # type: ignore[arg-type]
+        RetryPolicy(max_attempts=2, base_delay=0, max_delay=0, full_jitter=False),
+        cache_path=tmp_path / "voices.json",
+        categories=("vietnamese", "english", "female_voice", "male_voice"),
+        catalog_concurrency=4,
+    )
+    voices = service.list_voices()
+    assert client.max_active > 1
+    assert client.calls["english"] == 2
+    assert voices[0].categories == ("vietnamese", "english", "female_voice", "male_voice")
+    assert service.catalog_fetched_at > 0
+
+    before = dict(client.calls)
+    cached = service.list_voices()
+    assert cached == voices
+    assert client.calls == before
+
+    cache_payload = json.loads((tmp_path / "voices.json").read_text(encoding="utf-8"))
+    cache_payload["fetched_at"] = 1
+    (tmp_path / "voices.json").write_text(json.dumps(cache_payload), encoding="utf-8")
+    old_cache_client = FakeVoiceClient()
+    old_cache_service = CapCutTtsService(
+        old_cache_client,  # type: ignore[arg-type]
+        cache_path=tmp_path / "voices.json",
+        categories=("vietnamese", "english", "female_voice", "male_voice"),
+    )
+    assert old_cache_service.list_voices() == voices
+    assert old_cache_service.catalog_fetched_at == 1
+    assert old_cache_client.calls == {}
+
+    project = ProjectModel()
+    assert project.tts_settings["concurrency"] == 25
+
+
+class FakeBatchTtsService(CapCutTtsService):
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+
+    def synthesize(self, text, voice, output, **kwargs):
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.02)
+            output.write_bytes(text.encode())
+            return AudioArtifact(output).refresh()
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+def test_capcut_tts_batch_uses_bounded_concurrency_and_preserves_order(tmp_path):
+    service = FakeBatchTtsService()
+    voice = Voice("Test", "speaker")
+    requests = [
+        (str(index), voice, tmp_path / f"{index}.audio", 1.0, 100)
+        for index in range(6)
+    ]
+    results = service.synthesize_batch(requests, concurrency=3)
+    assert service.max_active == 3
+    assert [item.path.read_text() for item in results] == [str(index) for index in range(6)]
 
 
 def test_capcut_sign_crc_obfuscation_and_sigv4_are_deterministic():

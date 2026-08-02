@@ -2,7 +2,9 @@ from PySide6.QtCore import Qt
 
 from quyetboit_studio.main_window import MainWindow
 from quyetboit_studio.models import ProjectModel
+from quyetboit_studio.services.capcut import Voice
 from quyetboit_studio.studio import StudioDialog
+from quyetboit_studio.vietsub import VoiceCatalogDialog
 
 
 def test_shell_sidebar_and_pages(qtbot):
@@ -55,3 +57,35 @@ def test_studio_reset_and_undo(qtbot):
     assert dialog.layers.count() == 4
     dialog.undo()
     assert dialog.layers.count() == 3
+
+
+class FakeVoiceCatalogService:
+    def list_voices(self, refresh=False):
+        return [
+            Voice(
+                "Nữ Việt", "vi-female", lang="vi", gender="female",
+                category="vietnamese", categories=("vietnamese", "female_voice"),
+            ),
+            Voice(
+                "English Male", "en-male", lang="en", gender="male",
+                category="english", categories=("english", "male_voice"),
+            ),
+        ]
+
+
+def test_voice_catalog_dialog_filters_and_selects_cached_voice(qtbot):
+    dialog = VoiceCatalogDialog(
+        FakeVoiceCatalogService(),  # type: ignore[arg-type]
+        "en-male", {"speed": 1, "pitch": 0, "volume": 100, "concurrency": 25},
+    )
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog.list.count() == 2)
+    qtbot.waitUntil(lambda: not dialog._tasks)
+    assert dialog.selected_voice().speaker == "en-male"
+    assert dialog.concurrency.minimum() == 1
+    assert dialog.concurrency.maximum() == 50
+    assert dialog.concurrency.value() == 25
+
+    dialog.category.setCurrentIndex(dialog.category.findData("female"))
+    assert dialog.list.count() == 1
+    assert dialog.selected_voice().speaker == "vi-female"

@@ -31,7 +31,18 @@ class Artifact:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> Artifact:
-        return cls(**{**value, "path": Path(value["path"])})
+        target: type[Artifact] = cls
+        if cls is Artifact:
+            if "source_start_ms" in value:
+                target = AudioChunk
+            elif "sample_rate" in value:
+                target = AudioArtifact
+            elif "width" in value:
+                target = VideoArtifact
+        allowed = set(target.__dataclass_fields__)
+        fields = {key: item for key, item in value.items() if key in allowed}
+        fields["path"] = Path(value["path"])
+        return target(**fields)
 
 
 @dataclass(slots=True)

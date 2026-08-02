@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -16,6 +18,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -42,6 +46,7 @@ from .models import (
     detect_video_source,
 )
 from .pipeline import PipelineDependencies, VietSubPipeline
+from .services.capcut import CapCutTtsService, Voice
 from .studio import StudioDialog
 from .widgets import Badge, Card, LogPanel
 from .workflow import WorkflowController
@@ -77,6 +82,175 @@ class SettingsDialog(QDialog):
         root.addLayout(form)
         controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save)
         controls.accepted.connect(self.accept); controls.rejected.connect(self.reject); root.addWidget(controls)
+
+
+class ServiceTaskThread(QThread):
+    succeeded = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, operation: object, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.operation = operation
+
+    def run(self) -> None:
+        try:
+            self.succeeded.emit(self.operation())  # type: ignore[operator]
+        except Exception as exc:  # noqa: BLE001 - surface provider failures in the dialog
+            message = getattr(exc, "user_message", str(exc))
+            self.failed.emit(message)
+
+
+class VoiceCatalogDialog(QDialog):
+    FILTERS = (
+        ("Tất cả", "all"), ("Giọng nam", "male"), ("Giọng nữ", "female"),
+        ("Tiếng Việt", "vietnamese"), ("Tiếng Anh", "english"),
+        ("Tiếng Trung", "zhongwen"), ("Tiếng Indonesia", "indonesian"),
+        ("Tiếng Thái", "taiyu"), ("Xu hướng", "trend"), ("TikTok", "TikTok"),
+        ("Thuyết minh", "narration"), ("Anime", "anime"),
+    )
+
+    def __init__(
+        self, service: CapCutTtsService, selected_speaker: str, settings: dict,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.selected_speaker = selected_speaker
+        self.voices: list[Voice] = []
+        self._tasks: list[ServiceTaskThread] = []
+        self.setWindowTitle("Cấu hình giọng đọc CapCut")
+        self.resize(680, 620)
+        root = QVBoxLayout(self)
+        filters = QHBoxLayout()
+        self.category = QComboBox()
+        for label, key in self.FILTERS:
+            self.category.addItem(label, key)
+        self.search = QLineEdit(); self.search.setPlaceholderText("Tìm theo tên giọng…")
+        self.refresh = button("Làm mới danh sách")
+        filters.addWidget(self.category); filters.addWidget(self.search, 1); filters.addWidget(self.refresh)
+        root.addLayout(filters)
+        self.list = QListWidget(); root.addWidget(self.list, 1)
+        self.status = QLabel("Đang tải danh sách giọng…"); self.status.setObjectName("Subtitle")
+        root.addWidget(self.status)
+        form = QFormLayout()
+        self.speed = QSpinBox(); self.speed.setRange(50, 200); self.speed.setSuffix("%")
+        self.speed.setValue(round(float(settings.get("speed", 1)) * 100))
+        self.pitch = QSpinBox(); self.pitch.setRange(-12, 12); self.pitch.setValue(int(settings.get("pitch", 0)))
+        self.volume = QSpinBox(); self.volume.setRange(0, 150); self.volume.setSuffix("%")
+        self.volume.setValue(int(settings.get("volume", 100)))
+        self.concurrency = QSpinBox(); self.concurrency.setRange(1, 50)
+        self.concurrency.setValue(max(1, min(50, int(settings.get("concurrency", 25)))))
+        for label, widget in (("Tốc độ", self.speed), ("Pitch", self.pitch),
+                              ("Âm lượng", self.volume), ("Số request đồng thời", self.concurrency)):
+            form.addRow(label, widget)
+        root.addLayout(form)
+        actions = QHBoxLayout(); self.preview = button("▶ Nghe thử")
+        actions.addWidget(self.preview); actions.addStretch(); root.addLayout(actions)
+        self.controls = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save
+        )
+        self.controls.accepted.connect(self.accept); self.controls.rejected.connect(self.reject)
+        root.addWidget(self.controls)
+        self.category.currentIndexChanged.connect(self._filter)
+        self.search.textChanged.connect(self._filter)
+        self.refresh.clicked.connect(lambda: self._load(True))
+        self.preview.clicked.connect(self._preview)
+        self.list.itemDoubleClicked.connect(lambda _item: self._preview())
+        self._set_busy(True); self._load(False)
+
+    def _start_task(self, operation: object, callback: object) -> None:
+        task = ServiceTaskThread(operation, self)
+        self._tasks.append(task)
+        task.succeeded.connect(callback)  # type: ignore[arg-type]
+        task.failed.connect(self._failed)
+        task.finished.connect(lambda: self._finish_task(task))
+        task.start()
+
+    def _finish_task(self, task: ServiceTaskThread) -> None:
+        if task in self._tasks:
+            self._tasks.remove(task)
+        task.deleteLater()
+        self._set_busy(bool(self._tasks))
+
+    def _set_busy(self, busy: bool) -> None:
+        self.refresh.setEnabled(not busy)
+        self.preview.setEnabled(not busy and self.list.currentItem() is not None)
+        save = self.controls.button(QDialogButtonBox.StandardButton.Save)
+        save.setEnabled(not busy and self.list.currentItem() is not None)
+
+    def _load(self, refresh: bool) -> None:
+        self.status.setText("Đang tải danh sách giọng CapCut…")
+        self._set_busy(True)
+        self._start_task(lambda: self.service.list_voices(refresh=refresh), self._loaded)
+
+    def _loaded(self, voices: object) -> None:
+        self.voices = list(voices)  # type: ignore[arg-type]
+        self._filter()
+        fetched_at = getattr(self.service, "catalog_fetched_at", 0)
+        fetched_text = (
+            datetime.fromtimestamp(fetched_at, UTC).astimezone().strftime("%d/%m/%Y %H:%M:%S")
+            if fetched_at else "không xác định"
+        )
+        self.status.setText(
+            f"Có {len(self.voices)} giọng · lấy lúc {fetched_text} · bấm Làm mới để gọi lại API"
+        )
+
+    @staticmethod
+    def _is_gender(voice: Voice, expected: str) -> bool:
+        value = voice.gender.casefold()
+        aliases = {"male": ("male", "nam", "man"), "female": ("female", "nữ", "nu", "woman")}
+        return any(alias in value for alias in aliases[expected]) or f"{expected}_voice" in voice.categories
+
+    def _filter(self) -> None:
+        key = str(self.category.currentData() or "all")
+        query = self.search.text().strip().casefold()
+        self.list.clear()
+        selected_item: QListWidgetItem | None = None
+        for voice in self.voices:
+            matches_category = (
+                key == "all" or (key in {"male", "female"} and self._is_gender(voice, key))
+                or key in voice.categories
+            )
+            if not matches_category or (query and query not in voice.name.casefold()):
+                continue
+            details = ", ".join(voice.categories) or voice.category
+            item = QListWidgetItem(f"{voice.name}  ·  {details}")
+            item.setData(Qt.ItemDataRole.UserRole, voice)
+            self.list.addItem(item)
+            if voice.speaker == self.selected_speaker:
+                selected_item = item
+        if selected_item:
+            self.list.setCurrentItem(selected_item)
+        elif self.list.count():
+            self.list.setCurrentRow(0)
+        self._set_busy(bool(self._tasks))
+
+    def selected_voice(self) -> Voice | None:
+        item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _preview(self) -> None:
+        voice = self.selected_voice()
+        if not voice:
+            return
+        self.status.setText(f"Đang lấy audio nghe thử: {voice.name}…")
+        self._set_busy(True)
+        self._start_task(lambda: self.service.preview_url(voice), self._play_preview)
+
+    def _play_preview(self, url: object) -> None:
+        if not QDesktopServices.openUrl(QUrl(str(url))):
+            self.status.setText("Không mở được trình phát audio mặc định.")
+        else:
+            self.status.setText("Đã mở audio nghe thử bằng trình phát mặc định.")
+
+    def _failed(self, message: str) -> None:
+        self.status.setText(message)
+
+    def reject(self) -> None:
+        if self._tasks:
+            self.status.setText("Vui lòng chờ request hiện tại kết thúc trước khi đóng.")
+            return
+        super().reject()
 
 
 class StepRow(QWidget):
@@ -331,6 +505,7 @@ class TranslateStep(BaseStep):
 class TtsStep(BaseStep):
     def __init__(self, project: ProjectModel) -> None:
         super().__init__(project, "5. Tạo voice tiếng Việt", "Dùng SRT tiếng Việt để tổng hợp giọng đọc.")
+        self._service_provider = lambda: None
         card = Card("Text-to-Speech")
         self.provider = QComboBox(); self.provider.addItems([v.value for v in TtsProvider]); self.provider.setCurrentText(project.tts_provider)
         card.layout.addWidget(self.provider); config = button("Cấu hình giọng đọc"); config.clicked.connect(self.configure); card.layout.addWidget(config, 0, Qt.AlignmentFlag.AlignRight)
@@ -340,7 +515,36 @@ class TtsStep(BaseStep):
 
     def _save(self) -> None: self.project.tts_provider = self.provider.currentText(); self.changed.emit()
 
+    def set_service_provider(self, provider: object) -> None:
+        self._service_provider = provider
+
     def configure(self) -> None:
+        if self.provider.currentText() == TtsProvider.CAPCUT.value:
+            service = self._service_provider()  # type: ignore[operator]
+            if not isinstance(service, CapCutTtsService):
+                QMessageBox.warning(
+                    self, "Chưa kết nối CapCut",
+                    "Hãy đăng nhập CapCut ở bước 3 trước khi tải danh sách giọng.",
+                )
+                return
+            dialog = VoiceCatalogDialog(
+                service, self.project.capcut_voice or str(self.project.tts_settings.get("voice", "")),
+                self.project.tts_settings, self,
+            )
+            if dialog.exec():
+                selected = dialog.selected_voice()
+                if not selected:
+                    return
+                self.project.capcut_voice = selected.speaker
+                self.project.tts_settings = {
+                    "voice": selected.speaker,
+                    "speed": dialog.speed.value() / 100,
+                    "pitch": dialog.pitch.value(),
+                    "volume": dialog.volume.value(),
+                    "concurrency": dialog.concurrency.value(),
+                }
+                self.changed.emit()
+            return
         voice = QComboBox(); voice.addItems(["vi-VN-Neural2-A", "vi-VN-Neural2-D", "CapCut Nữ trẻ"]); voice.setCurrentText(self.project.tts_settings["voice"])
         speed = QSpinBox(); speed.setRange(50, 200); speed.setSuffix("%"); speed.setValue(round(self.project.tts_settings["speed"] * 100))
         pitch = QSpinBox(); pitch.setRange(-12, 12); pitch.setValue(self.project.tts_settings["pitch"])
@@ -348,7 +552,11 @@ class TtsStep(BaseStep):
         sample = button("Kiểm tra voice"); sample.clicked.connect(lambda: QMessageBox.information(self, "Voice", "Voice sẽ được kiểm tra với CapCut khi chạy bước TTS."))
         dlg = SettingsDialog("Cấu hình giọng đọc", [("Giọng", voice), ("Tốc độ", speed), ("Pitch", pitch), ("Âm lượng", volume), ("", sample)], self)
         if dlg.exec():
-            self.project.tts_settings = {"voice": voice.currentText(), "speed": speed.value()/100, "pitch": pitch.value(), "volume": volume.value()}; self.changed.emit()
+            self.project.tts_settings = {
+                "voice": voice.currentText(), "speed": speed.value()/100,
+                "pitch": pitch.value(), "volume": volume.value(),
+                "concurrency": int(self.project.tts_settings.get("concurrency", 25)),
+            }; self.changed.emit()
 
 
 class MixStep(BaseStep):
@@ -477,6 +685,7 @@ class VietSubPage(QWidget):
         pipeline = VietSubPipeline(project, dependencies=PipelineDependencies())
         self._configure_services(pipeline)
         self.controller = WorkflowController(project, pipeline); self._connect_controller(); self.select_step(0)
+        self.pages[4].set_service_provider(lambda: pipeline.services.tts)
         self.log.append_log("INFO", "Project đã sẵn sàng với pipeline xử lý thật.")
 
     def _capcut_session_changed(self, session: object) -> None:

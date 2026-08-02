@@ -85,7 +85,7 @@ class VietSubPipeline:
     def run_all(self, progress: ProgressCallback | None = None, *, force: bool = False) -> list[StepResult]:
         self.force = force
         output = []
-        for step in range(8):
+        for step in range(6):
             output.append(self.run_step(step, progress))
         return output
 
@@ -133,6 +133,13 @@ class VietSubPipeline:
         if cached:
             return cached[-1]
         raise PipelineError("missing_dependency", f"Thiếu artifact từ bước {step + 1}.")
+
+    def studio_preview_path(self) -> Path | None:
+        """Return the validated step-6 artifact for read-only Studio preview."""
+        try:
+            return self._previous_artifact(5).path
+        except PipelineError:
+            return None
 
     def _restored_audio_chunks(self) -> list[AudioChunk]:
         chunks = [item for item in self.cache.find(1) if isinstance(item, AudioChunk)]
@@ -326,12 +333,20 @@ class VietSubPipeline:
         mixed = self.services.media.runner.probe.video_artifact(self._previous_artifact(5).path)
         subtitle = self._previous_artifact(3, "translated.vi.srt")
         config_hash = stable_hash(self.project.studio_settings)
-        cached = self._cached(6, stable_hash([mixed.checksum, subtitle.checksum]), config_hash)
+        input_hash = stable_hash([mixed.checksum, subtitle.checksum])
+        cached = self._cached(6, input_hash, config_hash)
         if cached: return StepResult(6, [cached], cache_hit=True)
+        if not self.services.renderer.requires_render(
+            self.project.studio_settings, subtitle=subtitle.path
+        ):
+            reused = self.services.media.runner.probe.video_artifact(mixed.path)
+            reused = self._remember(6, reused, input_hash, config_hash)
+            progress(ProgressEvent(6, 1.0, "Không có hiệu ứng hình/âm thanh; tái sử dụng video bước 6."))
+            return StepResult(6, [reused], metadata={"reused_step_6": True})
         rendered = self.services.renderer.render(mixed, self.workspace / "studio.mp4", self.project.studio_settings,
                                                  self.project.export_settings, subtitle=subtitle.path,
                                                  cancel=self.cancel, progress=progress)
-        rendered = self._remember(6, rendered, stable_hash([mixed.checksum, subtitle.checksum]), config_hash)
+        rendered = self._remember(6, rendered, input_hash, config_hash)
         return StepResult(6, [rendered])
 
     def _export(self, progress: ProgressCallback) -> StepResult:

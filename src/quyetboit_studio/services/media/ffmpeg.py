@@ -27,6 +27,7 @@ from ...core.models import (
     SrtCue,
     VideoArtifact,
 )
+from ...core.studio import normalize_studio_settings
 
 
 def atempo_chain(factor: float) -> str:
@@ -318,36 +319,276 @@ class TimelineAudioAssembler:
         return AudioArtifact(target, duration_ms=video_duration_ms, sample_rate=rate, channels=1).refresh()
 
 
+@dataclass(slots=True)
+class RenderGraph:
+    script: str
+    image_inputs: list[Path]
+    video_output: str | None
+    audio_output: str | None
+    visual: bool
+
+
 class FilterGraphBuilder:
     @staticmethod
-    def escape(value: str) -> str:
-        return value.replace("\\", "/").replace(":", "\\:").replace("'", "\\'").replace("[", "\\[").replace("]", "\\]")
+    def escape_path(value: str) -> str:
+        return (
+            value.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            .replace("[", "\\[").replace("]", "\\]")
+        )
 
-    def build(self, settings: dict[str, Any], *, subtitle: str | Path | None = None, rubberband: bool = False) -> tuple[str, bool]:
-        filters: list[str] = []
-        visual = False
-        if subtitle:
-            filters.append(f"subtitles='{self.escape(str(Path(subtitle).resolve()))}'")
-            visual = True
+    @staticmethod
+    def escape_text(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace("\r", " ").replace("\n", " ")
+        for character in ("'", ":", "%", ",", ";", "[", "]"):
+            escaped = escaped.replace(character, f"\\{character}")
+        return escaped
+
+    @staticmethod
+    def _font_path() -> Path | None:
+        candidates = (
+            Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "arial.ttf",
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        )
+        return next((path.resolve() for path in candidates if path.exists()), None)
+
+    @staticmethod
+    def _enable(layer: dict[str, Any]) -> str:
+        start = max(0.0, float(layer.get("start", 0)))
+        end = start + max(0.1, float(layer.get("duration", 5)))
+        return f"between(t,{start:.6g},{end:.6g})"
+
+    @staticmethod
+    def _enable_option(layer: dict[str, Any]) -> str:
+        if layer.get("full_duration", True):
+            return ""
+        return f":enable='{FilterGraphBuilder._enable(layer)}'"
+
+    @staticmethod
+    def _ffmpeg_color(value: str) -> str:
+        value = value.strip() or "black"
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            return f"0x{value[1:]}"
+        return re.sub(r"[^#0-9a-zA-Z@._-]", "", value) or "black"
+
+    @staticmethod
+    def _ass_color(value: str) -> str:
+        named = {
+            "white": "FFFFFF", "black": "000000", "red": "FF0000",
+            "green": "00FF00", "blue": "0000FF", "yellow": "FFFF00",
+        }
+        raw = value.strip().lstrip("#")
+        rgb = raw if re.fullmatch(r"[0-9a-fA-F]{6}", raw) else named.get(raw.lower(), "FFFFFF")
+        red, green, blue = rgb[0:2], rgb[2:4], rgb[4:6]
+        return f"&H00{blue}{green}{red}"
+
+    @staticmethod
+    def _text_position(layer: dict[str, Any], kind: str) -> tuple[str, str]:
+        position = str(layer.get("position", "center"))
+        margin = max(0, int(layer.get("margin", 24)))
+        height = max(1, int(layer.get("height", 64)))
+        if kind == "intro_text":
+            return "(w-text_w)/2", f"{margin}+({height}-text_h)/2"
+        x = {
+            "left": str(margin), "top-left": str(margin), "bottom-left": str(margin),
+            "right": f"w-text_w-{margin}", "top-right": f"w-text_w-{margin}",
+            "bottom-right": f"w-text_w-{margin}",
+        }.get(position, "(w-text_w)/2")
+        y = {
+            "top": str(margin), "top-left": str(margin), "top-right": str(margin),
+            "bottom": f"h-text_h-{margin}", "bottom-left": f"h-text_h-{margin}",
+            "bottom-right": f"h-text_h-{margin}",
+        }.get(position, "(h-text_h)/2")
+        return x, y
+
+    @staticmethod
+    def _overlay_position(layer: dict[str, Any]) -> tuple[str, str]:
+        position = str(layer.get("position", "top-right"))
+        margin = max(0, int(layer.get("margin", 24)))
+        x = {"top-left": str(margin), "bottom-left": str(margin), "center": "(W-w)/2"}.get(
+            position, f"W-w-{margin}"
+        )
+        y = {"top-left": str(margin), "top-right": str(margin), "center": "(H-h)/2"}.get(
+            position, f"H-h-{margin}"
+        )
+        return x, y
+
+    @staticmethod
+    def _box_position(layer: dict[str, Any]) -> tuple[str, str]:
+        position = str(layer.get("position", "top"))
+        margin = max(0, int(layer.get("margin", 24)))
+        width = max(5, min(100, int(layer.get("width_percent", 90)))) / 100
+        height = max(1, int(layer.get("height", 64)))
+        if position.endswith("left"):
+            x = str(margin)
+        elif position.endswith("right"):
+            x = f"iw-iw*{width:.4g}-{margin}"
+        else:
+            x = f"(iw-iw*{width:.4g})/2"
+        if position.startswith("top") or position == "top":
+            y = str(margin)
+        elif position.startswith("bottom") or position == "bottom":
+            y = f"ih-{height}-{margin}"
+        else:
+            y = f"(ih-{height})/2"
+        return x, y
+
+    def build(
+        self, settings: dict[str, Any], *, subtitle: str | Path | None = None,
+        rubberband: bool = False, frame_width: int = 1920,
+    ) -> RenderGraph:
+        settings = normalize_studio_settings(settings)
+        layers = [layer for layer in settings["layers"] if layer.get("enabled", True)]
+        video_filters: list[str] = []
+        subtitle_layer = next((layer for layer in layers if layer.get("kind") == "subtitle"), None)
+        if subtitle and subtitle_layer:
+            width_percent = max(5, min(100, int(subtitle_layer.get("width_percent", 90))))
+            height = max(1, int(subtitle_layer.get("height", 64)))
+            margin = max(0, int(subtitle_layer.get("margin", 24)))
+            box_x, box_y = self._box_position(subtitle_layer)
+            background_opacity = int(subtitle_layer.get("background_opacity", 60))
+            if background_opacity > 0:
+                background = self._ffmpeg_color(
+                    str(subtitle_layer.get("background_color", "#000000"))
+                )
+                video_filters.append(
+                    f"drawbox=x={box_x}:y={box_y}:w=iw*{width_percent / 100:.4g}:h={height}:"
+                    f"color={background}@{background_opacity / 100:.4g}:t=fill"
+                )
+            side_margin = max(margin, round(frame_width * (100 - width_percent) / 200))
+            font_size = int(subtitle_layer.get("font_size", 42))
+            vertical_margin = margin + max(0, round((height - font_size) / 2))
+            primary = self._ass_color(str(subtitle_layer.get("font_color", "white")))
+            video_filters.append(
+                f"subtitles='{self.escape_path(str(Path(subtitle).resolve()))}':force_style='"
+                f"FontSize={font_size},PrimaryColour={primary},BorderStyle=1,Outline=2,Shadow=0,"
+                f"Alignment=2,MarginL={side_margin},MarginR={side_margin},MarginV={vertical_margin}'"
+            )
         speed = float(settings.get("speed", 1.0))
-        if speed != 1:
-            filters.append(f"setpts=PTS/{speed:.8g}"); visual = True
         zoom = max(0.5, min(2.0, float(settings.get("zoom", 100)) / 100))
         if zoom != 1:
-            filters.append(f"scale=iw*{zoom:.8g}:ih*{zoom:.8g},crop=iw/{zoom:.8g}:ih/{zoom:.8g}"); visual = True
+            video_filters.append(
+                f"scale=iw*{zoom:.8g}:ih*{zoom:.8g},crop=iw/{zoom:.8g}:ih/{zoom:.8g}"
+            )
         if settings.get("flip_horizontal"):
-            filters.append("hflip"); visual = True
+            video_filters.append("hflip")
         if settings.get("flip_vertical"):
-            filters.append("vflip"); visual = True
+            video_filters.append("vflip")
         color = float(settings.get("color", 100)) / 100
         if color != 1:
-            filters.append(f"eq=saturation={max(0, min(2, color)):.4g}"); visual = True
-        return ",".join(filters), visual
+            video_filters.append(f"eq=saturation={max(0, min(2, color)):.4g}")
+        font = self._font_path()
+        font_option = f"fontfile='{self.escape_path(str(font))}':" if font else ""
+        for layer in layers:
+            kind = layer.get("kind")
+            if kind not in {"intro_text", "scroll_text"} or not str(layer.get("text", "")).strip():
+                continue
+            x, y = self._text_position(layer, str(kind))
+            if kind == "scroll_text":
+                x = "w-mod(t*180\\,w+text_w)"
+            box_x, box_y = self._box_position(layer)
+            background_opacity = int(layer.get("background_opacity", 60))
+            if background_opacity > 0:
+                background = self._ffmpeg_color(str(layer.get("background_color", "#000000")))
+                video_filters.append(
+                    f"drawbox=x={box_x}:y={box_y}:w=iw*{int(layer.get('width_percent', 90)) / 100:.4g}:"
+                    f"h={int(layer.get('height', 64))}:color={background}@{background_opacity / 100:.4g}:"
+                    f"t=fill{self._enable_option(layer)}"
+                )
+            video_filters.append(
+                "drawtext="
+                f"{font_option}text='{self.escape_text(str(layer['text']))}':"
+                f"fontsize={int(layer.get('font_size', 48))}:"
+                f"fontcolor={self.escape_text(str(layer.get('font_color', 'white')))}:"
+                "borderw=2:bordercolor=black@0.8:"
+                f"x={x}:y={y}{self._enable_option(layer)}"
+            )
+        if speed != 1:
+            video_filters.append(f"setpts=PTS/{speed:.8g}")
+
+        script_parts: list[str] = []
+        image_inputs: list[Path] = []
+        visual = bool(video_filters)
+        image_layers = [layer for layer in layers if layer.get("kind") in {"logo", "overlay"}]
+        valid_images: list[tuple[dict[str, Any], Path]] = []
+        for layer in image_layers:
+            path = Path(str(layer.get("path", ""))).expanduser()
+            if not path.is_file():
+                raise PipelineError(
+                    "studio_asset_missing",
+                    f"Không tìm thấy file của layer {layer.get('name', 'ảnh')}: {path}",
+                    provider="ffmpeg",
+                )
+            valid_images.append((layer, path.resolve()))
+        if video_filters or valid_images:
+            script_parts.append(f"[0:v]{','.join(video_filters) if video_filters else 'null'}[v0]")
+            current = "v0"
+            for index, (layer, path) in enumerate(valid_images, 1):
+                image_inputs.append(path)
+                opacity = max(0, min(100, int(layer.get("opacity", 100)))) / 100
+                width = max(5, min(100, int(layer.get("width_percent", 90)))) / 100
+                height = max(0, int(layer.get("height", 0)))
+                raw, reference, asset, output = f"img{index}", f"ref{index}", f"asset{index}", f"v{index}"
+                x, y = self._overlay_position(layer)
+                background_opacity = int(layer.get("background_opacity", 0))
+                if background_opacity > 0 and height > 0:
+                    box_x, box_y = self._box_position(layer)
+                    background = self._ffmpeg_color(
+                        str(layer.get("background_color", "transparent"))
+                    )
+                    boxed = f"box{index}"
+                    script_parts.append(
+                        f"[{current}]drawbox=x={box_x}:y={box_y}:w=iw*{width:.4g}:h={height}:"
+                        f"color={background}@{background_opacity / 100:.4g}:t=fill"
+                        f"{self._enable_option(layer)}[{boxed}]"
+                    )
+                    current = boxed
+                script_parts.append(
+                    f"[{index}:v]format=rgba,colorchannelmixer=aa={opacity:.4g}[{raw}]"
+                )
+                script_parts.append(
+                    f"[{raw}][{current}]scale2ref=w=main_w*{width:.4g}:"
+                    f"h={height if height else 'ow/mdar'}[{asset}][{reference}]"
+                )
+                script_parts.append(
+                    f"[{reference}][{asset}]overlay=x={x}:y={y}"
+                    f"{self._enable_option(layer)}[{output}]"
+                )
+                current = output
+                visual = True
+            video_output = current
+        else:
+            video_output = None
+
+        pitch = int(settings.get("pitch", 0))
+        audio_filters: list[str] = []
+        if pitch:
+            ratio = 2 ** (pitch / 12)
+            if rubberband:
+                audio_filters.append(f"rubberband=pitch={ratio:.8g}")
+            else:
+                audio_filters.extend([
+                    f"asetrate=48000*{ratio:.8g}", "aresample=48000", atempo_chain(1 / ratio),
+                ])
+        if speed != 1:
+            audio_filters.append(atempo_chain(speed))
+        if audio_filters:
+            script_parts.append(f"[0:a]{','.join(audio_filters)}[aout]")
+        return RenderGraph(
+            ";".join(script_parts), image_inputs, video_output,
+            "aout" if audio_filters else None, visual,
+        )
 
 
 class VideoRenderer:
     def __init__(self, runner: FFmpegRunner | None = None) -> None:
         self.runner = runner or FFmpegRunner()
+
+    @staticmethod
+    def requires_render(
+        studio: dict[str, Any], *, subtitle: str | Path | None = None,
+    ) -> bool:
+        graph = FilterGraphBuilder().build(studio, subtitle=subtitle, rubberband=False)
+        return bool(graph.script)
 
     def mix_audio(
         self, video: VideoArtifact, voice: AudioArtifact, output: str | Path, settings: dict[str, Any],
@@ -378,26 +619,39 @@ class VideoRenderer:
         target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(f".{target.stem}.partial{target.suffix}")
         preflight = self.runner.preflight()
-        graph, visual = FilterGraphBuilder().build(studio, subtitle=subtitle, rubberband=preflight["rubberband"])
+        graph = FilterGraphBuilder().build(
+            studio, subtitle=subtitle, rubberband=preflight["rubberband"],
+            frame_width=video.width or 1920,
+        )
         encoder = preflight["encoder"] or "libx264"
         args = ["-i", str(video.path)]
-        speed = float(studio.get("speed", 1.0))
-        audio_filtered = speed != 1.0
-        if graph:
+        for image_path in graph.image_inputs:
+            args += ["-loop", "1", "-i", str(image_path)]
+        script: Path | None = None
+        if graph.script:
             script = target.parent / f".{target.stem}.filters.txt"
-            script_text = f"[0:v]{graph}[v]"
-            if audio_filtered:
-                script_text += f";[0:a]{atempo_chain(speed)}[a]"
-            script.write_text(script_text, encoding="utf-8")
-            args += ["-filter_complex_script", str(script), "-map", "[v]", "-map", "[a]" if audio_filtered else "0:a?"]
-        args += ["-c:v", encoder if visual else "copy", "-c:a", "aac" if audio_filtered else "copy", "-movflags", "+faststart", str(partial)]
+            script.write_text(graph.script, encoding="utf-8")
+            args += ["-filter_complex_script", str(script)]
+        args += ["-map", f"[{graph.video_output}]" if graph.video_output else "0:v:0"]
+        args += ["-map", f"[{graph.audio_output}]" if graph.audio_output else "0:a?"]
+        args += [
+            "-c:v", encoder if graph.visual else "copy",
+            "-c:a", "aac" if graph.audio_output else "copy",
+            "-movflags", "+faststart",
+        ]
+        if graph.image_inputs:
+            args.append("-shortest")
+        args.append(str(partial))
         try:
             self.runner.run(args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=7)
         except PipelineError:
-            if encoder == "libx264" or not visual:
+            if encoder == "libx264" or not graph.visual:
                 raise
             args[args.index(encoder)] = "libx264"
             self.runner.run(args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=7)
+        finally:
+            if script:
+                script.unlink(missing_ok=True)
         result = self.runner.probe.video_artifact(partial)
         os.replace(partial, target); result.path = target
         return result.refresh()

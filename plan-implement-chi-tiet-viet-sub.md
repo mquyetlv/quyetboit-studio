@@ -22,12 +22,12 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ### Tiến độ cập nhật ngày 2026-08-02
 
-- Hoàn thành: **124/180 task (68,9%)**.
-- Đang làm/đã có một phần: **39 task (21,7%)**.
-- Chưa triển khai: **14 task (7,8%)**.
-- Chờ credential/live test hoặc nghiệm thu: **3 task (1,7%)**.
-- Unit/lint hiện tại: **43 test pass**, Ruff pass.
-- Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Chưa đánh dấu Definition of Done cho Run All cho đến khi chạy lại bước 8 và nghiệm thu output cuối.
+- Hoàn thành: **131/182 task (72,0%)**.
+- Đang làm/đã có một phần: **39 task (21,4%)**.
+- Chưa triển khai: **9 task (4,9%)**.
+- Chờ credential/live test hoặc nghiệm thu: **3 task (1,6%)**.
+- Unit/lint hiện tại: **52 test pass**, Ruff pass.
+- Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Theo UX mới, nút chạy tự động chỉ xử lý bước 1–6; bước 7–8 luôn chạy thủ công để căn chỉnh và nghiệm thu output.
 
 ### Cấu trúc module tái sử dụng
 
@@ -81,11 +81,12 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 - [x] Nâng schema project từ v1 lên v2, có migration tự động giữ cấu hình UI hiện tại.
 - [x] Bổ sung `project_uuid`, source language, browser/profile, Gemini model, batch size, concurrency, CapCut voice, artifact manifest và config hash.
+- [x] Lưu atomically cấu hình nghiệp vụ gần nhất của cả tám bước trong LocalAppData và nạp cho project mới; không lưu URL/project data, workspace hoặc bất kỳ credential/token nào.
 - [x] Project chưa lưu dùng workspace tại `%LOCALAPPDATA%/QuyetBoITStudio/workspaces/<uuid>`.
 - [x] Project đã lưu mặc định dùng `.qbstudio-work/<uuid>` cạnh project; cho phép đổi workspace.
 - [x] Ghi manifest atomically sau mỗi chunk/batch; mỗi artifact lưu size, checksum, thời gian tạo, input hash và config hash.
 - [x] Khi chạy lại, chỉ tái sử dụng artifact nếu file tồn tại, checksum đúng và toàn bộ cấu hình ảnh hưởng trùng hash.
-- [x] Thay đổi một bước sẽ invalidate bước đó và các bước sau, không xóa artifact không liên quan.
+- [x] Thay đổi một bước sẽ invalidate bước đó và các bước sau, không xóa artifact không liên quan. Signal cấu hình được map theo số bước, hạ status bước đó/downstream và loại record manifest tương ứng nhưng giữ file artifact.
 - [x] Thêm nút “Dọn cache”, “Mở workspace” và “Chạy lại bỏ qua cache”.
 
 ## 3. Logic chi tiết 8 bước
@@ -182,16 +183,16 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 - [x] Chuyển cấu hình Studio thành `FilterGraphBuilder`; tuyệt đối không ghép chuỗi shell từ dữ liệu người dùng.
 - [x] Tốc độ dùng `setpts` cho video và chuỗi `atempo` cho audio.
-- [ ] Pitch ưu tiên `rubberband`; fallback `asetrate + aresample + atempo` để giữ duration.
+- [x] Pitch ưu tiên `rubberband`; fallback `asetrate + aresample + atempo` để giữ duration.
 - [x] Zoom dùng scale/crop có clamp; lật dùng `hflip`/`vflip`; màu dùng `eq`/`hue`.
-- [ ] Logo/overlay kiểm tra file tồn tại, chuẩn hóa đường dẫn, scale theo preview và overlay theo vị trí/timeline.
-- [ ] Text đầu video và chữ chạy dùng `drawtext`; escape font/path/text an toàn.
-- [-] Subtitle được burn bằng `subtitles`/ASS; kiểm tra font tiếng Việt và dùng font fallback đóng gói cùng app. Burn subtitle đã chạy thật; chưa đóng gói font fallback.
+- [x] Logo/overlay kiểm tra file tồn tại, chuẩn hóa đường dẫn, scale theo width %/height px, margin và overlay theo vị trí; mặc định hiển thị xuyên suốt video, có thể opt-out sang start/duration.
+- [x] Text cố định phía trên và chữ chạy dùng `drawbox` + `drawtext`, hỗ trợ màu nền/chữ, margin, width %/height px và escape font/path/text an toàn; mặc định hiển thị xuyên suốt video.
+- [-] Subtitle được burn bằng `subtitles`/ASS xuyên suốt video, hỗ trợ màu nền/chữ, margin, width % và height px; đã tự chọn Arial/DejaVu và integration render tiếng Việt, chưa đóng gói font redistributable cùng app.
 - [x] Áp subtitle trước biến đổi tốc độ để timestamp thay đổi đồng bộ với video/voice.
 - [x] Xuất filter graph ra file script tạm thay vì truyền command line quá dài.
 - [x] Parse `ffmpeg -progress pipe:1` để cập nhật progress/time/ETA và hỗ trợ cancel. Đã sửa deadlock stderr và cancel watcher.
 - [x] Encoder ưu tiên NVENC → QSV → AMF → libx264 theo kết quả preflight; nếu GPU encode lỗi, tự chạy lại một lần bằng CPU.
-- [ ] Nếu project không có chỉnh sửa hình ảnh, bỏ qua encode video và tái sử dụng output bước 6.
+- [x] Nếu project không có chỉnh sửa hình/âm thanh và layer subtitle bị tắt, bỏ qua encode video và tái sử dụng output bước 6.
 
 ### Bước 8 — Xuất và kiểm tra video
 
@@ -205,6 +206,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ## 4. Điều phối, lỗi và tối ưu
 
+- [x] Nút chạy tự động chỉ xử lý bước 1–6 rồi dừng với bước 7 ở trạng thái sẵn sàng; Studio và export bước 7–8 luôn chạy thủ công để người dùng căn chỉnh.
 - [-] Thay timer mô phỏng bằng state machine thật: `preparing`, `running`, `waiting_remote`, `retrying`, `paused`, `completed`, `failed`, `cancelled`. Worker/state thật đã thay timer trong production; chưa phát event đầy đủ cho mọi state trung gian.
 - [x] Progress tổng dùng trọng số động theo duration/bytes thực tế; không chia đều tám bước.
 - [x] Pause chỉ áp dụng tại boundary an toàn; upload/FFmpeg/Gemini đang chạy được cancel, sau đó resume từ checkpoint.
@@ -232,7 +234,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [-] Gemini batch size, structured schema, missing ID, Han detection và retry-only-missing. Các luồng chính đã test; error matrix chưa đầy đủ.
 - [-] Adaptive limiter giảm khi `429`, tôn trọng `Retry-After` và phục hồi concurrency. Giảm/phục hồi đã test; Retry-After chưa có test chuyên biệt.
 - [-] TTS cache key, duration matching, atempo chain và silence padding. Atempo có test; các nhánh còn lại chủ yếu được kiểm chứng qua pipeline.
-- [ ] Filter graph cho từng tùy chọn Studio và escaping path/text.
+- [x] Filter graph cho tùy chọn Studio, pitch, asset/text timeline và escaping path/text; có unit test và integration render FFmpeg.
 - [x] Artifact/config hash, cache hit, invalidation và schema v1→v2 migration.
 - [x] Redaction bảo đảm không log/lưu Gemini key, password, cookie, STS hoặc authorization.
 
@@ -241,7 +243,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [ ] Mock toàn bộ chuỗi CapCut login → workspace → upload → asset → caption.
 - [-] Mock Gemini structured output, `429`, timeout, missing cue và model invalid. Structured output/adaptive limiter đã mock; chưa đủ toàn bộ error matrix.
 - [ ] Mock yt-dlp progress/error/cancel.
-- [-] Chạy FFmpeg trên fixture ngắn để xác nhận extract, split, voice assembly, mix, subtitle và render. Đã chạy integration thủ công trên fixture và video thật; chưa đưa toàn bộ vào pytest.
+- [-] Chạy FFmpeg trên fixture ngắn để xác nhận extract, split, voice assembly, mix, subtitle và render. Studio render đã có pytest thật với subtitle tiếng Việt, pitch, logo, text cố định/chữ chạy và style nền/layout; extract/split/assembly/mix chưa được gom đầy đủ vào pytest.
 - [x] Mô phỏng app bị đóng giữa ASR/Gemini/TTS rồi mở lại từ manifest. Pipeline khôi phục typed artifact đã kiểm checksum; đã regression-test và xác nhận trực tiếp với `E:\test.qbstudio.json`.
 - [x] Xác nhận UI responsive, progress/log cập nhật đúng thread và Stop không để worker mồ côi.
 
@@ -258,7 +260,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ### Definition of Done
 
-- [-] Run All xử lý video Douyin thật đến file video hoàn chỉnh. Các bước 1–7 đã chạy thật; cần nghiệm thu bước 8/output cuối sau bản sửa FFmpeg.
+- [-] Quy trình tổng xử lý video Douyin thật đến file video hoàn chỉnh. Bước 1–6 chạy tự động; bước 7 đã chạy thật, nhưng bước 8/output cuối vẫn cần chạy thủ công và nghiệm thu chính thức.
 - [x] Mọi logic provider/media được gọi qua module tái sử dụng, không nằm trong widget Qt.
 - [x] Batch Gemini mặc định 50 cue, cấu hình được, async adaptive concurrency mặc định 3.
 - [x] Cue chưa dịch được quét và retry riêng; không dịch lại cue hợp lệ.

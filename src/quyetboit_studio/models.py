@@ -104,7 +104,11 @@ class ProjectModel:
     studio_settings: dict = field(default_factory=lambda: {
         "speed": 1.0, "pitch": 0, "zoom": 100, "color": 100,
         "flip_horizontal": False, "flip_vertical": False,
-        "layers": ["Video", "Voice", "Subtitle"], "layer_start": 0, "layer_duration": 5
+        "layers": [
+            {"id": "video", "kind": "video", "name": "Video", "enabled": True},
+            {"id": "voice", "kind": "voice", "name": "Voice", "enabled": True},
+            {"id": "subtitle", "kind": "subtitle", "name": "Subtitle", "enabled": True},
+        ],
     })
     export_settings: dict = field(default_factory=lambda: {
         "folder": "output", "filename": "video_vietsub", "format": "mp4",

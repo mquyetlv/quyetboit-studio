@@ -17,17 +17,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .models import ProjectModel
+from .core.preferences import LastUsedSettingsStore
 from .persistence import ProjectStore
 from .vietsub import VietSubPage
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, settings_store: LastUsedSettingsStore | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Quyết Bồ IT Studio")
         self.resize(1440, 900); self.setMinimumSize(1100, 700)
-        self.project = ProjectModel(); self.project_path: Path | None = None; self.dirty = False
+        self.settings_store = settings_store or LastUsedSettingsStore()
+        self.project = self.settings_store.new_project(); self.project_path: Path | None = None; self.dirty = False
         self.store = ProjectStore(); self.autosave_path = Path.cwd() / ".quyetboit-autosave.json"
         self._build_menu(); self._build_ui()
         self.autosave_timer = QTimer(self); self.autosave_timer.setInterval(15_000); self.autosave_timer.timeout.connect(self._autosave); self.autosave_timer.start()
@@ -55,7 +56,7 @@ class MainWindow(QMainWindow):
         nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addStretch()
         version = QLabel("VietSub v0.2"); version.setObjectName("Subtitle"); version.setAlignment(Qt.AlignmentFlag.AlignCenter); nav.addWidget(version); self.version_label = version
         root.addWidget(self.sidebar)
-        self.pages = QStackedWidget(); self.vietsub = VietSubPage(self.project); self.vietsub.dirty_changed.connect(self.set_dirty)
+        self.pages = QStackedWidget(); self.vietsub = VietSubPage(self.project, self.settings_store); self.vietsub.dirty_changed.connect(self.set_dirty)
         self.vietsub.request_new.connect(self.new_project); self.vietsub.request_open.connect(self.open_project); self.vietsub.request_save.connect(self.save_project)
         self.pages.addWidget(self.vietsub); self.pages.addWidget(self._audio_placeholder()); root.addWidget(self.pages, 1)
 
@@ -92,7 +93,7 @@ class MainWindow(QMainWindow):
 
     def new_project(self) -> None:
         if not self._confirm_discard(): return
-        self.project = ProjectModel(); self.project_path = None; self.vietsub.set_project(self.project); self.set_dirty(False)
+        self.project = self.settings_store.new_project(); self.project_path = None; self.vietsub.set_project(self.project); self.set_dirty(False)
 
     def open_project(self) -> None:
         if not self._confirm_discard(): return

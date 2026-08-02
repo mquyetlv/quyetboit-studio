@@ -20,11 +20,17 @@ QPushButton#NavButton { text-align: left; padding: 11px 14px; border: 0; backgro
 QPushButton#NavButton:checked { background: #eef2ff; color: #4f46e5; font-weight: 650; }
 QPushButton#StepButton { text-align: left; padding: 10px; border: 0; background: transparent; }
 QPushButton#StepButton:checked { background: #eef2ff; color: #4f46e5; }
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background: white; border: 1px solid #d8deea; border-radius: 7px;
+    min-height: 26px; padding: 3px 7px;
+    selection-background-color: #c7d2fe;
+}
+QTextEdit, QPlainTextEdit {
     background: white; border: 1px solid #d8deea; border-radius: 7px; padding: 7px;
     selection-background-color: #c7d2fe;
 }
-QLineEdit:focus, QComboBox:focus, QTextEdit:focus { border-color: #6366f1; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QTextEdit:focus, QPlainTextEdit:focus { border-color: #6366f1; }
 QProgressBar { border: 0; border-radius: 5px; background: #e9edf5; text-align: center; height: 9px; }
 QProgressBar::chunk { background: #6366f1; border-radius: 5px; }
 QTableWidget { background: white; alternate-background-color: #f8fafc; border: 1px solid #e3e7ef; border-radius: 8px; gridline-color: #edf0f5; }
@@ -34,4 +40,3 @@ QTabBar::tab { padding: 8px 14px; color: #667085; }
 QTabBar::tab:selected { color: #4f46e5; border-bottom: 2px solid #6366f1; }
 QToolTip { background: #172033; color: white; border: 0; padding: 5px; }
 """
-

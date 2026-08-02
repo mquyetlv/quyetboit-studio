@@ -38,12 +38,16 @@ def test_reset_and_retry(qtbot):
     assert controller.project.step_statuses == ["ready", *(["pending"] * 7)]
 
 
-def test_run_all_completes(qtbot):
+def test_run_all_stops_after_step_6_for_manual_studio_and_export(qtbot):
     controller = WorkflowController(ProjectModel())
     controller.timer.setInterval(1)
-    with qtbot.waitSignal(controller.workflow_completed, timeout=5000):
+    with qtbot.waitSignal(controller.automatic_run_completed, timeout=5000):
         controller.run_all()
-    assert controller.project.step_statuses == [StepStatus.COMPLETED.value] * 8
+    assert controller.project.step_statuses == [
+        *([StepStatus.COMPLETED.value] * 6),
+        StepStatus.READY.value,
+        StepStatus.PENDING.value,
+    ]
 
 
 def test_real_pipeline_service_runs_off_ui_thread(qtbot):
@@ -60,3 +64,24 @@ def test_real_pipeline_service_runs_off_ui_thread(qtbot):
     qtbot.waitUntil(lambda: controller.thread is None, timeout=3000)
     assert project.step_statuses[0] == StepStatus.COMPLETED.value
     assert project.step_statuses[1] == StepStatus.READY.value
+
+
+def test_real_run_all_calls_only_steps_1_to_6(qtbot):
+    class Service:
+        WEIGHTS = (0.125,) * 8
+
+        def __init__(self):
+            self.steps = []
+
+        def run_step(self, step, progress):
+            self.steps.append(step)
+            return StepResult(step)
+
+    project = ProjectModel()
+    service = Service()
+    controller = WorkflowController(project, service)
+    with qtbot.waitSignal(controller.automatic_run_completed, timeout=5000):
+        controller.run_all()
+
+    assert service.steps == list(range(6))
+    assert project.step_statuses[6:] == [StepStatus.READY.value, StepStatus.PENDING.value]

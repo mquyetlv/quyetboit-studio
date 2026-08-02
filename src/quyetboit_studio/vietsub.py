@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .core.preferences import LastUsedSettingsStore
 from .models import (
     STEP_TITLES,
     ProjectModel,
@@ -360,6 +361,7 @@ class SourceStep(BaseStep):
         self.auth_status.setText(f"{self.project.browser}: {self.project.browser_profile}{suffix}")
 
     def analyze(self) -> bool:
+        previous = (self.project.source_url, self.project.source)
         try:
             source = detect_video_source(self.url.text())
         except ValueError as exc:
@@ -370,12 +372,16 @@ class SourceStep(BaseStep):
         if source is not VideoSource.DOUYIN:
             self.validation.setText(f"{names[source]} chưa được hỗ trợ trong pipeline thật; hiện chỉ hỗ trợ Douyin.")
             self.validation.setStyleSheet("color:#b54708;")
-            self.changed.emit()
+            if previous != (self.project.source_url, self.project.source):
+                self.changed.emit()
             return False
         self.project.metadata = {"Nền tảng": names[source], "URL": self.project.source_url,
                                  "Trạng thái": "Sẵn sàng probe bằng yt-dlp"}
         self.validation.setText(f"✓ URL hợp lệ · Nguồn: {names[source]}"); self.validation.setStyleSheet("color:#027a48;")
-        self._show_metadata(self.project.metadata); self.changed.emit(); return True
+        self._show_metadata(self.project.metadata)
+        if previous != (self.project.source_url, self.project.source):
+            self.changed.emit()
+        return True
 
     def _show_metadata(self, metadata: dict) -> None:
         while self.meta_grid.count():
@@ -578,14 +584,30 @@ class MixStep(BaseStep):
 class StudioStep(BaseStep):
     def __init__(self, project: ProjectModel) -> None:
         super().__init__(project, "7. Chỉnh sửa trong Studio", "Tinh chỉnh hình ảnh, logo, subtitle và text overlay trong một workspace riêng.")
-        card = Card("Quyết Bồ Video Studio", "Preview · Media assets · Properties · Timeline nhiều layer")
-        features = QLabel("Tốc độ & Pitch  •  Zoom & Lật  •  Màu sắc  •  Logo  •  Chữ đầu video\nPhụ đề  •  Overlay chữ chạy  •  Undo/Redo  •  Kéo-thả layer")
+        card = Card("Quyết Bồ Video Studio", "Preview · Media assets · Properties · Layer")
+        features = QLabel("Tốc độ & Pitch  •  Zoom & Lật  •  Màu sắc  •  Logo  •  Text cố định phía trên\nPhụ đề  •  Chữ chạy  •  Undo/Redo  •  Kéo-thả layer")
         features.setWordWrap(True); card.layout.addWidget(features)
-        open_btn = button("Mở Video Studio", True); open_btn.clicked.connect(self.open_studio); card.layout.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self.open_btn = button("Mở Video Studio", True); self.open_btn.clicked.connect(self.open_studio); card.layout.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignRight)
         self.summary = QLabel(); self.summary.setObjectName("Subtitle"); card.layout.addWidget(self.summary); self.content.addWidget(card); self._refresh()
+        self._video_provider = None
+        self._edit_guard = None
+
+    def set_video_provider(self, provider: object) -> None:
+        self._video_provider = provider
+
+    def set_edit_guard(self, guard: object) -> None:
+        self._edit_guard = guard
 
     def open_studio(self) -> None:
-        dlg = StudioDialog(self.project.studio_settings, self); dlg.settings_applied.connect(self._apply); dlg.exec()
+        if callable(self._edit_guard) and not self._edit_guard():
+            QMessageBox.warning(
+                self, "Pipeline đang chạy",
+                "Hãy dừng hoặc chờ tác vụ hiện tại hoàn thành trước khi đổi cấu hình Studio.",
+            )
+            return
+        video_path = self._video_provider() if callable(self._video_provider) else None
+        dlg = StudioDialog(self.project.studio_settings, self, video_path=video_path)
+        dlg.settings_applied.connect(self._apply); dlg.exec()
 
     def _apply(self, settings: dict) -> None:
         self.project.studio_settings = settings; self._refresh(); self.changed.emit()
@@ -637,8 +659,11 @@ class VietSubPage(QWidget):
     dirty_changed = Signal(bool)
     request_new = Signal(); request_open = Signal(); request_save = Signal()
 
-    def __init__(self, project: ProjectModel) -> None:
+    def __init__(
+        self, project: ProjectModel, settings_store: LastUsedSettingsStore | None = None,
+    ) -> None:
         super().__init__(); self.setObjectName("AppRoot"); self.project = project; self.current_step = 0
+        self.settings_store = settings_store or LastUsedSettingsStore()
         self._build_ui(); self.set_project(project)
 
     def _build_ui(self) -> None:
@@ -650,7 +675,7 @@ class VietSubPage(QWidget):
             b = button(text, text == "Lưu"); b.clicked.connect(signal.emit); header.addWidget(b)
         root.addLayout(header)
         controls = Card(); row = QHBoxLayout()
-        self.run_all_btn = button("▶ Chạy tất cả", True); self.pause_btn = button("Tạm dừng"); self.resume_btn = button("Tiếp tục"); self.stop_btn = button("Dừng"); self.reset_all_btn = button("Đặt lại")
+        self.run_all_btn = button("▶ Chạy bước 1–6", True); self.pause_btn = button("Tạm dừng"); self.resume_btn = button("Tiếp tục"); self.stop_btn = button("Dừng"); self.reset_all_btn = button("Đặt lại")
         self.force_btn = button("Bỏ qua cache"); self.workspace_btn = button("Mở workspace"); self.clear_cache_btn = button("Dọn cache")
         for b in (self.run_all_btn, self.pause_btn, self.resume_btn, self.stop_btn, self.reset_all_btn,
                   self.force_btn, self.workspace_btn, self.clear_cache_btn): row.addWidget(b)
@@ -679,14 +704,32 @@ class VietSubPage(QWidget):
         self.step_rows.clear()
         self.pages = [SourceStep(project), AudioSplitStep(project), SrtStep(project), TranslateStep(project), TtsStep(project), MixStep(project), StudioStep(project), ExportStep(project)]
         for i, page in enumerate(self.pages):
-            page.changed.connect(lambda: self.dirty_changed.emit(True)); self.stack.addWidget(page)
+            self.stack.addWidget(page)
             row = StepRow(i, STEP_TITLES[i], project.step_statuses[i]); row.clicked.connect(self.select_step); self.step_rows.append(row); self.step_panel.layout.insertWidget(i + 1, row)
         self.pages[2].session_changed.connect(self._capcut_session_changed)
         pipeline = VietSubPipeline(project, dependencies=PipelineDependencies())
         self._configure_services(pipeline)
         self.controller = WorkflowController(project, pipeline); self._connect_controller(); self.select_step(0)
+        for index, page in enumerate(self.pages):
+            page.changed.connect(lambda index=index: self._config_changed(index))
         self.pages[4].set_service_provider(lambda: pipeline.services.tts)
+        self.pages[6].set_video_provider(pipeline.studio_preview_path)
+        self.pages[6].set_edit_guard(
+            lambda: self.controller.active_step is None and self.controller.thread is None
+        )
         self.log.append_log("INFO", "Project đã sẵn sàng với pipeline xử lý thật.")
+
+    def _config_changed(self, step: int) -> None:
+        try:
+            self.settings_store.save(self.project)
+        except OSError as exc:
+            self.log.append_log("WARNING", f"Không lưu được cấu hình gần nhất: {exc}")
+        if isinstance(self.controller.service, VietSubPipeline):
+            self.controller.service.cache.invalidate(step)
+        self.controller.reset_step(step)
+        self.log.append_log(
+            "INFO", f"Cấu hình bước {step + 1} đã đổi; bước này và downstream cần chạy lại."
+        )
 
     def _capcut_session_changed(self, session: object) -> None:
         self.project.__dict__["_capcut_session"] = session
@@ -730,6 +773,7 @@ class VietSubPage(QWidget):
         self.controller.step_status_changed.connect(self._status_changed); self.controller.step_progress_changed.connect(self._step_progress_changed)
         self.controller.overall_progress_changed.connect(self.overall.setValue); self.controller.log_emitted.connect(self.log.append_log)
         self.controller.dirty_changed.connect(self.dirty_changed); self.controller.workflow_completed.connect(self._completed)
+        self.controller.automatic_run_completed.connect(self._automatic_completed)
 
     def select_step(self, index: int) -> None:
         self.current_step = index; self.stack.setCurrentIndex(index)
@@ -780,6 +824,16 @@ class VietSubPage(QWidget):
 
     def _step_progress_changed(self, index: int, value: int) -> None:
         if index == self.current_step: self.step_progress.setValue(value)
+
+    def _automatic_completed(self) -> None:
+        if isinstance(self.controller.service, VietSubPipeline):
+            self.controller.service.force = False
+        self.select_step(6)
+        QMessageBox.information(
+            self, "Hoàn thành bước 1–6",
+            "Video đã được ghép voice. Hãy mở Video Studio để căn chỉnh bước 7, "
+            "sau đó chạy bước 7 và bước 8 thủ công.",
+        )
 
     def _completed(self) -> None:
         if isinstance(self.controller.service, VietSubPipeline):

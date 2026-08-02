@@ -26,7 +26,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - Đang làm/đã có một phần: **39 task (21,7%)**.
 - Chưa triển khai: **14 task (7,8%)**.
 - Chờ credential/live test hoặc nghiệm thu: **3 task (1,7%)**.
-- Unit/lint hiện tại: **42 test pass**, Ruff pass.
+- Unit/lint hiện tại: **43 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Chưa đánh dấu Definition of Done cho Run All cho đến khi chạy lại bước 8 và nghiệm thu output cuối.
 
 ### Cấu trúc module tái sử dụng
@@ -70,7 +70,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 - [x] CapCut UI nhận email/password dạng password field.
 - [x] Không lưu password; sau login chỉ lưu cookie/session và workspace ID trong Windows Credential Manager.
-- [x] Khi restore phải gọi account-info hoặc workspace API thật; không coi cache/voice list là bằng chứng session hợp lệ.
+- [x] Khi restore phải gọi account-info và workspace API thật; không coi UID/workspace cache hoặc voice list là bằng chứng session hợp lệ. `CapCutEditClient` bắt buộc validate đúng một lần trong process trước upload/ASR, chống gọi trùng và lưu lại UID/workspace đã xác thực; có regression test cho session restore đã chứa metadata.
 - [x] Khi session hết hạn, dừng ở bước hiện tại và yêu cầu đăng nhập lại; artifact đã hoàn thành vẫn được giữ.
 - [x] Nhận diện mã captcha `1105`, `1101`, `2046–2048`; không retry mù quáng, hiển thị hướng dẫn xác minh trong browser.
 - [x] Gemini lấy key từ `GEMINI_API_KEY`; ô API key trên UI cho phép override. Theo yêu cầu mới, override được lưu an toàn trong Windows Credential Manager thay vì chỉ RAM.

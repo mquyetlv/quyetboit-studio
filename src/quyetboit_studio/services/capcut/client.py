@@ -5,6 +5,7 @@ import json
 import os
 import random
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -63,6 +64,10 @@ class CapCutEditClient:
         )
         for name, value in session.cookies.items():
             self.http.cookies.set(name, value, domain=".capcut.com")
+        # UID/workspace restored from Credential Manager are cached metadata, not
+        # proof that the cookie is still accepted by CapCut in this process.
+        self._session_validated = False
+        self._session_validation_lock = threading.Lock()
 
     def _headers(self, path: str, appvr: str, signed: bool = True) -> dict[str, str]:
         headers = {"Accept": "application/json, text/plain, */*", "Content-Type": "application/json",
@@ -115,6 +120,7 @@ class CapCutEditClient:
             self.session.workspace_id = self.get_workspace()
             if self.session_store is not None:
                 self.session_store.save(self.session)
+            self._session_validated = True
             return self.session
         except PipelineError:
             raise
@@ -122,9 +128,12 @@ class CapCutEditClient:
             raise PipelineError("capcut_session_invalid", "Không thể xác thực phiên CapCut.", provider="capcut", debug_detail=str(exc)) from exc
 
     def ensure_session(self) -> CapCutSession:
-        if not self.session.uid or not self.session.workspace_id:
+        if self._session_validated:
+            return self.session
+        with self._session_validation_lock:
+            if self._session_validated:
+                return self.session
             return self.validate_session()
-        return self.session
 
     def get_workspace(self) -> str:
         payload = self.request("POST", "/cc/v1/workspace/get_user_workspaces", appvr=APPVR_ASSET,

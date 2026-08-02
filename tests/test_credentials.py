@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from quyetboit_studio.services.capcut import VodUploader
+import httpx
+
+from quyetboit_studio.services.capcut import (
+    CapCutEditClient,
+    CapCutSession,
+    VodUploader,
+)
 from quyetboit_studio.services.credentials import SecureValueStore
 
 
@@ -50,3 +56,45 @@ def test_uploader_validates_session_before_prepare(tmp_path):
     client = Client()
     data = VodUploader(client).prepare(source, "md5")
     assert data["service_id"] == "space"
+
+
+def test_restored_capcut_session_is_validated_once_and_persisted():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/passport/web/account/info/":
+            return httpx.Response(200, json={"data": {"user_id_str": "fresh-uid"}})
+        if request.url.path == "/cc/v1/workspace/get_user_workspaces":
+            return httpx.Response(200, json={"data": {"workspace_list": [
+                {"workspace_id": "fresh-workspace", "role": "owner"},
+            ]}})
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    class Store:
+        def __init__(self):
+            self.saved = []
+
+        def save(self, session):
+            self.saved.append((session.uid, session.workspace_id))
+
+    session = CapCutSession(
+        {"sessionid": "test-session"},
+        "test-did",
+        uid="stale-uid",
+        workspace_id="stale-workspace",
+    )
+    store = Store()
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = CapCutEditClient(session, client=http, session_store=store)
+
+    first = client.ensure_session()
+    second = client.ensure_session()
+
+    assert first is second is session
+    assert (session.uid, session.workspace_id) == ("fresh-uid", "fresh-workspace")
+    assert store.saved == [("fresh-uid", "fresh-workspace")]
+    assert calls == [
+        "/passport/web/account/info/",
+        "/cc/v1/workspace/get_user_workspaces",
+    ]

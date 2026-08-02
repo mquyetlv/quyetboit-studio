@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         self.vietsub_nav = self._nav_button("🎬  VietSub", "VietSub"); self.audio_nav = self._nav_button("♫  Audio Creator", "Audio Creator")
         self.vietsub_nav.setChecked(True); self.vietsub_nav.clicked.connect(lambda: self._set_page(0)); self.audio_nav.clicked.connect(lambda: self._set_page(1))
         nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addStretch()
-        version = QLabel("Prototype v0.1"); version.setObjectName("Subtitle"); version.setAlignment(Qt.AlignmentFlag.AlignCenter); nav.addWidget(version); self.version_label = version
+        version = QLabel("VietSub v0.2"); version.setObjectName("Subtitle"); version.setAlignment(Qt.AlignmentFlag.AlignCenter); nav.addWidget(version); self.version_label = version
         root.addWidget(self.sidebar)
         self.pages = QStackedWidget(); self.vietsub = VietSubPage(self.project); self.vietsub.dirty_changed.connect(self.set_dirty)
         self.vietsub.request_new.connect(self.new_project); self.vietsub.request_open.connect(self.open_project); self.vietsub.request_save.connect(self.save_project)
@@ -101,7 +101,10 @@ class MainWindow(QMainWindow):
         try: project = self.store.load(path)
         except ValueError as exc:
             QMessageBox.critical(self, "Không thể mở project", str(exc)); return
-        self.project = project; self.project_path = Path(path); self.vietsub.set_project(project); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
+        self.project = project; self.project_path = Path(path)
+        if not project.workspace_path:
+            project.workspace_path = str(self.project_path.parent / ".qbstudio-work" / project.project_uuid)
+        self.vietsub.set_project(project); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
 
     def save_project(self) -> bool:
         if self.project_path is None: return self.save_project_as()
@@ -114,7 +117,11 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Lưu project", f"{self.project.name}.qbstudio.json", "Quyết Bồ Project (*.qbstudio.json)")
         if not path: return False
         if not path.endswith(".json"): path += ".qbstudio.json"
-        self.project_path = Path(path); self.project.name = self.project_path.name.removesuffix(".qbstudio.json"); return self.save_project()
+        self.project_path = Path(path); self.project.name = self.project_path.name.removesuffix(".qbstudio.json")
+        if not self.project.workspace_path and not any(status == "completed" for status in self.project.step_statuses):
+            self.project.workspace_path = str(self.project_path.parent / ".qbstudio-work" / self.project.project_uuid)
+            self.vietsub.set_project(self.project)
+        return self.save_project()
 
     def _autosave(self) -> None:
         if self.dirty:

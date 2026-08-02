@@ -1,3 +1,4 @@
+from quyetboit_studio.core import ProgressEvent, StepResult
 from quyetboit_studio.models import ProjectModel, StepStatus
 from quyetboit_studio.workflow import WorkflowController
 
@@ -44,3 +45,18 @@ def test_run_all_completes(qtbot):
         controller.run_all()
     assert controller.project.step_statuses == [StepStatus.COMPLETED.value] * 8
 
+
+def test_real_pipeline_service_runs_off_ui_thread(qtbot):
+    class Service:
+        WEIGHTS = (0.125,) * 8
+
+        def run_step(self, step, progress):
+            progress(ProgressEvent(step, 0.5, "half"))
+            return StepResult(step)
+
+    project = ProjectModel()
+    controller = WorkflowController(project, Service())
+    assert controller.run_step(0)
+    qtbot.waitUntil(lambda: controller.thread is None, timeout=3000)
+    assert project.step_statuses[0] == StepStatus.COMPLETED.value
+    assert project.step_statuses[1] == StepStatus.READY.value

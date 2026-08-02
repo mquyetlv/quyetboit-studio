@@ -4,10 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quyetboit-studio"
-version = "0.1.0"
-description = "Prototype giao dien desktop cho quy trinh VietSub"
+version = "0.2.0"
+description = "Desktop pipeline tạo video VietSub từ Douyin"
 requires-python = ">=3.11"
-dependencies = ["PySide6>=6.8,<7"]
+dependencies = [
+    "PySide6>=6.8,<7",
+    "google-genai>=2",
+    "httpx>=0.28",
+    "keyring>=25",
+    "numpy>=2",
+    "pydantic>=2",
+    "yt-dlp>=2025.1.15",
+]
 
 [project.scripts]
 quyetboit-studio = "quyetboit_studio.app:main"
@@ -22,4 +30,3 @@ qt_api = "pyside6"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-

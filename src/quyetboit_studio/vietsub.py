@@ -41,6 +41,7 @@ from .models import (
     VideoSource,
     detect_video_source,
 )
+from .pipeline import PipelineDependencies, VietSubPipeline
 from .studio import StudioDialog
 from .widgets import Badge, Card, LogPanel
 from .workflow import WorkflowController
@@ -105,22 +106,84 @@ class BaseStep(QWidget):
 class SourceStep(BaseStep):
     def __init__(self, project: ProjectModel) -> None:
         super().__init__(project, "1. Nhập video", "Dán link video; nguồn được nhận diện tự động theo domain.")
+        if not project.__dict__.get("_douyin_cookies_file"):
+            saved_cookie_path = ""
+            try:
+                from .services.credentials import SecureValueStore
+                saved_cookie_path = SecureValueStore().load("douyin_cookie_path")
+            except Exception:  # noqa: BLE001 - unavailable credential backend is non-fatal
+                saved_cookie_path = ""
+            if saved_cookie_path and Path(saved_cookie_path).is_file():
+                project.__dict__["_douyin_cookies_file"] = saved_cookie_path
         card = Card("Nguồn video")
         row = QHBoxLayout(); self.url = QLineEdit(project.source_url); self.url.setPlaceholderText("https://www.douyin.com/video/...")
         paste = button("Dán"); clear = button("Xóa"); analyze = button("Phân tích", True)
         paste.clicked.connect(self._paste); clear.clicked.connect(self.url.clear); analyze.clicked.connect(self.analyze)
         row.addWidget(self.url, 1); row.addWidget(paste); row.addWidget(clear); row.addWidget(analyze); card.layout.addLayout(row)
         self.validation = QLabel("Hỗ trợ Douyin, Xiaohongshu và Bilibili"); self.validation.setObjectName("Subtitle")
-        card.layout.addWidget(self.validation); self.content.addWidget(card)
-        self.meta = Card("Thông tin video", "Nhấn Phân tích để xem metadata mô phỏng")
+        card.layout.addWidget(self.validation)
+        auth_row = QHBoxLayout()
+        auth = button("Cookie / profile trình duyệt"); auth.clicked.connect(self.configure_auth)
+        self.auth_status = QLabel(); self.auth_status.setObjectName("Subtitle")
+        auth_row.addWidget(auth); auth_row.addWidget(self.auth_status, 1)
+        card.layout.addLayout(auth_row); self.content.addWidget(card)
+        self._refresh_auth_status()
+        self.meta = Card("Thông tin video", "Metadata đầy đủ sẽ được yt-dlp xác nhận khi chạy bước tải.")
         self.meta_grid = QGridLayout(); self.meta.layout.addLayout(self.meta_grid); self.content.addWidget(self.meta)
-        download = button("Tải video (mô phỏng)", True); download.clicked.connect(lambda: self.changed.emit())
+        download = button("Sẵn sàng tải", True); download.clicked.connect(lambda: self.changed.emit())
         self.meta.layout.addWidget(download, 0, Qt.AlignmentFlag.AlignRight)
         if project.metadata: self._show_metadata(project.metadata)
 
     def _paste(self) -> None:
         from PySide6.QtWidgets import QApplication
         self.url.setText(QApplication.clipboard().text())
+
+    def configure_auth(self) -> None:
+        browser = QComboBox(); browser.addItems(["chrome", "edge"]); browser.setCurrentText(self.project.browser)
+        profile = QLineEdit(self.project.browser_profile)
+        profile.setPlaceholderText("Default, Profile 6 hoặc tên hiển thị")
+        cookie_path = QLineEdit(str(self.project.__dict__.get("_douyin_cookies_file", "")))
+        cookie_path.setPlaceholderText("Không bắt buộc — cookies.txt hoặc JSON export")
+        cookie_row = QWidget(); cookie_layout = QHBoxLayout(cookie_row); cookie_layout.setContentsMargins(0, 0, 0, 0)
+        browse = button("Chọn…")
+        browse.clicked.connect(lambda: self._choose_cookie_file(cookie_path))
+        cookie_layout.addWidget(cookie_path, 1); cookie_layout.addWidget(browse)
+        dlg = SettingsDialog(
+            "Đăng nhập Douyin", [("Trình duyệt", browser), ("Profile", profile),
+                                  ("Cookie thủ công", cookie_row)], self,
+            "Ứng dụng tự đổi tên hiển thị của Chrome/Edge sang thư mục profile thật. "
+            "File cookie chỉ dùng trong RAM và không được chép vào project/workspace.",
+        )
+        if dlg.exec():
+            self.project.browser = browser.currentText()
+            self.project.browser_profile = profile.text().strip() or "Default"
+            selected = cookie_path.text().strip()
+            from .services.credentials import SecureValueStore
+            credential_store = SecureValueStore()
+            if selected:
+                self.project.__dict__["_douyin_cookies_file"] = selected
+                credential_store.save("douyin_cookie_path", selected)
+            else:
+                self.project.__dict__.pop("_douyin_cookies_file", None)
+                credential_store.delete("douyin_cookie_path")
+            self._refresh_auth_status(); self.changed.emit()
+
+    def _choose_cookie_file(self, target: QLineEdit) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn file cookie", "", "Cookie export (*.json *.txt);;Tất cả file (*)"
+        )
+        if path:
+            target.setText(path)
+
+    def _refresh_auth_status(self) -> None:
+        cookie_file = self.project.__dict__.get("_douyin_cookies_file")
+        if cookie_file:
+            self.auth_status.setText(f"Cookie thủ công: {Path(cookie_file).name}")
+            return
+        from .services.douyin import resolve_browser_profile
+        resolved = resolve_browser_profile(self.project.browser, self.project.browser_profile)
+        suffix = f" → {resolved}" if resolved != self.project.browser_profile else ""
+        self.auth_status.setText(f"{self.project.browser}: {self.project.browser_profile}{suffix}")
 
     def analyze(self) -> bool:
         try:
@@ -130,8 +193,13 @@ class SourceStep(BaseStep):
             return False
         names = {VideoSource.DOUYIN: "Douyin", VideoSource.XIAOHONGSHU: "Xiaohongshu", VideoSource.BILIBILI: "Bilibili"}
         self.project.source_url = self.url.text().strip(); self.project.source = source.value
-        self.project.metadata = {"Nền tảng": names[source], "Tiêu đề": "Video mẫu — prototype UI",
-                                 "Thời lượng": "02:48", "Độ phân giải": "1080 × 1920", "Dung lượng": "36,4 MB (ước tính)"}
+        if source is not VideoSource.DOUYIN:
+            self.validation.setText(f"{names[source]} chưa được hỗ trợ trong pipeline thật; hiện chỉ hỗ trợ Douyin.")
+            self.validation.setStyleSheet("color:#b54708;")
+            self.changed.emit()
+            return False
+        self.project.metadata = {"Nền tảng": names[source], "URL": self.project.source_url,
+                                 "Trạng thái": "Sẵn sàng probe bằng yt-dlp"}
         self.validation.setText(f"✓ URL hợp lệ · Nguồn: {names[source]}"); self.validation.setStyleSheet("color:#027a48;")
         self._show_metadata(self.project.metadata); self.changed.emit(); return True
 
@@ -166,6 +234,9 @@ class AudioSplitStep(BaseStep):
 
 
 class SrtStep(BaseStep):
+    session_changed = Signal(object)
+    login_failed = Signal(str)
+
     def __init__(self, project: ProjectModel) -> None:
         super().__init__(project, "3. Chuyển audio thành SRT", "Chọn một dịch vụ nhận diện giọng nói.")
         provider = Card("Dịch vụ SRT")
@@ -173,8 +244,12 @@ class SrtStep(BaseStep):
         for value in SrtProvider:
             radio = QRadioButton(value.value); radio.setChecked(project.srt_provider == value.value); self.group.addButton(radio); provider.layout.addWidget(radio)
         api = button("Cấu hình API"); api.clicked.connect(self.api_dialog); provider.layout.addWidget(api, 0, Qt.AlignmentFlag.AlignRight)
+        self.connection_status = QLabel("Chưa kiểm tra phiên CapCut"); self.connection_status.setObjectName("Subtitle")
+        provider.layout.addWidget(self.connection_status)
+        self.session_changed.connect(self._login_succeeded)
+        self.login_failed.connect(self._login_failed)
         self.group.buttonClicked.connect(self._changed); self.content.addWidget(provider)
-        preview = Card("Kết quả mô phỏng")
+        preview = Card("Xem trước định dạng kết quả")
         view = QPlainTextEdit("1\n00:00:00,000 --> 00:00:03,400\n你好，欢迎来到今天的视频。\n\n2\n00:00:03,500 --> 00:00:07,000\n我们来看看这个有趣的故事。")
         view.setReadOnly(True); preview.layout.addWidget(view); self.content.addWidget(preview)
 
@@ -182,10 +257,35 @@ class SrtStep(BaseStep):
         self.project.srt_provider = radio.text(); self.changed.emit()
 
     def api_dialog(self) -> None:
-        token = QLineEdit(); token.setEchoMode(QLineEdit.EchoMode.Password); cookie = QLineEdit(); cookie.setEchoMode(QLineEdit.EchoMode.Password)
-        test = button("Kiểm tra kết nối (mô phỏng)"); test.clicked.connect(lambda: QMessageBox.information(self, "Kết nối", "Kết nối mô phỏng thành công.\nCredential không được lưu."))
-        dlg = SettingsDialog("Cấu hình API", [("Token", token), ("Cookie", cookie), ("", test)], self, "Dữ liệu nhạy cảm chỉ tồn tại trong phiên hiện tại.")
-        dlg.exec()
+        email = QLineEdit(); email.setPlaceholderText("email@example.com")
+        password = QLineEdit(); password.setEchoMode(QLineEdit.EchoMode.Password)
+        dlg = SettingsDialog("Đăng nhập CapCut", [("Email", email), ("Password", password)], self,
+                             "Password không được lưu. Cookie phiên chỉ lưu trong Windows Credential Manager.")
+        if not dlg.exec():
+            return
+        import threading
+
+        username, secret = email.text(), password.text()
+        self.connection_status.setText("Đang đăng nhập CapCut…")
+
+        def login_worker() -> None:
+            try:
+                from .services.capcut import CapCutAuth, CapCutSessionStore
+                session = CapCutAuth().login(username, secret)
+                CapCutSessionStore().save(session)
+                self.session_changed.emit(session)
+            except Exception as exc:  # noqa: BLE001 - thread boundary forwards provider/keyring errors
+                self.login_failed.emit(getattr(exc, "user_message", str(exc)))
+
+        threading.Thread(target=login_worker, name="capcut-login", daemon=True).start()
+
+    def _login_succeeded(self, session: object) -> None:
+        self.project.__dict__["_capcut_session"] = session
+        self.connection_status.setText("✓ Đã kết nối CapCut")
+
+    def _login_failed(self, message: str) -> None:
+        self.connection_status.setText("Đăng nhập CapCut thất bại")
+        QMessageBox.critical(self, "Không thể đăng nhập", message)
 
 
 class TranslateStep(BaseStep):
@@ -209,10 +309,23 @@ class TranslateStep(BaseStep):
         self.project.translation_provider = self.provider.currentText(); self.project.translation_context = self.context.currentText(); self.project.custom_context = self.custom.toPlainText(); self.changed.emit()
 
     def configure(self) -> None:
-        model = QComboBox(); model.addItems(["gemini-2.5-flash", "gemini-2.5-pro", "Browser mặc định"])
+        model = QComboBox(); model.addItems([self.project.gemini_model, "gemini-3.6-flash", "gemini-2.5-flash"]); model.setCurrentText(self.project.gemini_model)
         key = QLineEdit(); key.setEchoMode(QLineEdit.EchoMode.Password)
-        profile = QLineEdit(); profile.setPlaceholderText("Default")
-        SettingsDialog("Cấu hình translator", [("Model", model), ("API key", key), ("Browser profile", profile)], self, "API key không được ghi vào project hoặc log.").exec()
+        batch = QSpinBox(); batch.setRange(10, 200); batch.setValue(self.project.translation_batch_size)
+        concurrency = QSpinBox(); concurrency.setRange(1, 8); concurrency.setValue(self.project.translation_concurrency)
+        dlg = SettingsDialog("Cấu hình Gemini", [("Model", model), ("API key override", key),
+                             ("Batch size", batch), ("Concurrency", concurrency)], self,
+                             "Để trống để dùng GEMINI_API_KEY hoặc key đã lưu. Key nhập mới được "
+                             "lưu trong Windows Credential Manager, không ghi vào project/log.")
+        if dlg.exec():
+            self.project.gemini_model = model.currentText()
+            self.project.translation_batch_size = batch.value()
+            self.project.translation_concurrency = concurrency.value()
+            if key.text():
+                self.project.__dict__["_gemini_api_key"] = key.text()
+                from .services.credentials import SecureValueStore
+                SecureValueStore().save("gemini_api_key", key.text())
+            self.changed.emit()
 
 
 class TtsStep(BaseStep):
@@ -232,7 +345,7 @@ class TtsStep(BaseStep):
         speed = QSpinBox(); speed.setRange(50, 200); speed.setSuffix("%"); speed.setValue(round(self.project.tts_settings["speed"] * 100))
         pitch = QSpinBox(); pitch.setRange(-12, 12); pitch.setValue(self.project.tts_settings["pitch"])
         volume = QSpinBox(); volume.setRange(0, 150); volume.setSuffix("%"); volume.setValue(self.project.tts_settings["volume"])
-        sample = button("Nghe thử (mô phỏng)"); sample.clicked.connect(lambda: QMessageBox.information(self, "Nghe thử", "Đang phát giọng mẫu mô phỏng."))
+        sample = button("Kiểm tra voice"); sample.clicked.connect(lambda: QMessageBox.information(self, "Voice", "Voice sẽ được kiểm tra với CapCut khi chạy bước TTS."))
         dlg = SettingsDialog("Cấu hình giọng đọc", [("Giọng", voice), ("Tốc độ", speed), ("Pitch", pitch), ("Âm lượng", volume), ("", sample)], self)
         if dlg.exec():
             self.project.tts_settings = {"voice": voice.currentText(), "speed": speed.value()/100, "pitch": pitch.value(), "volume": volume.value()}; self.changed.emit()
@@ -275,7 +388,7 @@ class StudioStep(BaseStep):
 
 class ExportStep(BaseStep):
     def __init__(self, project: ProjectModel) -> None:
-        super().__init__(project, "8. Xuất video", "Cấu hình file đầu ra và mô phỏng quá trình render.")
+        super().__init__(project, "8. Xuất video", "Cấu hình file đầu ra và kiểm tra video render.")
         card = Card("Thiết lập xuất video"); form = QFormLayout(); e = project.export_settings
         folder_row = QWidget(); folder_layout = QHBoxLayout(folder_row); folder_layout.setContentsMargins(0,0,0,0)
         self.folder = QLineEdit(e["folder"]); browse = button("Chọn..."); browse.clicked.connect(self._browse); folder_layout.addWidget(self.folder); folder_layout.addWidget(browse)
@@ -305,7 +418,7 @@ class ExportStep(BaseStep):
     def _open_output_folder(self) -> None:
         folder = Path(self.folder.text())
         if not folder.exists():
-            QMessageBox.information(self, "Output mô phỏng", f"Prototype chưa tạo thư mục thật:\n{folder}")
+            QMessageBox.information(self, "Output", f"Thư mục chưa được tạo:\n{folder}")
             return
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
@@ -330,7 +443,9 @@ class VietSubPage(QWidget):
         root.addLayout(header)
         controls = Card(); row = QHBoxLayout()
         self.run_all_btn = button("▶ Chạy tất cả", True); self.pause_btn = button("Tạm dừng"); self.resume_btn = button("Tiếp tục"); self.stop_btn = button("Dừng"); self.reset_all_btn = button("Đặt lại")
-        for b in (self.run_all_btn, self.pause_btn, self.resume_btn, self.stop_btn, self.reset_all_btn): row.addWidget(b)
+        self.force_btn = button("Bỏ qua cache"); self.workspace_btn = button("Mở workspace"); self.clear_cache_btn = button("Dọn cache")
+        for b in (self.run_all_btn, self.pause_btn, self.resume_btn, self.stop_btn, self.reset_all_btn,
+                  self.force_btn, self.workspace_btn, self.clear_cache_btn): row.addWidget(b)
         row.addStretch(); row.addWidget(QLabel("Tổng tiến trình")); self.overall = QProgressBar(); self.overall.setFixedWidth(220); row.addWidget(self.overall); controls.layout.addLayout(row); root.addWidget(controls)
         middle = QHBoxLayout(); middle.setSpacing(12)
         self.step_panel = Card("Quy trình 8 bước"); self.step_panel.setFixedWidth(300); self.step_rows: list[StepRow] = []
@@ -345,6 +460,9 @@ class VietSubPage(QWidget):
         self.pause_btn.clicked.connect(lambda: self.controller.pause()); self.resume_btn.clicked.connect(lambda: self.controller.resume())
         self.stop_btn.clicked.connect(lambda: self.controller.stop()); self.retry_btn.clicked.connect(lambda: self.controller.retry(self.current_step))
         self.reset_step_btn.clicked.connect(lambda: self.controller.reset_step(self.current_step)); self.reset_all_btn.clicked.connect(lambda: self.controller.reset())
+        self.force_btn.clicked.connect(self._run_force)
+        self.workspace_btn.clicked.connect(self._open_workspace)
+        self.clear_cache_btn.clicked.connect(self._clear_cache)
 
     def set_project(self, project: ProjectModel) -> None:
         self.project = project; self.project_label.setText(f"{project.name}  •  Chưa lưu")
@@ -355,7 +473,49 @@ class VietSubPage(QWidget):
         for i, page in enumerate(self.pages):
             page.changed.connect(lambda: self.dirty_changed.emit(True)); self.stack.addWidget(page)
             row = StepRow(i, STEP_TITLES[i], project.step_statuses[i]); row.clicked.connect(self.select_step); self.step_rows.append(row); self.step_panel.layout.insertWidget(i + 1, row)
-        self.controller = WorkflowController(project); self._connect_controller(); self.select_step(0); self.log.append_log("INFO", "Project đã sẵn sàng. Đây là chế độ mô phỏng UI.")
+        self.pages[2].session_changed.connect(self._capcut_session_changed)
+        pipeline = VietSubPipeline(project, dependencies=PipelineDependencies())
+        self._configure_services(pipeline)
+        self.controller = WorkflowController(project, pipeline); self._connect_controller(); self.select_step(0)
+        self.log.append_log("INFO", "Project đã sẵn sàng với pipeline xử lý thật.")
+
+    def _capcut_session_changed(self, session: object) -> None:
+        self.project.__dict__["_capcut_session"] = session
+        self._configure_services(self.controller.service)
+
+    def _configure_services(self, pipeline: object) -> None:
+        if not isinstance(pipeline, VietSubPipeline):
+            return
+        from .services.gemini import GeminiClient, GeminiTranslationService
+        key = self.project.__dict__.get("_gemini_api_key")
+        if not key:
+            try:
+                from .services.credentials import SecureValueStore
+                key = SecureValueStore().load("gemini_api_key")
+            except Exception:  # noqa: BLE001 - environment variable remains a valid fallback
+                key = ""
+        gemini = GeminiClient(key)
+        pipeline.services.translator = GeminiTranslationService(gemini)
+        session = self.project.__dict__.get("_capcut_session")
+        if session is None:
+            try:
+                from .services.capcut import CapCutSessionStore
+                session = CapCutSessionStore().load()
+            except Exception:  # noqa: BLE001 - unavailable OS credential backend is non-fatal
+                session = None
+            if session is not None:
+                self.project.__dict__["_capcut_session"] = session
+        if session is not None:
+            from .services.capcut import (
+                CapCutCaptionService,
+                CapCutEditClient,
+                CapCutSessionStore,
+                CapCutTtsService,
+                VodUploader,
+            )
+            client = CapCutEditClient(session, session_store=CapCutSessionStore())
+            pipeline.services.captions = CapCutCaptionService(client, VodUploader(client))
+            pipeline.services.tts = CapCutTtsService(client)
 
     def _connect_controller(self) -> None:
         self.controller.step_status_changed.connect(self._status_changed); self.controller.step_progress_changed.connect(self._step_progress_changed)
@@ -373,11 +533,36 @@ class VietSubPage(QWidget):
         if self.current_step == 3 and self.project.translation_context == TranslationContext.CUSTOM.value and not self.project.custom_context.strip():
             QMessageBox.warning(self, "Thiếu context", "Vui lòng nhập context dịch tùy chỉnh."); return
         if self.current_step == 7 and not self.pages[7].validate(): return
+        self._configure_services(self.controller.service)
         self.controller.run_step(self.current_step)
 
     def _run_all(self) -> None:
         if not self.pages[0].analyze(): self.select_step(0); return
+        self._configure_services(self.controller.service)
         self.controller.run_all()
+
+    def _run_force(self) -> None:
+        if not isinstance(self.controller.service, VietSubPipeline):
+            return
+        self.controller.service.force = True
+        self._run_all()
+
+    def _open_workspace(self) -> None:
+        if not isinstance(self.controller.service, VietSubPipeline):
+            return
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.controller.service.workspace)))
+
+    def _clear_cache(self) -> None:
+        if not isinstance(self.controller.service, VietSubPipeline) or self.controller.active_step is not None:
+            return
+        answer = QMessageBox.question(self, "Dọn cache", "Xóa toàn bộ artifact trung gian của project?")
+        if answer == QMessageBox.StandardButton.Yes:
+            cache = self.controller.service.cache
+            cache.clear_files()
+            self.controller.reset()
+            self.log.append_log("INFO", "Đã dọn artifact trung gian trong workspace.")
 
     def _status_changed(self, index: int, status: str) -> None:
         self.step_rows[index].badge.set_status(status)
@@ -388,7 +573,9 @@ class VietSubPage(QWidget):
         if index == self.current_step: self.step_progress.setValue(value)
 
     def _completed(self) -> None:
-        e = self.project.export_settings; path = str(Path(e["folder"]) / f'{e["filename"]}.{e["format"]}')
-        self.project.output = {"video": path}; self.pages[7].output.setText(f"✓ Hoàn thành mô phỏng: {path}")
+        if isinstance(self.controller.service, VietSubPipeline):
+            self.controller.service.force = False
+        path = self.project.output.get("video", "")
+        self.pages[7].output.setText(f"✓ Hoàn thành: {path}")
         self.pages[7].open_folder.setEnabled(True)
-        QMessageBox.information(self, "Hoàn thành", f"Pipeline mô phỏng đã hoàn thành.\n\n{path}")
+        QMessageBox.information(self, "Hoàn thành", f"Pipeline đã hoàn thành.\n\n{path}")

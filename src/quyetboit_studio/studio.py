@@ -117,7 +117,7 @@ class StudioDialog(QDialog):
         root.addWidget(split)
 
         footer = QHBoxLayout()
-        hint = QLabel("Prototype UI — không chỉnh sửa media thật")
+        hint = QLabel("Cấu hình này sẽ được áp dụng bằng FFmpeg ở bước render")
         hint.setObjectName("Subtitle")
         cancel = QPushButton("Hủy"); cancel.clicked.connect(self.reject)
         apply_btn = QPushButton("Áp dụng"); apply_btn.setObjectName("Primary"); apply_btn.clicked.connect(self.apply)

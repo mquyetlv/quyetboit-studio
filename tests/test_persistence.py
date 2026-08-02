@@ -3,7 +3,7 @@ import json
 import pytest
 
 from quyetboit_studio.models import ProjectModel
-from quyetboit_studio.persistence import ProjectStore, sanitize
+from quyetboit_studio.persistence import ProjectStore, redact_text, sanitize
 
 
 def test_round_trip_project(tmp_path):
@@ -38,3 +38,9 @@ def test_invalid_json_has_friendly_error(tmp_path):
     with pytest.raises(ValueError, match="Không thể mở project"):
         ProjectStore().load(path)
 
+
+def test_sensitive_values_are_redacted_inside_log_text():
+    text = redact_text("Authorization: Bearer-secret sessionid=abc user@example.com")
+    assert "Bearer-secret" not in text
+    assert "abc" not in text
+    assert "user@example.com" not in text

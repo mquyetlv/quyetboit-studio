@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from urllib.parse import urlparse
+from uuid import uuid4
 
 
 class VideoSource(StrEnum):
@@ -45,6 +46,17 @@ class StepStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class PipelineState(StrEnum):
+    PREPARING = "preparing"
+    RUNNING = "running"
+    WAITING_REMOTE = "waiting_remote"
+    RETRYING = "retrying"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 STEP_TITLES = (
     "Nhập video",
     "Tách & chia âm thanh",
@@ -59,7 +71,8 @@ STEP_TITLES = (
 
 @dataclass
 class ProjectModel:
-    schema_version: int = 1
+    schema_version: int = 2
+    project_uuid: str = field(default_factory=lambda: str(uuid4()))
     name: str = "Dự án chưa đặt tên"
     source_url: str = ""
     source: str = ""
@@ -67,12 +80,23 @@ class ProjectModel:
     translation_provider: str = TranslationProvider.GEMINI_API.value
     translation_context: str = TranslationContext.GEN_Z.value
     custom_context: str = ""
-    tts_provider: str = TtsProvider.GOOGLE.value
+    tts_provider: str = TtsProvider.CAPCUT.value
+    source_language: str = "zh-CN"
+    browser: str = "chrome"
+    browser_profile: str = "Default"
+    gemini_model: str = "gemini-3.6-flash"
+    translation_batch_size: int = 50
+    translation_concurrency: int = 3
+    capcut_voice: str = ""
+    workspace_path: str = ""
+    artifact_manifest: str = "manifest.json"
+    config_hash: str = ""
     audio_settings: dict = field(default_factory=lambda: {
-        "format": "wav", "sample_rate": 44100, "channels": "Mono", "chunk_seconds": 60
+        "format": "m4a", "sample_rate": 16000, "channels": "Mono", "chunk_seconds": 240,
+        "chunk_min_seconds": 180, "chunk_max_seconds": 300, "overlap_ms": 250
     })
     tts_settings: dict = field(default_factory=lambda: {
-        "voice": "vi-VN-Neural2-A", "speed": 1.0, "pitch": 0, "volume": 100
+        "voice": "", "speed": 1.0, "pitch": 0, "volume": 100, "concurrency": 2
     })
     mix_settings: dict = field(default_factory=lambda: {
         "keep_original": True, "original_volume": 25, "voice_volume": 100
@@ -99,15 +123,30 @@ class ProjectModel:
     def from_dict(cls, data: dict) -> ProjectModel:
         if not isinstance(data, dict):
             raise TypeError("Dữ liệu project phải là một JSON object.")
-        version = data.get("schema_version")
-        if version != 1:
+        version = data.get("schema_version", 1)
+        if version not in {1, 2}:
             raise ValueError(f"Không hỗ trợ schema_version={version!r}.")
+        if version == 1:
+            data = cls._migrate_v1(data)
         allowed = set(cls.__dataclass_fields__)
         clean = {key: value for key, value in data.items() if key in allowed}
         project = cls(**clean)
         if len(project.step_statuses) != 8:
             raise ValueError("Project phải có trạng thái cho đúng 8 bước.")
         return project
+
+    @classmethod
+    def _migrate_v1(cls, data: dict) -> dict:
+        migrated = dict(data)
+        migrated["schema_version"] = 2
+        defaults = cls()
+        for name in (
+            "project_uuid", "source_language", "browser", "browser_profile", "gemini_model",
+            "translation_batch_size", "translation_concurrency", "capcut_voice", "workspace_path",
+            "artifact_manifest", "config_hash",
+        ):
+            migrated.setdefault(name, getattr(defaults, name))
+        return migrated
 
 
 def detect_video_source(url: str) -> VideoSource:

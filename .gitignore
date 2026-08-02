@@ -7,4 +7,6 @@ dist/
 build/
 *.egg-info/
 .quyetboit-autosave.json
-
+www.douyin.com_*.json
+cookies*.json
+cookies*.txt

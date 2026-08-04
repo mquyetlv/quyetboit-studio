@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Self
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ...core.models import CancellationToken, PipelineError, ProgressCallback, ProgressEvent, SrtCue
 from ...core.retry import RetryPolicy
+from ...persistence import redact_text
 from ..subtitles import batch_cues, find_untranslated
 
 
@@ -133,6 +135,7 @@ class GeminiClient:
     def _map_error(exc: BaseException) -> PipelineError:
         status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
         status = int(status) if str(status).isdigit() else 0
+        diagnostics, retry_after = GeminiClient._error_diagnostics(exc, status)
         retryable = status in {408, 429} or status >= 500 or isinstance(exc, TimeoutError)
         if status in {400, 401, 403, 404}:
             message = "API key hoặc model Gemini không hợp lệ."
@@ -142,12 +145,68 @@ class GeminiClient:
             message = "Không thể gọi Gemini. Hãy kiểm tra mạng và quota."
         error = PipelineError(
             f"gemini_http_{status or 'error'}", message, provider="gemini",
-            retryable=retryable, debug_detail=str(exc),
+            retryable=retryable, debug_detail=diagnostics, log_detail=diagnostics,
         )
-        retry_after = getattr(exc, "retry_after", None)
         if retry_after is not None:
-            error.retry_after = float(retry_after)
+            error.retry_after = retry_after
         return error
+
+    @staticmethod
+    def _error_diagnostics(exc: BaseException, status: int) -> tuple[str, float | None]:
+        """Extract useful provider fields without logging the request, prompt, or credentials."""
+        details = getattr(exc, "details", None)
+
+        def find_value(value: Any, *keys: str) -> Any:
+            if isinstance(value, dict):
+                for key in keys:
+                    candidate = value.get(key)
+                    if candidate is not None and candidate != "":
+                        return candidate
+                for child in value.values():
+                    found = find_value(child, *keys)
+                    if found is not None and found != "":
+                        return found
+            elif isinstance(value, list):
+                for child in value:
+                    found = find_value(child, *keys)
+                    if found is not None and found != "":
+                        return found
+            return None
+
+        def safe_text(value: Any, limit: int = 500) -> str:
+            text = " ".join(str(value or "").split())
+            text = redact_text(text)
+            return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
+        reason = getattr(exc, "status", None) or find_value(details, "status", "reason")
+        provider_message = getattr(exc, "message", None) or find_value(details, "message")
+        quota_metric = find_value(details, "quotaMetric", "quota_metric")
+        quota_id = find_value(details, "quotaId", "quota_id")
+        retry_value = getattr(exc, "retry_after", None)
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if retry_value is None and headers:
+            retry_value = headers.get("retry-after") or headers.get("Retry-After")
+        if retry_value is None:
+            retry_value = find_value(details, "retryDelay", "retry_delay")
+        retry_after: float | None = None
+        if retry_value is not None:
+            match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)s?\s*", str(retry_value))
+            if match:
+                retry_after = float(match.group(1))
+
+        parts = [f"HTTP {status or 'unknown'}"]
+        if reason:
+            parts.append(f"reason={safe_text(reason, 80)}")
+        if provider_message:
+            parts.append(f"message={safe_text(provider_message)}")
+        if quota_metric:
+            parts.append(f"quota={safe_text(quota_metric, 160)}")
+        if quota_id:
+            parts.append(f"quota_id={safe_text(quota_id, 160)}")
+        if retry_after is not None:
+            parts.append(f"retry_after={retry_after:g}s")
+        return "; ".join(parts), retry_after
 
 
 class GeminiTranslationService:
@@ -181,6 +240,7 @@ class GeminiTranslationService:
         limiter = AdaptiveLimiter(config.concurrency)
         batches = batch_cues(cues, config.batch_size)
         retries = 0
+        completed = 0
 
         async def execute(batch: dict, repair: bool = False) -> None:
             nonlocal retries
@@ -206,12 +266,23 @@ class GeminiTranslationService:
                     return
                 except PipelineError as exc:
                     last = exc
+                    concurrency_before = limiter.limit
                     if "429" in exc.error_code:
                         await limiter.on_rate_limit()
                     if not exc.retryable or attempt >= self.retry_policy.max_attempts:
                         break
                     retries += 1
                     delay = self.retry_policy.delay(attempt, getattr(exc, "retry_after", None))
+                    if progress:
+                        detail = exc.log_detail or f"code={exc.error_code}"
+                        progress(ProgressEvent(
+                            3,
+                            completed / max(1, len(batches)),
+                            f"Gemini retry {attempt + 1}/{self.retry_policy.max_attempts}: "
+                            f"{detail}; concurrency={concurrency_before}→{limiter.limit}; "
+                            f"thử lại sau {delay:.1f}s",
+                            state="retrying",
+                        ))
                     if cancel:
                         if cancel.wait(delay):
                             cancel.raise_if_cancelled()
@@ -222,8 +293,6 @@ class GeminiTranslationService:
                 return
             if last:
                 raise last
-
-        completed = 0
 
         async def tracked(batch: dict) -> None:
             nonlocal completed

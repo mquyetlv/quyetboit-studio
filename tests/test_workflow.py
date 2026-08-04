@@ -1,4 +1,4 @@
-from quyetboit_studio.core import ProgressEvent, StepResult
+from quyetboit_studio.core import PipelineError, ProgressEvent, StepResult
 from quyetboit_studio.models import ProjectModel, StepStatus
 from quyetboit_studio.workflow import WorkflowController
 
@@ -85,3 +85,25 @@ def test_real_run_all_calls_only_steps_1_to_6(qtbot):
 
     assert service.steps == list(range(6))
     assert project.step_statuses[6:] == [StepStatus.READY.value, StepStatus.PENDING.value]
+
+
+def test_retry_progress_and_final_api_detail_use_visible_log_levels(qtbot):
+    controller = WorkflowController(ProjectModel())
+    logs = []
+    controller.log_emitted.connect(lambda level, message: logs.append((level, message)))
+
+    controller._worker_progress(3, 20, "Gemini retry 2/4: HTTP 429", "retrying")
+    error = PipelineError(
+        "gemini_http_429",
+        "Gemini đang giới hạn tốc độ.",
+        provider="gemini",
+        retryable=True,
+        log_detail="HTTP 429; reason=RESOURCE_EXHAUSTED",
+    )
+    controller._worker_failed(3, error)
+
+    assert logs[0] == ("WARNING", "Gemini retry 2/4: HTTP 429")
+    assert logs[1] == (
+        "ERROR",
+        "Gemini đang giới hạn tốc độ. Chi tiết API: HTTP 429; reason=RESOURCE_EXHAUSTED",
+    )

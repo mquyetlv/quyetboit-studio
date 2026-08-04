@@ -16,6 +16,12 @@ def test_last_used_settings_roundtrip_excludes_project_and_credentials(tmp_path)
     project.studio_settings["layers"].append(
         new_studio_layer("intro_text", text="Text dùng lại", margin=32, width_percent=88)
     )
+    project.studio_settings["layers"].append(
+        new_studio_layer(
+            "scroll_text", text="Watermark", font_size=52, opacity=45,
+            speed=1.6, bold=False,
+        )
+    )
     project.__dict__["_gemini_api_key"] = "secret-api-key"
     project.__dict__["_douyin_cookies_file"] = "C:/private/cookies.txt"
 
@@ -34,7 +40,15 @@ def test_last_used_settings_roundtrip_excludes_project_and_credentials(tmp_path)
     assert restored.project_uuid != project.project_uuid
     assert restored.translation_batch_size == 80
     assert restored.mix_settings["original_volume"] == 12
-    assert restored.studio_settings["layers"][-1]["text"] == "Text dùng lại"
+    fixed_text = restored.studio_settings["layers"][-2]
+    moving_text = restored.studio_settings["layers"][-1]
+    assert fixed_text["text"] == "Text dùng lại"
+    assert "width_percent" not in fixed_text
+    assert moving_text["text"] == "Watermark"
+    assert moving_text["font_size"] == 52
+    assert moving_text["opacity"] == 45
+    assert moving_text["speed"] == 1.6
+    assert moving_text["bold"] is False
 
 
 def test_invalid_last_used_settings_fall_back_to_defaults(tmp_path):

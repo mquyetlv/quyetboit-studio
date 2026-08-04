@@ -26,7 +26,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - Đang làm/đã có một phần: **39 task (21,4%)**.
 - Chưa triển khai: **9 task (4,9%)**.
 - Chờ credential/live test hoặc nghiệm thu: **3 task (1,6%)**.
-- Unit/lint hiện tại: **52 test pass**, Ruff pass.
+- Unit/lint hiện tại: **59 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Theo UX mới, nút chạy tự động chỉ xử lý bước 1–6; bước 7–8 luôn chạy thủ công để căn chỉnh và nghiệm thu output.
 
 ### Cấu trúc module tái sử dụng
@@ -185,9 +185,9 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Tốc độ dùng `setpts` cho video và chuỗi `atempo` cho audio.
 - [x] Pitch ưu tiên `rubberband`; fallback `asetrate + aresample + atempo` để giữ duration.
 - [x] Zoom dùng scale/crop có clamp; lật dùng `hflip`/`vflip`; màu dùng `eq`/`hue`.
-- [x] Logo/overlay kiểm tra file tồn tại, chuẩn hóa đường dẫn, scale theo width %/height px, margin và overlay theo vị trí; mặc định hiển thị xuyên suốt video, có thể opt-out sang start/duration.
-- [x] Text cố định phía trên và chữ chạy dùng `drawbox` + `drawtext`, hỗ trợ màu nền/chữ, margin, width %/height px và escape font/path/text an toàn; mặc định hiển thị xuyên suốt video.
-- [-] Subtitle được burn bằng `subtitles`/ASS xuyên suốt video, hỗ trợ màu nền/chữ, margin, width % và height px; đã tự chọn Arial/DejaVu và integration render tiếng Việt, chưa đóng gói font redistributable cùng app.
+- [x] Logo kiểm tra file tồn tại, chuẩn hóa đường dẫn, scale theo chiều cao và giữ đúng tỷ lệ ảnh; hỗ trợ bốn góc, opacity cùng margin X/Y theo góc và hiển thị xuyên suốt video.
+- [x] Text cố định dùng thanh nền toàn chiều rộng tại Top/Bottom, cao đúng 1,5 lần cỡ chữ và căn giữa hai trục. Chữ chạy dùng `drawtext` xuyên suốt video, nảy chéo trong khung với vận tốc X/Y khác nhau, hỗ trợ opacity/speed/bold và bóng nhẹ; layer tắt hoặc text rỗng không được render.
+- [-] Subtitle được burn bằng `subtitles`/ASS xuyên suốt video, hỗ trợ bật/tắt, Top/Bottom, margin theo cạnh, màu nền/chữ, opacity nền; thanh nền cao đúng 1,5 lần cỡ chữ và text căn giữa hai trục. Đã tự chọn Arial/DejaVu và integration render tiếng Việt, chưa đóng gói font redistributable cùng app.
 - [x] Áp subtitle trước biến đổi tốc độ để timestamp thay đổi đồng bộ với video/voice.
 - [x] Xuất filter graph ra file script tạm thay vì truyền command line quá dài.
 - [x] Parse `ffmpeg -progress pipe:1` để cập nhật progress/time/ETA và hỗ trợ cancel. Đã sửa deadlock stderr và cancel watcher.
@@ -210,12 +210,12 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [-] Thay timer mô phỏng bằng state machine thật: `preparing`, `running`, `waiting_remote`, `retrying`, `paused`, `completed`, `failed`, `cancelled`. Worker/state thật đã thay timer trong production; chưa phát event đầy đủ cho mọi state trung gian.
 - [x] Progress tổng dùng trọng số động theo duration/bytes thực tế; không chia đều tám bước.
 - [x] Pause chỉ áp dụng tại boundary an toàn; upload/FFmpeg/Gemini đang chạy được cancel, sau đó resume từ checkpoint.
-- [x] Mọi lỗi có `error_code`, provider, retryable, user_message và debug detail đã redact.
+- [x] Mọi lỗi có `error_code`, provider, retryable, user_message và debug detail đã redact. Gemini ghi thêm HTTP status, reason, provider message, quota metric/ID, `Retry-After`, attempt và thay đổi concurrency vào log an toàn.
 - [x] Không retry lỗi xác thực, captcha, invalid input, unsupported model hoặc schema project.
 - [x] Retry network dùng exponential backoff có jitter và cancellation-aware wait.
 - [-] Giới hạn đồng thời riêng cho download, FFmpeg, CapCut ASR, Gemini và CapCut TTS để tránh một provider làm nghẽn toàn pipeline. Gemini có limiter; các provider còn lại chủ yếu tuần tự.
 - [ ] Có thể pipeline overlap an toàn: ASR chunk hoàn tất được merge/checkpoint sớm; Gemini bắt đầu khi toàn bộ source SRT ổn định; TTS có thể bắt đầu theo batch dịch đã validate.
-- [-] Không cho thay provider/model/voice/config ảnh hưởng artifact khi bước liên quan đang chạy. UI chính bị khóa theo active step nhưng chưa khóa toàn bộ dialog cấu hình.
+- [-] Không cho thay provider/model/voice/config ảnh hưởng artifact khi bước liên quan đang chạy. UI chính và Layer Studio đã có edit guard theo active step; chưa khóa toàn bộ dialog cấu hình khác.
 - [ ] Structured log có project ID, run ID, step, chunk/batch/cue ID, elapsed, retry count và cache status.
 - [-] Thu thập benchmark cho video 1, 10 và 30 phút; báo thời gian từng bước thay vì cam kết tổng thời gian vì CapCut/Gemini phụ thuộc mạng/quota. Đã đo video 7,2 phút và thời gian render; chưa đủ bộ benchmark.
 - [x] Ghi rõ CapCut là private reverse-engineered API, có thể đổi endpoint/schema/chữ ký và cần contract test thường xuyên.
@@ -232,9 +232,9 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [-] Caption completed, completed-empty, running, lỗi và timeout. Parser trạng thái đã có; test matrix chưa đầy đủ.
 - [x] SRT parse/serialize UTF-8, timestamp validation và merge chunk.
 - [-] Gemini batch size, structured schema, missing ID, Han detection và retry-only-missing. Các luồng chính đã test; error matrix chưa đầy đủ.
-- [-] Adaptive limiter giảm khi `429`, tôn trọng `Retry-After` và phục hồi concurrency. Giảm/phục hồi đã test; Retry-After chưa có test chuyên biệt.
+- [-] Adaptive limiter giảm khi `429`, tôn trọng `Retry-After` và phục hồi concurrency. Giảm/phục hồi cùng parse/redact/log `Retry-After` đã test; chờ thực tế với `Retry-After` khác 0 chưa có test chuyên biệt.
 - [-] TTS cache key, duration matching, atempo chain và silence padding. Atempo có test; các nhánh còn lại chủ yếu được kiểm chứng qua pipeline.
-- [x] Filter graph cho tùy chọn Studio, pitch, asset/text timeline và escaping path/text; có unit test và integration render FFmpeg.
+- [x] Filter graph cho tùy chọn Studio, subtitle/text bar, logo giữ tỷ lệ, chữ nảy hai trục và escaping path/text; có unit test, test persistence/UI và integration render FFmpeg.
 - [x] Artifact/config hash, cache hit, invalidation và schema v1→v2 migration.
 - [x] Redaction bảo đảm không log/lưu Gemini key, password, cookie, STS hoặc authorization.
 

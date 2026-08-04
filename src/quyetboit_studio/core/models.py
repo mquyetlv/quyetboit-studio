@@ -119,6 +119,7 @@ class PipelineError(RuntimeError):
         provider: str = "pipeline",
         retryable: bool = False,
         debug_detail: str = "",
+        log_detail: str = "",
     ) -> None:
         super().__init__(user_message)
         self.error_code = error_code
@@ -126,6 +127,8 @@ class PipelineError(RuntimeError):
         self.retryable = retryable
         self.user_message = user_message
         self.debug_detail = debug_detail
+        # Provider-safe diagnostic intended for the user-visible log.
+        self.log_detail = log_detail
 
 
 class CancelledError(PipelineError):

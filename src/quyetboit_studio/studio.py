@@ -35,8 +35,7 @@ from .widgets import Card
 
 ASSET_KINDS = {
     "Logo thương hiệu": "logo",
-    "Overlay ánh sáng": "overlay",
-    "Text cố định phía trên": "intro_text",
+    "Text cố định": "intro_text",
     "Chữ chạy quanh video": "scroll_text",
 }
 
@@ -103,7 +102,7 @@ class StudioDialog(QDialog):
         *, video_path: str | Path | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Quyết Bồ Video Studio")
+        self.setWindowTitle("Quyết Bồ Layer Studio")
         self.resize(1380, 860)
         self.setMinimumSize(1080, 700)
         self.original = normalize_studio_settings(settings)
@@ -117,7 +116,7 @@ class StudioDialog(QDialog):
     def _build_ui(self, video_path: str | Path | None) -> None:
         root = QVBoxLayout(self)
         toolbar = QHBoxLayout()
-        title = QLabel("Video Studio")
+        title = QLabel("Layer Studio")
         title.setObjectName("Title")
         toolbar.addWidget(title)
         toolbar.addStretch()
@@ -170,33 +169,46 @@ class StudioDialog(QDialog):
         self.selected_label.setObjectName("Title")
         props.layout.addWidget(self.selected_label)
         layer_form = QFormLayout()
+        self._layer_rows: dict[str, tuple[QWidget, QWidget]] = {}
         self.asset_path = QLineEdit(); self.asset_path.setReadOnly(True)
         self.browse_button = QPushButton("Chọn ảnh…"); self.browse_button.clicked.connect(self.choose_asset)
-        path_row = QHBoxLayout(); path_row.addWidget(self.asset_path, 1); path_row.addWidget(self.browse_button)
+        path_widget = QWidget(); path_row = QHBoxLayout(path_widget); path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.addWidget(self.asset_path, 1); path_row.addWidget(self.browse_button)
+        self.layer_enabled = QCheckBox("Hiển thị layer")
         self.text = QLineEdit()
-        self.position = QComboBox(); self.position.addItems([
-            "center", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right",
-        ])
-        self.full_duration = QCheckBox("Hiển thị xuyên suốt video")
-        self.layer_start = QDoubleSpinBox(); self.layer_start.setRange(0, 36000); self.layer_start.setSuffix(" giây")
-        self.layer_duration = QDoubleSpinBox(); self.layer_duration.setRange(.1, 36000); self.layer_duration.setSuffix(" giây")
+        self.position = QComboBox()
         self.margin = QSpinBox(); self.margin.setRange(0, 1000); self.margin.setSuffix(" px")
-        self.width_percent = QSpinBox(); self.width_percent.setRange(5, 100); self.width_percent.setSuffix("%")
-        self.layer_height = QSpinBox(); self.layer_height.setRange(0, 2160); self.layer_height.setSuffix(" px")
+        self.margin_x = QSpinBox(); self.margin_x.setRange(0, 1000); self.margin_x.setSuffix(" px")
+        self.margin_y = QSpinBox(); self.margin_y.setRange(0, 1000); self.margin_y.setSuffix(" px")
+        self.layer_height = QSpinBox(); self.layer_height.setRange(1, 2160); self.layer_height.setSuffix(" px")
         self.opacity = QSpinBox(); self.opacity.setRange(0, 100); self.opacity.setSuffix("%")
         self.font_size = QSpinBox(); self.font_size.setRange(12, 200); self.font_size.setSuffix(" px")
         self.font_color = QLineEdit()
         self.background_color = QLineEdit()
         self.background_opacity = QSpinBox(); self.background_opacity.setRange(0, 100); self.background_opacity.setSuffix("%")
-        layer_form.addRow("File ảnh", path_row); layer_form.addRow("Nội dung", self.text)
-        layer_form.addRow("Vị trí", self.position); layer_form.addRow(self.full_duration)
-        layer_form.addRow("Bắt đầu", self.layer_start); layer_form.addRow("Thời lượng", self.layer_duration)
-        layer_form.addRow("Margin so với lề", self.margin)
-        layer_form.addRow("Width theo video", self.width_percent)
-        layer_form.addRow("Height", self.layer_height)
-        layer_form.addRow("Độ trong ảnh", self.opacity); layer_form.addRow("Cỡ chữ", self.font_size)
-        layer_form.addRow("Màu chữ", self.font_color); layer_form.addRow("Màu nền", self.background_color)
-        layer_form.addRow("Độ trong nền", self.background_opacity)
+        self.scroll_speed = QDoubleSpinBox(); self.scroll_speed.setRange(.1, 10); self.scroll_speed.setSingleStep(.1); self.scroll_speed.setSuffix("×")
+        self.bold = QCheckBox("Chữ đậm")
+
+        def add_layer_row(key: str, label_text: str, widget: QWidget) -> None:
+            label = QLabel(label_text)
+            layer_form.addRow(label, widget)
+            self._layer_rows[key] = (label, widget)
+
+        add_layer_row("enabled", "Hiển thị", self.layer_enabled)
+        add_layer_row("path", "Ảnh logo", path_widget)
+        add_layer_row("text", "Nội dung", self.text)
+        add_layer_row("position", "Vị trí", self.position)
+        add_layer_row("margin", "Cách cạnh Top/Bottom", self.margin)
+        add_layer_row("margin_x", "Margin trục X", self.margin_x)
+        add_layer_row("margin_y", "Margin trục Y", self.margin_y)
+        add_layer_row("height", "Chiều cao logo", self.layer_height)
+        add_layer_row("opacity", "Opacity", self.opacity)
+        add_layer_row("font_size", "Cỡ chữ", self.font_size)
+        add_layer_row("font_color", "Màu chữ", self.font_color)
+        add_layer_row("background_color", "Màu nền", self.background_color)
+        add_layer_row("background_opacity", "Opacity nền", self.background_opacity)
+        add_layer_row("speed", "Tốc độ", self.scroll_speed)
+        add_layer_row("bold", "Kiểu chữ", self.bold)
         props.layout.addLayout(layer_form)
         props.layout.addStretch()
         split.addWidget(props)
@@ -209,15 +221,12 @@ class StudioDialog(QDialog):
         self.color.valueChanged.connect(lambda value: self._change_global("color", value))
         self.flip_h.toggled.connect(lambda value: self._change_global("flip_horizontal", value))
         self.flip_v.toggled.connect(lambda value: self._change_global("flip_vertical", value))
+        self.layer_enabled.toggled.connect(self._layer_enabled_changed)
         self.text.editingFinished.connect(lambda: self._change_layer("text", self.text.text()))
         self.position.currentTextChanged.connect(lambda value: self._change_layer("position", value))
-        self.full_duration.toggled.connect(self._full_duration_changed)
-        self.layer_start.valueChanged.connect(lambda value: self._change_layer("start", value))
-        self.layer_duration.valueChanged.connect(lambda value: self._change_layer("duration", value))
         self.margin.valueChanged.connect(lambda value: self._change_layer("margin", value))
-        self.width_percent.valueChanged.connect(
-            lambda value: self._change_layer("width_percent", value)
-        )
+        self.margin_x.valueChanged.connect(lambda value: self._change_layer("margin_x", value))
+        self.margin_y.valueChanged.connect(lambda value: self._change_layer("margin_y", value))
         self.layer_height.valueChanged.connect(lambda value: self._change_layer("height", value))
         self.opacity.valueChanged.connect(lambda value: self._change_layer("opacity", value))
         self.font_size.valueChanged.connect(lambda value: self._change_layer("font_size", value))
@@ -230,6 +239,8 @@ class StudioDialog(QDialog):
         self.background_opacity.valueChanged.connect(
             lambda value: self._change_layer("background_opacity", value)
         )
+        self.scroll_speed.valueChanged.connect(lambda value: self._change_layer("speed", value))
+        self.bold.toggled.connect(lambda value: self._change_layer("bold", value))
 
         footer = QHBoxLayout()
         hint = QLabel("Preview phát video bước 6; bấm Áp dụng rồi chạy bước 7 để render hiệu ứng.")
@@ -275,10 +286,17 @@ class StudioDialog(QDialog):
             return
         self._remember(); layer[key] = value
 
-    def _full_duration_changed(self, value: bool) -> None:
-        self._change_layer("full_duration", value)
-        self.layer_start.setEnabled(not value)
-        self.layer_duration.setEnabled(not value)
+    def _layer_enabled_changed(self, value: bool) -> None:
+        layer = self._selected()
+        if self.loading or not layer or layer.get("kind") in {"video", "voice"}:
+            return
+        self._change_layer("enabled", value)
+        item = self.layers.currentItem()
+        if item:
+            self.loading = True
+            item.setCheckState(Qt.CheckState.Checked if value else Qt.CheckState.Unchecked)
+            self.loading = False
+        self._layer_selected(item)
 
     def current_settings(self) -> dict:
         self._sync_layer_order()
@@ -289,7 +307,7 @@ class StudioDialog(QDialog):
         if not kind:
             return
         values = {}
-        if kind in {"logo", "overlay"}:
+        if kind == "logo":
             path, _ = QFileDialog.getOpenFileName(
                 self, "Chọn ảnh", "", "Ảnh (*.png *.jpg *.jpeg *.webp *.bmp)"
             )
@@ -317,7 +335,7 @@ class StudioDialog(QDialog):
 
     def choose_asset(self) -> None:
         layer = self._selected()
-        if not layer or layer["kind"] not in {"logo", "overlay"}:
+        if not layer or layer["kind"] != "logo":
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "Chọn ảnh", str(layer.get("path", "")), "Ảnh (*.png *.jpg *.jpeg *.webp *.bmp)"
@@ -334,6 +352,8 @@ class StudioDialog(QDialog):
         enabled = item.checkState() == Qt.CheckState.Checked
         if layer and layer.get("enabled", True) != enabled:
             self._remember(); layer["enabled"] = enabled
+            if item is self.layers.currentItem():
+                self._layer_selected(item)
 
     def _layer_selected(self, current: QListWidgetItem | None) -> None:
         layer = self._selected() if current else None
@@ -341,38 +361,44 @@ class StudioDialog(QDialog):
         try:
             kind = str(layer.get("kind", "")) if layer else ""
             self.selected_label.setText(f"Layer: {layer.get('name', 'Chưa chọn') if layer else 'Chưa chọn'}")
-            is_image = kind in {"logo", "overlay"}
-            is_text = kind in {"intro_text", "scroll_text", "subtitle"}
-            has_text_input = kind in {"intro_text", "scroll_text"}
-            styled = is_image or is_text
-            full_duration = bool(layer.get("full_duration", True)) if layer else True
-            self.asset_path.setEnabled(is_image); self.browse_button.setEnabled(is_image)
-            self.text.setEnabled(has_text_input); self.position.setEnabled(styled)
-            self.full_duration.setEnabled(styled)
-            self.layer_start.setEnabled(styled and not full_duration)
-            self.layer_duration.setEnabled(styled and not full_duration)
-            self.margin.setEnabled(styled); self.width_percent.setEnabled(styled)
-            self.layer_height.setEnabled(styled); self.opacity.setEnabled(is_image)
-            self.font_size.setEnabled(is_text); self.font_color.setEnabled(is_text)
-            self.background_color.setEnabled(styled); self.background_opacity.setEnabled(styled)
+            visible_by_kind = {
+                "subtitle": {"enabled", "position", "margin", "font_size", "font_color", "background_color", "background_opacity"},
+                "logo": {"path", "position", "margin_x", "margin_y", "height", "opacity"},
+                "intro_text": {"enabled", "text", "position", "margin", "font_size", "font_color", "background_color", "background_opacity"},
+                "scroll_text": {"enabled", "text", "font_size", "font_color", "opacity", "speed", "bold"},
+            }
+            visible = visible_by_kind.get(kind, set())
+            enabled = bool(layer.get("enabled", True)) if layer else False
+            for key, (label, widget) in self._layer_rows.items():
+                show = key in visible
+                label.setVisible(show); widget.setVisible(show)
+                widget.setEnabled(show and (key == "enabled" or enabled))
+            self.asset_path.setEnabled(kind == "logo" and enabled)
+            self.browse_button.setEnabled(kind == "logo" and enabled)
+            positions = (
+                ["top-left", "top-right", "bottom-left", "bottom-right"]
+                if kind == "logo" else ["top", "bottom"]
+            )
+            self.position.clear(); self.position.addItems(positions)
+            self.layer_enabled.setChecked(enabled)
             self.asset_path.setText(str(layer.get("path", "")) if layer else "")
             self.text.setText(str(layer.get("text", "")) if layer else "")
-            self.position.setCurrentText(str(layer.get("position", "center")) if layer else "center")
-            self.full_duration.setChecked(full_duration)
-            self.layer_start.setValue(float(layer.get("start", 0)) if layer else 0)
-            self.layer_duration.setValue(float(layer.get("duration", 5)) if layer else 5)
+            self.position.setCurrentText(str(layer.get("position", positions[0])) if layer else positions[0])
             self.margin.setValue(int(layer.get("margin", 24)) if layer else 24)
-            self.width_percent.setValue(int(layer.get("width_percent", 90)) if layer else 90)
-            self.layer_height.setValue(int(layer.get("height", 64)) if layer else 64)
-            self.opacity.setValue(int(layer.get("opacity", 100)) if layer else 100)
+            self.margin_x.setValue(int(layer.get("margin_x", 24)) if layer else 24)
+            self.margin_y.setValue(int(layer.get("margin_y", 24)) if layer else 24)
+            self.layer_height.setValue(int(layer.get("height", 80)) if layer else 80)
+            self.opacity.setValue(int(layer.get("opacity", 60)) if layer else 60)
             self.font_size.setValue(int(layer.get("font_size", 48)) if layer else 48)
-            self.font_color.setText(str(layer.get("font_color", "white")) if layer else "white")
+            self.font_color.setText(str(layer.get("font_color", "#FFFFFF")) if layer else "#FFFFFF")
             self.background_color.setText(
                 str(layer.get("background_color", "#000000")) if layer else "#000000"
             )
             self.background_opacity.setValue(
                 int(layer.get("background_opacity", 60)) if layer else 60
             )
+            self.scroll_speed.setValue(float(layer.get("speed", 1.0)) if layer else 1.0)
+            self.bold.setChecked(bool(layer.get("bold", True)) if layer else True)
         finally:
             self.loading = False
 
@@ -383,8 +409,11 @@ class StudioDialog(QDialog):
         for layer in self.state["layers"]:
             item = QListWidgetItem(str(layer.get("name") or layer["kind"]))
             item.setData(Qt.ItemDataRole.UserRole, layer["id"])
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled)
-            item.setCheckState(Qt.CheckState.Checked if layer.get("enabled", True) else Qt.CheckState.Unchecked)
+            flags = item.flags() | Qt.ItemFlag.ItemIsDragEnabled
+            if layer.get("kind") not in {"video", "voice"}:
+                flags |= Qt.ItemFlag.ItemIsUserCheckable
+                item.setCheckState(Qt.CheckState.Checked if layer.get("enabled", True) else Qt.CheckState.Unchecked)
+            item.setFlags(flags)
             self.layers.addItem(item)
             if layer["id"] == selected_id:
                 selected_item = item
@@ -415,7 +444,7 @@ class StudioDialog(QDialog):
         settings = self.current_settings()
         missing = [
             layer.get("name", "ảnh") for layer in settings["layers"]
-            if layer.get("enabled", True) and layer.get("kind") in {"logo", "overlay"}
+            if layer.get("enabled", True) and layer.get("kind") == "logo"
             and not Path(str(layer.get("path", ""))).expanduser().is_file()
         ]
         if missing:

@@ -8,7 +8,7 @@ Pipeline chạy trong worker thread, hỗ trợ Stop, resume theo manifest/check
 và fallback encoder GPU sang `libx264`. Project dùng schema v2 và tự migrate file v1.
 
 Nút **Chạy bước 1–6** chỉ tự động tải video, tạo/dịch subtitle, tạo voice và ghép voice. Ứng dụng
-dừng tại bước 7 để người dùng mở Video Studio căn chỉnh; bước 7 và bước 8 được chạy thủ công bằng
+dừng tại bước 7 để người dùng mở Layer Studio căn chỉnh; bước 7 và bước 8 được chạy thủ công bằng
 nút **Chạy bước này**.
 
 ## Yêu cầu
@@ -59,6 +59,10 @@ ruff check src tests
 Test mặc định không gọi Douyin, Gemini hay CapCut thật. Suite kiểm tra migration, redaction,
 SRT/dedupe, cache/checksum, silence boundary, adaptive limiter, chữ ký CapCut và worker UI.
 
+Khi Gemini trả lỗi, nhật ký hiển thị chẩn đoán đã redact gồm HTTP status, reason/message của provider,
+quota metric/ID, `Retry-After`, lần retry và mức concurrency trước/sau; API key, prompt và nội dung
+subtitle không được ghi vào log.
+
 ## Cấu hình dùng gần nhất
 
 Ứng dụng lưu tự động cấu hình nghiệp vụ gần nhất của tám bước tại
@@ -67,7 +71,8 @@ nhất về audio, ASR, Gemini, TTS, mix, Studio và export được nạp lại
 trong project được giữ nguyên. File cấu hình dùng gần nhất không chứa URL/project data, password,
 cookie, Gemini API key, CapCut session, token upload hoặc credential ngắn hạn.
 
-Trong Video Studio, Text cố định phía trên, Logo, Chữ chạy và Subtitle mặc định áp dụng xuyên suốt
-video. Có thể tắt **Hiển thị xuyên suốt video** để dùng thời điểm bắt đầu/thời lượng riêng. Mỗi layer
-hỗ trợ margin theo pixel, width theo phần trăm video, height theo pixel, màu nền; layer text/subtitle
-có thêm màu và cỡ chữ.
+Trong Layer Studio, Video và Voice không có thuộc tính layer riêng. Subtitle và Text cố định hiển thị
+ở Top/Bottom trên thanh nền toàn chiều rộng, cao bằng 1,5 lần cỡ chữ và căn giữa; Logo giữ tỷ lệ ảnh,
+đặt tại một trong bốn góc bằng margin X/Y và kích thước chiều cao. Chữ chạy hiển thị xuyên suốt video,
+di chuyển chéo và nảy tại bốn cạnh; hỗ trợ màu, opacity, tốc độ và chữ đậm. Cấu hình layer được lưu
+trong project và cấu hình dùng gần nhất; layer đang tắt giữ nguyên các giá trị đã nhập.

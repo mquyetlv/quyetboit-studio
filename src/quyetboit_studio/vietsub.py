@@ -584,10 +584,10 @@ class MixStep(BaseStep):
 class StudioStep(BaseStep):
     def __init__(self, project: ProjectModel) -> None:
         super().__init__(project, "7. Chỉnh sửa trong Studio", "Tinh chỉnh hình ảnh, logo, subtitle và text overlay trong một workspace riêng.")
-        card = Card("Quyết Bồ Video Studio", "Preview · Media assets · Properties · Layer")
+        card = Card("Quyết Bồ Layer Studio", "Preview · Media assets · Properties · Layer")
         features = QLabel("Tốc độ & Pitch  •  Zoom & Lật  •  Màu sắc  •  Logo  •  Text cố định phía trên\nPhụ đề  •  Chữ chạy  •  Undo/Redo  •  Kéo-thả layer")
         features.setWordWrap(True); card.layout.addWidget(features)
-        self.open_btn = button("Mở Video Studio", True); self.open_btn.clicked.connect(self.open_studio); card.layout.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self.open_btn = button("Mở Layer Studio", True); self.open_btn.clicked.connect(self.open_studio); card.layout.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignRight)
         self.summary = QLabel(); self.summary.setObjectName("Subtitle"); card.layout.addWidget(self.summary); self.content.addWidget(card); self._refresh()
         self._video_provider = None
         self._edit_guard = None
@@ -831,7 +831,7 @@ class VietSubPage(QWidget):
         self.select_step(6)
         QMessageBox.information(
             self, "Hoàn thành bước 1–6",
-            "Video đã được ghép voice. Hãy mở Video Studio để căn chỉnh bước 7, "
+            "Video đã được ghép voice. Hãy mở Layer Studio để căn chỉnh bước 7, "
             "sau đó chạy bước 7 và bước 8 thủ công.",
         )
 

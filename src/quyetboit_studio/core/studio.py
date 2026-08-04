@@ -15,7 +15,6 @@ LAYER_NAMES = {
     "Voice": "voice",
     "Subtitle": "subtitle",
     "Logo thương hiệu": "logo",
-    "Overlay ánh sáng": "overlay",
     "Text đầu video": "intro_text",
     "Text cố định phía trên": "intro_text",
     "Chữ chạy quanh video": "scroll_text",
@@ -23,55 +22,119 @@ LAYER_NAMES = {
 
 
 def new_studio_layer(kind: str, *, name: str = "", **values: Any) -> dict[str, Any]:
+    """Create the small, public configuration surface supported by each layer kind."""
     defaults: dict[str, Any] = {
         "id": f"{kind}-{uuid4().hex[:10]}",
         "kind": kind,
         "name": name or kind.replace("_", " ").title(),
         "enabled": True,
-        "start": 0.0,
-        "duration": 5.0,
     }
-    if kind in {"logo", "overlay", "intro_text", "scroll_text", "subtitle"}:
+    if kind == "subtitle":
         defaults.update({
-            "full_duration": True,
+            "position": "bottom",
             "margin": 24,
-            "width_percent": 90,
-            "height": 64,
             "background_color": "#000000",
+            "font_color": "#FFFFFF",
+            "font_size": 42,
             "background_opacity": 60,
-            "font_color": "white",
         })
-    if kind in {"logo", "overlay"}:
+    elif kind == "logo":
         defaults.update({
             "path": "",
-            "position": "top-right" if kind == "logo" else "center",
-            "scale": 20 if kind == "logo" else 100,
-            "opacity": 100 if kind == "logo" else 50,
-            "width_percent": 20 if kind == "logo" else 100,
-            "height": 80 if kind == "logo" else 0,
-            "background_color": "transparent",
-            "background_opacity": 0,
+            "position": "top-right",
+            "opacity": 100,
+            "margin_x": 24,
+            "margin_y": 24,
+            "height": 80,
         })
-    elif kind in {"intro_text", "scroll_text"}:
+    elif kind == "intro_text":
         defaults.update({
             "text": "",
-            "position": "top" if kind == "intro_text" else "bottom",
+            "position": "top",
+            "margin": 24,
+            "background_color": "#000000",
+            "font_color": "#FFFFFF",
             "font_size": 48,
-            "height": 72 if kind == "intro_text" else 56,
+            "background_opacity": 60,
         })
-    elif kind == "subtitle":
-        defaults.update({"position": "bottom", "font_size": 42})
+    elif kind == "scroll_text":
+        defaults.update({
+            "text": "",
+            "font_size": 48,
+            "font_color": "#FFFFFF",
+            "opacity": 60,
+            "speed": 1.0,
+            "bold": True,
+        })
     defaults.update(values)
     return defaults
+
+
+def _clamp_int(value: Any, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        return max(minimum, min(maximum, int(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _clamp_float(value: Any, minimum: float, maximum: float, fallback: float) -> float:
+    try:
+        return max(minimum, min(maximum, float(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _normalize_layer(item: dict[str, Any]) -> dict[str, Any]:
+    kind = str(item["kind"])
+    layer = new_studio_layer(
+        kind,
+        id=str(item.get("id") or f"{kind}-{uuid4().hex[:10]}"),
+        name=str(item.get("name") or ""),
+    )
+    if kind in {"video", "voice"}:
+        # Video and voice are structural layers, not configurable effects.
+        layer["enabled"] = True
+        return layer
+
+    layer["enabled"] = bool(item.get("enabled", True))
+    if kind in {"subtitle", "intro_text"}:
+        position = str(item.get("position", layer["position"]))
+        layer["position"] = position if position in {"top", "bottom"} else layer["position"]
+        layer["margin"] = _clamp_int(item.get("margin", 24), 0, 1000, 24)
+        layer["font_size"] = _clamp_int(item.get("font_size", layer["font_size"]), 12, 200, layer["font_size"])
+        layer["font_color"] = str(item.get("font_color", layer["font_color"]))
+        layer["background_color"] = str(item.get("background_color", "#000000"))
+        layer["background_opacity"] = _clamp_int(item.get("background_opacity", 60), 0, 100, 60)
+        if kind == "intro_text":
+            layer["text"] = str(item.get("text", ""))
+    elif kind == "logo":
+        position = str(item.get("position", "top-right"))
+        layer["position"] = position if position in {
+            "top-left", "top-right", "bottom-left", "bottom-right",
+        } else "top-right"
+        legacy_margin = item.get("margin", 24)
+        layer["path"] = str(item.get("path", ""))
+        layer["opacity"] = _clamp_int(item.get("opacity", 100), 0, 100, 100)
+        layer["margin_x"] = _clamp_int(item.get("margin_x", legacy_margin), 0, 1000, 24)
+        layer["margin_y"] = _clamp_int(item.get("margin_y", legacy_margin), 0, 1000, 24)
+        layer["height"] = _clamp_int(item.get("height", 80), 1, 2160, 80)
+    elif kind == "scroll_text":
+        layer["text"] = str(item.get("text", ""))
+        layer["font_size"] = _clamp_int(item.get("font_size", 48), 12, 200, 48)
+        layer["font_color"] = str(item.get("font_color", item.get("color", "#FFFFFF")))
+        layer["opacity"] = _clamp_int(item.get("opacity", 60), 0, 100, 60)
+        layer["speed"] = _clamp_float(item.get("speed", 1.0), 0.1, 10.0, 1.0)
+        layer["bold"] = bool(item.get("bold", True))
+    return layer
 
 
 def normalize_studio_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     source = deepcopy(settings or {})
     normalized = {
-        "speed": max(0.25, min(4.0, float(source.get("speed", 1.0)))),
-        "pitch": max(-12, min(12, int(source.get("pitch", 0)))),
-        "zoom": max(100, min(200, int(source.get("zoom", 100)))),
-        "color": max(0, min(200, int(source.get("color", 100)))),
+        "speed": _clamp_float(source.get("speed", 1.0), 0.25, 4.0, 1.0),
+        "pitch": _clamp_int(source.get("pitch", 0), -12, 12, 0),
+        "zoom": _clamp_int(source.get("zoom", 100), 100, 200, 100),
+        "color": _clamp_int(source.get("color", 100), 0, 200, 100),
         "flip_horizontal": bool(source.get("flip_horizontal", False)),
         "flip_vertical": bool(source.get("flip_vertical", False)),
     }
@@ -81,42 +144,20 @@ def normalize_studio_settings(settings: dict[str, Any] | None) -> dict[str, Any]
             kind = LAYER_NAMES.get(item, "")
             if not kind:
                 continue
-            base = next((layer for layer in BASE_LAYERS if layer["kind"] == kind), None)
-            layers.append(new_studio_layer(
-                kind,
-                id=str(base["id"]) if base else f"{kind}-{uuid4().hex[:10]}",
-                name=str(base["name"]) if base else item,
-                start=float(source.get("layer_start", 0)),
-                duration=float(source.get("layer_duration", 5)),
-            ))
-            continue
-        if not isinstance(item, dict) or not item.get("kind"):
-            continue
-        layer = new_studio_layer(str(item["kind"]), name=str(item.get("name") or ""))
-        layer.update(item)
-        layer["enabled"] = bool(layer.get("enabled", True))
-        layer["start"] = max(0.0, float(layer.get("start", 0)))
-        layer["duration"] = max(0.1, float(layer.get("duration", 5)))
-        layer["full_duration"] = bool(layer.get("full_duration", True))
-        layer["scale"] = max(5, min(200, int(layer.get("scale", 100))))
-        layer["opacity"] = max(0, min(100, int(layer.get("opacity", 100))))
-        layer["font_size"] = max(12, min(200, int(layer.get("font_size", 48))))
-        if "width_percent" not in item and "scale" in item:
-            layer["width_percent"] = item["scale"]
-        layer["width_percent"] = max(5, min(100, int(layer.get("width_percent", 90))))
-        layer["height"] = max(0, min(2160, int(layer.get("height", 64))))
-        layer["margin"] = max(0, min(1000, int(layer.get("margin", 24))))
-        layer["background_opacity"] = max(
-            0, min(100, int(layer.get("background_opacity", 60)))
-        )
-        layer["background_color"] = str(layer.get("background_color", "#000000"))
-        layer["font_color"] = str(layer.get("font_color", "white"))
-        layers.append(layer)
+            base = next((entry for entry in BASE_LAYERS if entry["kind"] == kind), None)
+            item = {
+                "kind": kind,
+                "id": str(base["id"]) if base else f"{kind}-{uuid4().hex[:10]}",
+                "name": str(base["name"]) if base else item,
+            }
+        if (
+            isinstance(item, dict)
+            and item.get("kind") in {"video", "voice", "subtitle", "logo", "intro_text", "scroll_text"}
+        ):
+            layers.append(_normalize_layer(item))
     for base in reversed(BASE_LAYERS):
         if not any(layer.get("kind") == base["kind"] for layer in layers):
-            layers.insert(0, new_studio_layer(
-                str(base["kind"]), id=str(base["id"]), name=str(base["name"])
-            ))
+            layers.insert(0, _normalize_layer(dict(base)))
     normalized["layers"] = layers
     return normalized
 

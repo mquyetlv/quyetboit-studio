@@ -23,10 +23,34 @@ def test_legacy_studio_layers_are_normalized():
     assert [layer["kind"] for layer in settings["layers"]] == [
         "video", "voice", "subtitle", "intro_text",
     ]
-    assert settings["layers"][-1]["start"] == 2
-    assert settings["layers"][-1]["duration"] == 4
-    assert settings["layers"][-1]["full_duration"] is True
-    assert settings["layers"][2]["width_percent"] == 90
+    assert settings["layers"][-1]["position"] == "top"
+    assert "start" not in settings["layers"][-1]
+    assert "duration" not in settings["layers"][-1]
+    assert "width_percent" not in settings["layers"][2]
+
+
+def test_each_layer_only_keeps_its_supported_properties():
+    settings = normalize_studio_settings({
+        "layers": [
+            {"kind": "video", "enabled": False, "height": 999},
+            {"kind": "voice", "enabled": False, "opacity": 0},
+            new_studio_layer("subtitle", height=400, width_percent=25, start=3),
+            {
+                "kind": "logo", "path": "logo.png", "width_percent": 30,
+                "background_color": "#123456", "margin": 31,
+            },
+            new_studio_layer("scroll_text", position="bottom", background_color="#000000"),
+        ],
+    })
+
+    video, voice, subtitle, logo, moving = settings["layers"]
+    assert video["enabled"] is True and set(video) == {"id", "kind", "name", "enabled"}
+    assert voice["enabled"] is True and set(voice) == {"id", "kind", "name", "enabled"}
+    assert "height" not in subtitle and "width_percent" not in subtitle and "start" not in subtitle
+    assert logo["margin_x"] == 31 and logo["margin_y"] == 31
+    assert "width_percent" not in logo and "background_color" not in logo
+    assert moving["speed"] == 1.0 and moving["bold"] is True
+    assert "position" not in moving and "background_color" not in moving
 
 
 def test_filter_graph_covers_pitch_text_overlay_and_escaping(tmp_path):
@@ -39,12 +63,11 @@ def test_filter_graph_covers_pitch_text_overlay_and_escaping(tmp_path):
         "layers": [
             "Video", "Voice", "Subtitle",
             new_studio_layer(
-                "logo", path=str(logo), start=1, duration=3, full_duration=False,
-                margin=30, width_percent=25, height=70,
+                "logo", path=str(logo), margin_x=30, margin_y=18, height=70,
             ),
             new_studio_layer(
-                "intro_text", text="Xin chào: 100%", margin=20, width_percent=80,
-                height=72, background_color="#112233",
+                "intro_text", text="Xin chào: 100%", margin=20,
+                font_size=48, background_color="#112233",
             ),
         ],
     })
@@ -60,26 +83,26 @@ def test_filter_graph_covers_pitch_text_overlay_and_escaping(tmp_path):
     assert "force_style=" in graph.script
     assert "Xin chào\\: 100\\%" in graph.script
     assert "overlay=" in graph.script
-    assert "between(t,1,4)" in graph.script
+    assert "drawbox=x=0:y=20:w=iw:h=72" in graph.script
+    assert "scale=-1:70" in graph.script
+    assert "overlay=x=W-w-30:y=18" in graph.script
+    assert "enable=" not in graph.script
     assert "rubberband=pitch=" in graph.script
     assert "atempo=1.1" in graph.script
     assert graph.video_output and graph.audio_output == "aout"
 
 
 def test_studio_dialog_edits_real_layer_properties(qtbot):
-    layer = new_studio_layer("intro_text", text="Cũ", start=1, duration=2)
+    layer = new_studio_layer("intro_text", text="Cũ")
     dialog = StudioDialog({"layers": ["Video", "Voice", "Subtitle", layer]})
     qtbot.addWidget(dialog)
     dialog.layers.setCurrentRow(3)
 
     dialog.text.setText("Nội dung mới")
     dialog.text.editingFinished.emit()
-    dialog.full_duration.setChecked(False)
-    dialog.layer_start.setValue(3.5)
-    dialog.layer_duration.setValue(6)
     dialog.margin.setValue(36)
-    dialog.width_percent.setValue(84)
-    dialog.layer_height.setValue(70)
+    dialog.font_size.setValue(50)
+    dialog.position.setCurrentText("bottom")
     dialog.background_color.setText("#123456")
     dialog.background_color.editingFinished.emit()
     settings = dialog.current_settings()
@@ -87,13 +110,52 @@ def test_studio_dialog_edits_real_layer_properties(qtbot):
     edited = settings["layers"][3]
     assert edited["kind"] == "intro_text"
     assert edited["text"] == "Nội dung mới"
-    assert edited["start"] == 3.5
-    assert edited["duration"] == 6
-    assert edited["full_duration"] is False
     assert edited["margin"] == 36
-    assert edited["width_percent"] == 84
-    assert edited["height"] == 70
+    assert edited["font_size"] == 50
+    assert edited["position"] == "bottom"
     assert edited["background_color"] == "#123456"
+
+
+def test_scroll_text_controls_disable_without_losing_values(qtbot):
+    moving = new_studio_layer("scroll_text", text="Watermark", speed=1.7, bold=False)
+    dialog = StudioDialog({"layers": ["Video", "Voice", "Subtitle", moving]})
+    qtbot.addWidget(dialog)
+    dialog.layers.setCurrentRow(3)
+
+    assert dialog.scroll_speed.value() == 1.7
+    dialog.layer_enabled.setChecked(False)
+    assert not dialog.text.isEnabled()
+    assert not dialog.scroll_speed.isEnabled()
+    dialog.layer_enabled.setChecked(True)
+    assert dialog.text.isEnabled()
+    assert dialog.scroll_speed.isEnabled()
+    assert dialog.current_settings()["layers"][3]["speed"] == 1.7
+
+
+def test_layer_form_only_shows_properties_allowed_for_selected_kind(qtbot):
+    logo = new_studio_layer("logo", path="logo.png")
+    dialog = StudioDialog({"layers": ["Video", "Voice", "Subtitle", logo]})
+    qtbot.addWidget(dialog)
+
+    dialog.layers.setCurrentRow(0)
+    assert all(label.isHidden() for label, _ in dialog._layer_rows.values())
+
+    dialog.layers.setCurrentRow(2)
+    subtitle_fields = {
+        key for key, (label, _) in dialog._layer_rows.items() if not label.isHidden()
+    }
+    assert subtitle_fields == {
+        "enabled", "position", "margin", "font_size", "font_color",
+        "background_color", "background_opacity",
+    }
+
+    dialog.layers.setCurrentRow(3)
+    logo_fields = {
+        key for key, (label, _) in dialog._layer_rows.items() if not label.isHidden()
+    }
+    assert logo_fields == {
+        "path", "position", "margin_x", "margin_y", "height", "opacity",
+    }
 
 
 def test_studio_single_line_inputs_have_enough_height_for_values(qtbot):
@@ -104,10 +166,10 @@ def test_studio_single_line_inputs_have_enough_height_for_values(qtbot):
     qtbot.waitExposed(dialog)
 
     controls = (
-        dialog.asset_path, dialog.text, dialog.position, dialog.layer_start,
-        dialog.layer_duration, dialog.margin, dialog.width_percent,
-        dialog.layer_height, dialog.opacity, dialog.font_size,
-        dialog.font_color, dialog.background_color, dialog.background_opacity,
+        dialog.asset_path, dialog.text, dialog.position, dialog.margin,
+        dialog.margin_x, dialog.margin_y, dialog.layer_height, dialog.opacity,
+        dialog.font_size, dialog.font_color, dialog.background_color,
+        dialog.background_opacity, dialog.scroll_speed,
     )
     for control in controls:
         control.ensurePolished()
@@ -122,6 +184,37 @@ def test_renderer_skips_encode_only_when_every_effect_and_subtitle_are_disabled(
     assert VideoRenderer.requires_render(settings, subtitle="translated.vi.srt") is False
     settings["zoom"] = 105
     assert VideoRenderer.requires_render(settings) is True
+
+
+def test_subtitle_and_moving_text_follow_layer_rules(tmp_path):
+    subtitle = tmp_path / "translated.vi.srt"
+    settings = normalize_studio_settings({
+        "layers": [
+            "Video", "Voice",
+            new_studio_layer(
+                "subtitle", position="top", margin=12, font_size=40,
+                background_opacity=55,
+            ),
+            new_studio_layer(
+                "scroll_text", text="Watermark", font_size=48, opacity=60,
+                speed=1.25, bold=True,
+            ),
+            new_studio_layer("scroll_text", text="   "),
+        ],
+    })
+
+    graph = FilterGraphBuilder().build(
+        settings, subtitle=subtitle, frame_width=640, frame_height=360,
+    )
+
+    assert "drawbox=x=0:y=12:w=iw:h=60" in graph.script
+    assert "Alignment=8" in graph.script
+    assert "fontcolor=0xFFFFFF@0.6" in graph.script
+    assert "t*150" in graph.script
+    assert "t*103.75" in graph.script
+    assert "max(1\\,w-text_w)" in graph.script
+    assert "max(1\\,h-text_h)" in graph.script
+    assert graph.script.count("text='Watermark'") == 1
 
 
 @pytest.mark.skipif(

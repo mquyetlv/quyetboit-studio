@@ -123,7 +123,7 @@ class WorkflowController(QObject):
         self.step_progress_changed.emit(step, value)
         self.overall_progress_changed.emit(self._weighted_progress(step, value))
         if message:
-            self.log_emitted.emit("INFO", message)
+            self.log_emitted.emit("WARNING" if state == "retrying" else "INFO", message)
 
     @Slot(int, object)
     def _worker_succeeded(self, step: int, result: object) -> None:
@@ -161,7 +161,12 @@ class WorkflowController(QObject):
         else:
             self._set_status(step, StepStatus.FAILED)
             level = "ERROR"
-        message = error.user_message if isinstance(error, PipelineError) else str(error)
+        if isinstance(error, PipelineError):
+            message = error.user_message
+            if error.log_detail:
+                message = f"{message} Chi tiết API: {error.log_detail}"
+        else:
+            message = str(error)
         self.log_emitted.emit(level, message)
 
     @Slot()

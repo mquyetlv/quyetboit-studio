@@ -116,6 +116,7 @@ class ProjectModel:
     })
     metadata: dict = field(default_factory=dict)
     output: dict = field(default_factory=dict)
+    partial_failures: dict = field(default_factory=dict)
     step_statuses: list[str] = field(default_factory=lambda: [
         StepStatus.READY.value, *([StepStatus.PENDING.value] * 7)
     ])

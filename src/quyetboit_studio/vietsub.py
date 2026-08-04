@@ -477,10 +477,22 @@ class TranslateStep(BaseStep):
         self.custom = QPlainTextEdit(project.custom_context); self.custom.setPlaceholderText("Mô tả phong cách dịch mong muốn..."); self.custom.setMaximumHeight(80)
         form.addRow("Dịch bằng", self.provider); form.addRow("Giọng điệu", self.context); form.addRow("Context riêng", self.custom); config.layout.addLayout(form)
         advanced = button("Cấu hình translator"); advanced.clicked.connect(self.configure); config.layout.addWidget(advanced, 0, Qt.AlignmentFlag.AlignRight)
+        self.retry_status = QLabel(); self.retry_status.setObjectName("Subtitle")
+        self.retry_status.setWordWrap(True); config.layout.addWidget(self.retry_status)
         self.content.addWidget(config); self.context.currentTextChanged.connect(self._context_changed); self._context_changed(self.context.currentText())
         self.provider.currentTextChanged.connect(self._save); self.custom.textChanged.connect(self._save)
         preview = Card("Đối chiếu bản dịch")
         table = QTableWidget(); set_table(table, ["Thời gian", "Bản gốc", "Tiếng Việt"], [["00:00–00:03", "你好，欢迎来到今天的视频。", "Xin chào, chào mừng bạn đến với video hôm nay!"], ["00:03–00:07", "我们来看看这个有趣的故事。", "Cùng xem câu chuyện thú vị này nhé!"]]); preview.layout.addWidget(table); self.content.addWidget(preview)
+
+    def set_partial_failure(self, value: dict | None) -> None:
+        if not value:
+            self.retry_status.clear()
+            return
+        failed = len(value.get("failed_item_ids", []))
+        self.retry_status.setText(
+            f"Đã dịch {value.get('completed', 0)}/{value.get('total', 0)} cue · "
+            f"{failed} cue thất bại. Bấm Thử lại để chỉ xử lý phần lỗi."
+        )
 
     def _context_changed(self, text: str) -> None:
         self.custom.setVisible(text == TranslationContext.CUSTOM.value); self._save()
@@ -515,9 +527,21 @@ class TtsStep(BaseStep):
         card = Card("Text-to-Speech")
         self.provider = QComboBox(); self.provider.addItems([v.value for v in TtsProvider]); self.provider.setCurrentText(project.tts_provider)
         card.layout.addWidget(self.provider); config = button("Cấu hình giọng đọc"); config.clicked.connect(self.configure); card.layout.addWidget(config, 0, Qt.AlignmentFlag.AlignRight)
+        self.retry_status = QLabel(); self.retry_status.setObjectName("Subtitle")
+        self.retry_status.setWordWrap(True); card.layout.addWidget(self.retry_status)
         self.provider.currentTextChanged.connect(self._save); self.content.addWidget(card)
         lines = Card("Đoạn thoại")
         table = QTableWidget(); set_table(table, ["#", "Nội dung", "Thời lượng", "Trạng thái"], [["1", "Xin chào, chào mừng bạn đến với video hôm nay!", "3,4s", "Chờ"], ["2", "Cùng xem câu chuyện thú vị này nhé!", "3,5s", "Chờ"]]); lines.layout.addWidget(table); self.content.addWidget(lines)
+
+    def set_partial_failure(self, value: dict | None) -> None:
+        if not value:
+            self.retry_status.clear()
+            return
+        failed = len(value.get("failed_item_ids", []))
+        self.retry_status.setText(
+            f"Đã tạo {value.get('completed', 0)}/{value.get('total', 0)} audio · "
+            f"{failed} audio thất bại. Bấm Thử lại để chỉ xử lý phần lỗi."
+        )
 
     def _save(self) -> None: self.project.tts_provider = self.provider.currentText(); self.changed.emit()
 
@@ -774,12 +798,14 @@ class VietSubPage(QWidget):
         self.controller.overall_progress_changed.connect(self.overall.setValue); self.controller.log_emitted.connect(self.log.append_log)
         self.controller.dirty_changed.connect(self.dirty_changed); self.controller.workflow_completed.connect(self._completed)
         self.controller.automatic_run_completed.connect(self._automatic_completed)
+        self.controller.partial_failure_changed.connect(self._partial_failure_changed)
 
     def select_step(self, index: int) -> None:
         self.current_step = index; self.stack.setCurrentIndex(index)
         for i, row in enumerate(self.step_rows): row.nav.setChecked(i == index)
         self.step_badge.set_status(self.project.step_statuses[index]); self.step_progress.setValue(100 if self.project.step_statuses[index] == "completed" else 0)
         allowed, reason = self.controller.can_run(index); self.run_step_btn.setEnabled(allowed); self.run_step_btn.setToolTip(reason)
+        self._partial_failure_changed(index, self.controller.partial_failure(index))
 
     def _run_step(self) -> None:
         if self.current_step == 0 and not self.pages[0].analyze(): return
@@ -821,6 +847,16 @@ class VietSubPage(QWidget):
         self.step_rows[index].badge.set_status(status)
         if index == self.current_step: self.step_badge.set_status(status)
         allowed, reason = self.controller.can_run(self.current_step); self.run_step_btn.setEnabled(allowed); self.run_step_btn.setToolTip(reason)
+
+    def _partial_failure_changed(self, index: int, value: object) -> None:
+        partial = value if isinstance(value, dict) else None
+        page = self.pages[index]
+        setter = getattr(page, "set_partial_failure", None)
+        if setter:
+            setter(partial)
+        if index == self.current_step:
+            failed = len(partial.get("failed_item_ids", [])) if partial else 0
+            self.retry_btn.setText(f"Thử lại {failed} phần lỗi" if failed else "Chạy lại")
 
     def _step_progress_changed(self, index: int, value: int) -> None:
         if index == self.current_step: self.step_progress.setValue(value)

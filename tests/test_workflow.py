@@ -1,4 +1,4 @@
-from quyetboit_studio.core import PipelineError, ProgressEvent, StepResult
+from quyetboit_studio.core import PartialFailureError, PipelineError, ProgressEvent, StepResult
 from quyetboit_studio.models import ProjectModel, StepStatus
 from quyetboit_studio.workflow import WorkflowController
 
@@ -107,3 +107,30 @@ def test_retry_progress_and_final_api_detail_use_visible_log_levels(qtbot):
         "ERROR",
         "Gemini đang giới hạn tốc độ. Chi tiết API: HTTP 429; reason=RESOURCE_EXHAUSTED",
     )
+
+
+def test_partial_failure_is_persisted_for_retry_and_cleared_on_success(qtbot):
+    project = ProjectModel()
+    project.step_statuses[:3] = [StepStatus.COMPLETED.value] * 3
+    controller = WorkflowController(project)
+    changes = []
+    controller.partial_failure_changed.connect(lambda step, value: changes.append((step, value)))
+    error = PartialFailureError(
+        "gemini_translation_partial",
+        "Đã dịch thành công 125/126 cue; 1 cue thất bại.",
+        completed=125,
+        total=126,
+        failed_item_ids=[66],
+        provider="gemini",
+    )
+
+    controller._worker_failed(3, error)
+
+    assert project.partial_failures["3"]["failed_item_ids"] == [66]
+    assert controller.partial_failure(3)["completed"] == 125
+    assert changes[-1][0] == 3
+
+    controller._worker_succeeded(3, StepResult(3))
+
+    assert controller.partial_failure(3) is None
+    assert "3" not in project.partial_failures

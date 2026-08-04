@@ -10,6 +10,7 @@ from quyetboit_studio.core import (
     ArtifactCache,
     AudioArtifact,
     AudioChunk,
+    PartialFailureError,
     PipelineError,
     SrtCue,
 )
@@ -225,6 +226,37 @@ def test_capcut_tts_batch_uses_bounded_concurrency_and_preserves_order(tmp_path)
     results = service.synthesize_batch(requests, concurrency=3)
     assert service.max_active == 3
     assert [item.path.read_text() for item in results] == [str(index) for index in range(6)]
+
+
+def test_capcut_tts_batch_keeps_successes_when_one_item_fails(tmp_path):
+    class OneFailure(FakeBatchTtsService):
+        def synthesize(self, text, voice, output, **kwargs):
+            if text == "2":
+                raise PipelineError(
+                    "capcut_tts_download",
+                    "Không tải được audio TTS.",
+                    provider="capcut",
+                )
+            return super().synthesize(text, voice, output, **kwargs)
+
+    service = OneFailure()
+    voice = Voice("Test", "speaker")
+    requests = [
+        (str(index), voice, tmp_path / f"{index}.audio", 1.0, 100)
+        for index in range(5)
+    ]
+    checkpointed = []
+
+    with pytest.raises(PartialFailureError) as failure:
+        service.synthesize_batch(
+            requests,
+            concurrency=3,
+            on_success=lambda index, _artifact: checkpointed.append(index),
+        )
+
+    assert failure.value.completed == 4
+    assert failure.value.failed_item_ids == [3]
+    assert sorted(checkpointed) == [0, 1, 3, 4]
 
 
 def test_capcut_sign_crc_obfuscation_and_sigv4_are_deterministic():

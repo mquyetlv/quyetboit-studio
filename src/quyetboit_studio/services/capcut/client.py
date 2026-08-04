@@ -15,7 +15,13 @@ from typing import Any
 
 import httpx
 
-from ...core.models import AudioArtifact, CancellationToken, PipelineError, SrtCue
+from ...core.models import (
+    AudioArtifact,
+    CancellationToken,
+    PartialFailureError,
+    PipelineError,
+    SrtCue,
+)
 from ...core.retry import RetryPolicy, retry_call
 from .auth import CapCutSession
 from .config import (
@@ -386,9 +392,11 @@ class CapCutTtsService:
         concurrency: int = 25,
         cancel: CancellationToken | None = None,
         progress: Callable[[int, int], None] | None = None,
+        on_success: Callable[[int, AudioArtifact], None] | None = None,
     ) -> list[AudioArtifact]:
         results: list[AudioArtifact | None] = [None] * len(requests)
         completed = 0
+        failures: list[tuple[int, BaseException]] = []
 
         def execute(index: int) -> tuple[int, AudioArtifact]:
             text, voice, output, rate, volume = requests[index]
@@ -399,15 +407,43 @@ class CapCutTtsService:
         with ThreadPoolExecutor(
             max_workers=max(1, min(50, concurrency)), thread_name_prefix="capcut-tts"
         ) as executor:
-            futures = [executor.submit(execute, index) for index in range(len(requests))]
+            futures = {
+                executor.submit(execute, index): index for index in range(len(requests))
+            }
             for future in as_completed(futures):
                 if cancel:
                     cancel.raise_if_cancelled()
-                index, artifact = future.result()
-                results[index] = artifact
-                completed += 1
-                if progress:
-                    progress(completed, len(requests))
+                try:
+                    index, artifact = future.result()
+                    if on_success:
+                        on_success(index, artifact)
+                    results[index] = artifact
+                    completed += 1
+                    if progress:
+                        progress(completed, len(requests))
+                except PipelineError as exc:
+                    if exc.error_code == "cancelled":
+                        raise
+                    index = futures[future]
+                    failures.append((index, exc))
+                except Exception as exc:  # noqa: BLE001 - retain other completed batch items
+                    index = futures[future]
+                    failures.append((index, exc))
+        if failures:
+            detail = ", ".join(
+                f"item={index + 1}; code={getattr(error, 'error_code', type(error).__name__)}"
+                for index, error in failures
+            )
+            raise PartialFailureError(
+                "capcut_tts_partial",
+                f"Đã tạo thành công {completed}/{len(requests)} audio; "
+                f"{len(failures)} audio thất bại.",
+                completed=completed,
+                total=len(requests),
+                failed_item_ids=[index + 1 for index, _ in failures],
+                provider="capcut",
+                log_detail=detail,
+            )
         return [item for item in results if item is not None]
 
     def synthesize(self, text: str, voice: Voice, output: str | Path, *, rate: float = 1.0, volume: int = 100, cancel: CancellationToken | None = None) -> AudioArtifact:
@@ -420,8 +456,9 @@ class CapCutTtsService:
             except httpx.HTTPError as exc:
                 status = getattr(exc.response, "status_code", 0) if isinstance(exc, httpx.HTTPStatusError) else 0
                 raise PipelineError("capcut_tts_download", "Không tải được audio TTS.", provider="capcut",
-                                    retryable=status in {429} or status >= 500 or isinstance(exc, httpx.TimeoutException),
-                                    debug_detail=str(exc)) from exc
+                                    retryable=status in {408, 429} or status >= 500 or not status,
+                                    debug_detail=str(exc),
+                                    log_detail=f"HTTP {status or 'network'}; type={type(exc).__name__}") from exc
         audio = retry_call(operation, policy=self.retry_policy, cancel=cancel)
         target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_suffix(target.suffix + ".partial")

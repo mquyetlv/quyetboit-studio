@@ -20,13 +20,13 @@ Douyin URL
 
 Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[!]` bị chặn.
 
-### Tiến độ cập nhật ngày 2026-08-02
+### Tiến độ cập nhật ngày 2026-08-04
 
-- Hoàn thành: **131/182 task (72,0%)**.
+- Hoàn thành: **132/182 task (72,5%)**.
 - Đang làm/đã có một phần: **39 task (21,4%)**.
-- Chưa triển khai: **9 task (4,9%)**.
+- Chưa triển khai: **8 task (4,4%)**.
 - Chờ credential/live test hoặc nghiệm thu: **3 task (1,6%)**.
-- Unit/lint hiện tại: **59 test pass**, Ruff pass.
+- Unit/lint hiện tại: **63 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Theo UX mới, nút chạy tự động chỉ xử lý bước 1–6; bước 7–8 luôn chạy thủ công để căn chỉnh và nghiệm thu output.
 
 ### Cấu trúc module tái sử dụng
@@ -149,9 +149,9 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Rate limit được quản lý theo project/model và thay đổi theo usage tier, vì vậy không hardcode RPM/TPM; tham chiếu [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
 - [-] Sau lượt dịch, quét toàn bộ cue và đánh dấu chưa dịch khi: thiếu ID, text rỗng, text trùng source sau normalize, tỷ lệ ký tự Han còn cao, response trùng lặp bất thường hoặc schema sai. Các kiểm tra chính đã có; heuristic bất thường chưa đầy đủ.
 - [x] Gom riêng cue lỗi thành batch repair tối đa 50 cue và retry theo cùng policy; không dịch lại các cue đã hợp lệ.
-- [-] Sau retry cuối, bước chỉ hoàn thành khi không còn cue lỗi; nếu còn, UI hiển thị bảng cue lỗi và cho “Retry phần thiếu” hoặc sửa tay. Pipeline chặn khi còn lỗi; UI sửa tay/retry riêng chưa có.
+- [-] Sau retry cuối, bước chỉ hoàn thành khi không còn cue lỗi; nếu còn, UI hiển thị tổng số cue thành công/thất bại và cho “Thử lại phần lỗi”. Retry riêng đã có và giữ checkpoint; UI sửa tay/bảng chi tiết từng cue chưa có.
 - [x] Giữ nguyên ID/timestamp nguồn, chỉ thay `translated_text`; xuất `translated.vi.srt`.
-- [ ] Cache từng batch theo model + prompt/context + source cue hash + batch config, cho phép resume sau khi đóng app. Hiện mới cache output dịch cuối.
+- [-] Cache từng batch theo model + prompt/context + source cue hash + batch config, cho phép resume sau khi đóng app. Hiện đã checkpoint atomically SRT hợp lệ sau từng batch theo source/config hash và khi mở/chạy lại chỉ gửi cue thiếu; chưa tách thành artifact độc lập cho từng batch/prompt hash.
 
 ### Bước 5 — CapCut TTS
 
@@ -265,7 +265,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Batch Gemini mặc định 50 cue, cấu hình được, async adaptive concurrency mặc định 3.
 - [x] Cue chưa dịch được quét và retry riêng; không dịch lại cue hợp lệ.
 - [x] Voice từng cue khớp timestamp tuyệt đối.
-- [-] Retry/resume dùng lại chunk/batch/cue đã hoàn thành sau lỗi hoặc restart. Chunk ASR/cue TTS/output bước đã cache; Gemini mới cache output cuối, chưa cache từng batch.
+- [x] Retry/resume dùng lại chunk/batch/cue đã hoàn thành sau lỗi hoặc restart. Chunk ASR, batch/cue Gemini và raw/WAV TTS được checkpoint atomically; UI lưu số lượng/ID thất bại và nút thử lại chỉ gửi lại phần thiếu.
 - [x] FFmpeg tự chọn GPU và fallback CPU.
 - [x] UI không block, Stop hoạt động và lỗi có hướng dẫn xử lý.
 - [x] Không credential nào xuất hiện trong project, cache, autosave hoặc log.

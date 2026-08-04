@@ -12,6 +12,7 @@ from ..core import (
     ArtifactCache,
     AudioArtifact,
     CancellationToken,
+    PartialFailureError,
     PipelineError,
     ProgressCallback,
     ProgressEvent,
@@ -29,7 +30,7 @@ from ..services.media import (
     VideoRenderer,
     atempo_chain,
 )
-from ..services.subtitles import merge_chunk_cues, parse_srt, write_srt
+from ..services.subtitles import find_untranslated, merge_chunk_cues, parse_srt, write_srt
 
 
 def workspace_for_project(project: ProjectModel, project_path: str | Path | None = None) -> Path:
@@ -241,82 +242,240 @@ class VietSubPipeline:
             for cue in cached_cues:
                 cue.translated_text = cue.text
             return StepResult(3, [cached], cached_cues, cache_hit=True)
-        translated = self.services.translator.translate_sync(cues, config, progress=progress, cancel=self.cancel)
+        partial_path = self.workspace / "translated.partial.vi.srt"
+        partial = self._cached(3, source.checksum, config_hash, "translated-partial")
+        if partial:
+            restored = {cue.id: cue.text for cue in parse_srt(partial.path.read_bytes())}
+            for cue in cues:
+                cue.translated_text = restored.get(cue.id, "")
+
+        def checkpoint(items: list[SrtCue]) -> None:
+            invalid_ids = {cue.id for cue in find_untranslated(items)}
+            valid_count = len(items) - len(invalid_ids)
+            path = write_srt(partial_path, items, translated=True)
+            self._remember(3, Artifact(path), source.checksum, config_hash, "translated-partial")
+            progress(ProgressEvent(
+                3,
+                valid_count / max(1, len(items)),
+                f"Đã dịch {valid_count}/{len(items)} cue",
+                current=valid_count,
+                total=len(items),
+                unit="cue",
+            ))
+
+        try:
+            translated = self.services.translator.translate_sync(
+                cues,
+                config,
+                progress=progress,
+                cancel=self.cancel,
+                checkpoint=checkpoint,
+            )
+        except PipelineError as exc:
+            if exc.error_code == "cancelled":
+                raise
+            failed = [cue.id for cue in find_untranslated(cues)]
+            completed = len(cues) - len(failed)
+            raise PartialFailureError(
+                "gemini_translation_partial",
+                f"Đã dịch thành công {completed}/{len(cues)} cue; "
+                f"{len(failed)} cue thất bại.",
+                completed=completed,
+                total=len(cues),
+                failed_item_ids=failed,
+                provider="gemini",
+                log_detail=exc.log_detail or f"code={exc.error_code}",
+            ) from exc
         path = write_srt(self.workspace / "translated.vi.srt", translated.cues, translated=True)
         artifact = self._remember(3, Artifact(path), source.checksum, config_hash, "translated-srt")
         return StepResult(3, [artifact], translated.cues, warnings=[f"Gemini retry: {translated.retries}"] if translated.retries else [])
 
     def _tts(self, progress: ProgressCallback) -> StepResult:
         if not self.services.tts:
-            raise PipelineError("capcut_not_connected", "Hãy đăng nhập CapCut trước khi tạo voice.", provider="capcut")
+            raise PipelineError(
+                "capcut_not_connected",
+                "Hãy đăng nhập CapCut trước khi tạo voice.",
+                provider="capcut",
+            )
         translated = self._previous_artifact(3, "translated.vi.srt")
-        cues = self.results.get(3).data if self.results.get(3) else parse_srt(translated.path.read_bytes())
+        cues = (
+            self.results.get(3).data
+            if self.results.get(3)
+            else parse_srt(translated.path.read_bytes())
+        )
         if not self.results.get(3):
             for cue in cues:
                 cue.translated_text = cue.text
         voices = self.services.tts.list_voices()
-        voice = next((item for item in voices if item.speaker == self.project.capcut_voice), None)
+        voice = next(
+            (item for item in voices if item.speaker == self.project.capcut_voice), None
+        )
         if voice is None:
             voice = next(
                 (item for item in voices if "vietnamese" in item.categories),
                 voices[0] if voices else None,
             )
         if not voice:
-            raise PipelineError("capcut_voice_missing", "Không tìm thấy voice tiếng Việt trên CapCut.", provider="capcut")
+            raise PipelineError(
+                "capcut_voice_missing",
+                "Không tìm thấy voice tiếng Việt trên CapCut.",
+                provider="capcut",
+            )
         self.project.capcut_voice = voice.speaker
         clips: list[AudioArtifact | None] = [None] * len(cues)
         runner = self.services.media.runner
         pending: list[tuple[int, SrtCue, Path, str]] = []
+        failed_ids: list[int] = []
+        failure_details: list[str] = []
+
         for index, cue in enumerate(cues):
-            cue_hash = stable_hash({"text": cue.translated_text, "voice": voice.speaker, **self.project.tts_settings})
+            cue_hash = stable_hash({
+                "text": cue.translated_text,
+                "voice": voice.speaker,
+                **self.project.tts_settings,
+            })
             cached = self._cached(4, cue_hash, "pcm48", f"cue-{cue.id}")
-            wav = self.workspace / "voice" / f"cue_{cue.id:05d}.wav"
             if cached:
                 clips[index] = runner.probe.audio_artifact(cached.path)
+                continue
+            raw = self.workspace / "voice" / f"cue_{cue.id:05d}.audio"
+            cached_raw = self._cached(4, cue_hash, "tts-raw", f"raw-cue-{cue.id}")
+            if cached_raw:
+                try:
+                    self._convert_tts_cue(index, cue, cached_raw.path, cue_hash, clips)
+                except PipelineError as exc:
+                    if exc.error_code == "cancelled":
+                        raise
+                    failed_ids.append(cue.id)
+                    failure_details.append(
+                        f"cue={cue.id}; {exc.log_detail or f'code={exc.error_code}'}"
+                    )
             else:
-                raw = self.workspace / "voice" / f"cue_{cue.id:05d}.audio"
                 pending.append((index, cue, raw, cue_hash))
+
+        completed_before = sum(clip is not None for clip in clips)
+        if completed_before:
+            progress(ProgressEvent(
+                4,
+                completed_before / max(1, len(cues)),
+                f"Đã có {completed_before}/{len(cues)} audio từ checkpoint",
+                current=completed_before,
+                total=len(cues),
+                unit="audio",
+            ))
+
         if pending:
             requests = [
-                (cue.translated_text, voice, raw,
-                 float(self.project.tts_settings.get("speed", 1)),
-                 int(self.project.tts_settings.get("volume", 100)))
+                (
+                    cue.translated_text,
+                    voice,
+                    raw,
+                    float(self.project.tts_settings.get("speed", 1)),
+                    int(self.project.tts_settings.get("volume", 100)),
+                )
                 for _, cue, raw, _ in pending
             ]
-            self.services.tts.synthesize_batch(
-                requests,
-                concurrency=max(1, min(50, int(self.project.tts_settings.get("concurrency", 25)))),
-                cancel=self.cancel,
-                progress=lambda completed, total: progress(
-                    ProgressEvent(4, completed / max(1, total), "CapCut TTS")
-                ),
-            )
-        for index, cue, raw, cue_hash in pending:
-            self.cancel.raise_if_cancelled()
-            wav = self.workspace / "voice" / f"cue_{cue.id:05d}.wav"
-            measured = runner.probe.audio_artifact(raw)
-            factor = measured.duration_ms / max(1, cue.duration_ms)
-            filters = atempo_chain(factor) if factor > 1 else "apad"
-            duration = cue.duration_ms / 1000
-            partial = wav.with_name(wav.stem + ".partial.wav")
-            wav.parent.mkdir(parents=True, exist_ok=True)
-            runner.run([
-                "-i", str(raw), "-af", filters, "-t", f"{duration:.3f}", "-ac", "1",
-                "-ar", "48000", "-c:a", "pcm_s16le", str(partial),
-            ], cancel=self.cancel)
-            partial.replace(wav)
-            clip = runner.probe.audio_artifact(wav)
-            clip = self._remember(4, clip, cue_hash, "pcm48", f"cue-{cue.id}")  # type: ignore[assignment]
-            if factor > 1.5:
-                cue.warnings.append(f"Voice speed-up {factor:.2f}×")
-            clips[index] = clip
+
+            def checkpoint_audio(request_index: int, artifact: AudioArtifact) -> None:
+                index, cue, _, cue_hash = pending[request_index]
+                remembered = self._remember(
+                    4, artifact, cue_hash, "tts-raw", f"raw-cue-{cue.id}"
+                )
+                self._convert_tts_cue(index, cue, remembered.path, cue_hash, clips)
+
+            try:
+                self.services.tts.synthesize_batch(
+                    requests,
+                    concurrency=max(
+                        1, min(50, int(self.project.tts_settings.get("concurrency", 25)))
+                    ),
+                    cancel=self.cancel,
+                    progress=lambda completed, _total: progress(ProgressEvent(
+                        4,
+                        (completed_before + completed) / max(1, len(cues)),
+                        f"Đã tạo {completed_before + completed}/{len(cues)} audio",
+                        current=completed_before + completed,
+                        total=len(cues),
+                        unit="audio",
+                    )),
+                    on_success=checkpoint_audio,
+                )
+            except PartialFailureError as exc:
+                failed_ids.extend(
+                    pending[item_id - 1][1].id for item_id in exc.failed_item_ids
+                )
+                if exc.log_detail:
+                    failure_details.append(exc.log_detail)
+
         ready_clips = [clip for clip in clips if clip is not None]
+        if failed_ids:
+            unique_failed = sorted(set(failed_ids))
+            raise PartialFailureError(
+                "capcut_tts_partial",
+                f"Đã tạo thành công {len(ready_clips)}/{len(cues)} audio; "
+                f"{len(unique_failed)} audio thất bại.",
+                completed=len(ready_clips),
+                total=len(cues),
+                failed_item_ids=unique_failed,
+                provider="capcut",
+                log_detail="; ".join([
+                    "failed_cues=" + ",".join(map(str, unique_failed)),
+                    *failure_details,
+                ]),
+            )
         if len(ready_clips) != len(cues):
-            raise PipelineError("capcut_tts_incomplete", "Chưa tạo đủ voice cho các câu.", provider="capcut")
-        video = self.services.media.runner.probe.video_artifact(self._previous_artifact(0).path)
-        timeline = self.services.assembler.assemble(cues, ready_clips, self.workspace / "voice_timeline.wav", video_duration_ms=video.duration_ms)
-        timeline = self._remember(4, timeline, translated.checksum, stable_hash({"voice": voice.speaker, "settings": self.project.tts_settings}), "timeline")
+            raise PipelineError(
+                "capcut_tts_incomplete",
+                "Chưa tạo đủ voice cho các câu.",
+                provider="capcut",
+            )
+        video = self.services.media.runner.probe.video_artifact(
+            self._previous_artifact(0).path
+        )
+        timeline = self.services.assembler.assemble(
+            cues,
+            ready_clips,
+            self.workspace / "voice_timeline.wav",
+            video_duration_ms=video.duration_ms,
+        )
+        timeline = self._remember(
+            4,
+            timeline,
+            translated.checksum,
+            stable_hash({"voice": voice.speaker, "settings": self.project.tts_settings}),
+            "timeline",
+        )
         return StepResult(4, [*ready_clips, timeline], {"cues": cues, "timeline": timeline})
+
+    def _convert_tts_cue(
+        self,
+        index: int,
+        cue: SrtCue,
+        raw: Path,
+        cue_hash: str,
+        clips: list[AudioArtifact | None],
+    ) -> None:
+        self.cancel.raise_if_cancelled()
+        runner = self.services.media.runner
+        wav = self.workspace / "voice" / f"cue_{cue.id:05d}.wav"
+        measured = runner.probe.audio_artifact(raw)
+        factor = measured.duration_ms / max(1, cue.duration_ms)
+        filters = atempo_chain(factor) if factor > 1 else "apad"
+        duration = cue.duration_ms / 1000
+        partial = wav.with_name(wav.stem + ".partial.wav")
+        wav.parent.mkdir(parents=True, exist_ok=True)
+        runner.run([
+            "-i", str(raw), "-af", filters, "-t", f"{duration:.3f}", "-ac", "1",
+            "-ar", "48000", "-c:a", "pcm_s16le", str(partial),
+        ], cancel=self.cancel)
+        partial.replace(wav)
+        clip = runner.probe.audio_artifact(wav)
+        clip = self._remember(  # type: ignore[assignment]
+            4, clip, cue_hash, "pcm48", f"cue-{cue.id}"
+        )
+        if factor > 1.5:
+            cue.warnings.append(f"Voice speed-up {factor:.2f}×")
+        clips[index] = clip
 
     def _mix(self, progress: ProgressCallback) -> StepResult:
         video = self.services.media.runner.probe.video_artifact(self._previous_artifact(0).path)

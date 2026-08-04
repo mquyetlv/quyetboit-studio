@@ -6,6 +6,7 @@ from .models import (
     AudioArtifact,
     AudioChunk,
     CancellationToken,
+    PartialFailureError,
     PipelineError,
     ProgressCallback,
     ProgressEvent,
@@ -17,6 +18,7 @@ from .retry import RetryPolicy, retry_call
 
 __all__ = [
     "Artifact", "ArtifactCache", "AudioArtifact", "AudioChunk", "CancellationToken",
-    "PipelineError", "ProgressCallback", "ProgressEvent", "RetryPolicy", "SrtCue", "StepResult",
+    "PartialFailureError", "PipelineError", "ProgressCallback", "ProgressEvent", "RetryPolicy",
+    "SrtCue", "StepResult",
     "VideoArtifact", "retry_call",
 ]

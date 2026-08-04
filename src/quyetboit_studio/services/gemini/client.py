@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Self
 
@@ -233,12 +234,14 @@ class GeminiTranslationService:
     async def translate(
         self, cues: list[SrtCue], config: TranslationConfig | None = None,
         *, progress: ProgressCallback | None = None, cancel: CancellationToken | None = None,
+        checkpoint: Callable[[list[SrtCue]], None] | None = None,
     ) -> TranslationResult:
         config = config or TranslationConfig()
         if not 1 <= config.concurrency <= 8:
             raise ValueError("Concurrency Gemini phải trong khoảng 1–8.")
         limiter = AdaptiveLimiter(config.concurrency)
-        batches = batch_cues(cues, config.batch_size)
+        pending = find_untranslated(cues)
+        batches = batch_cues(pending, config.batch_size)
         retries = 0
         completed = 0
 
@@ -298,6 +301,8 @@ class GeminiTranslationService:
             nonlocal completed
             await execute(batch)
             completed += 1
+            if checkpoint:
+                checkpoint(cues)
             if progress:
                 progress(ProgressEvent(3, completed / max(1, len(batches)), "Dịch Gemini"))
 
@@ -305,6 +310,8 @@ class GeminiTranslationService:
         missing = find_untranslated(cues)
         for start in range(0, len(missing), 50):
             await execute({"items": missing[start:start + 50]}, repair=True)
+            if checkpoint:
+                checkpoint(cues)
         invalid = find_untranslated(cues)
         if invalid:
             raise PipelineError(

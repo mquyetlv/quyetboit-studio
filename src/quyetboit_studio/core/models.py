@@ -131,6 +131,32 @@ class PipelineError(RuntimeError):
         self.log_detail = log_detail
 
 
+class PartialFailureError(PipelineError):
+    """A step kept its successful items and can retry only the failed item IDs."""
+
+    def __init__(
+        self,
+        error_code: str,
+        user_message: str,
+        *,
+        completed: int,
+        total: int,
+        failed_item_ids: list[int],
+        provider: str = "pipeline",
+        log_detail: str = "",
+    ) -> None:
+        super().__init__(
+            error_code,
+            user_message,
+            provider=provider,
+            retryable=True,
+            log_detail=log_detail,
+        )
+        self.completed = max(0, int(completed))
+        self.total = max(self.completed, int(total))
+        self.failed_item_ids = [int(item_id) for item_id in failed_item_ids]
+
+
 class CancelledError(PipelineError):
     def __init__(self) -> None:
         super().__init__("cancelled", "Tác vụ đã bị hủy.", retryable=True)

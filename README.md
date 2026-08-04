@@ -45,6 +45,10 @@ Project chưa lưu dùng `%LOCALAPPDATA%/QuyetBoITStudio/workspaces/<project_uui
 project đã lưu có thể đặt tại `.qbstudio-work/<project_uuid>` cạnh project. `manifest.json` ghi
 checksum, input hash và config hash atomically; artifact sai checksum không được tái sử dụng.
 
+Nếu Bước 4 hoặc Bước 5 vẫn còn item lỗi sau retry tự động, ứng dụng giữ các batch/cue đã hoàn
+thành, hiển thị số lượng thành công/thất bại và đổi nút hành động thành **Thử lại phần lỗi**. Lần
+chạy tiếp theo chỉ gửi lại cue còn thiếu; checkpoint này vẫn dùng được sau khi mở lại project.
+
 CapCut là private reverse-engineered API và có thể đổi endpoint/schema/chữ ký. Live test không
 chạy mặc định; chỉ nên chạy với tài khoản test riêng.
 

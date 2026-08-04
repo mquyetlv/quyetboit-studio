@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
-from .core.models import PipelineError, ProgressEvent
+from .core.models import PartialFailureError, PipelineError, ProgressEvent
 from .models import STEP_TITLES, ProjectModel, StepStatus
 
 
@@ -53,6 +53,7 @@ class WorkflowController(QObject):
     workflow_completed = Signal()
     automatic_run_completed = Signal()
     dirty_changed = Signal(bool)
+    partial_failure_changed = Signal(int, object)
 
     def __init__(self, project: ProjectModel, service: PipelineService | None = None) -> None:
         super().__init__()
@@ -69,6 +70,7 @@ class WorkflowController(QObject):
         self.worker: PipelineWorker | None = None
         self.pending_step: int | None = None
         self.paused_step: int | None = None
+        self.partial_failures: dict[str, dict] = dict(project.partial_failures)
 
     @property
     def is_real(self) -> bool:
@@ -131,6 +133,7 @@ class WorkflowController(QObject):
         self.step_progress_changed.emit(step, 100)
         self.overall_progress_changed.emit(self._weighted_progress(step, 100))
         self._set_status(step, StepStatus.COMPLETED)
+        self._clear_partial_failure(step)
         self.log_emitted.emit("SUCCESS", f"Hoàn thành bước {step + 1}: {STEP_TITLES[step]}.")
         self.active_step = None
         self.dirty_changed.emit(True)
@@ -151,6 +154,7 @@ class WorkflowController(QObject):
     @Slot(int, object)
     def _worker_failed(self, step: int, error: BaseException) -> None:
         self.active_step = None
+        resume_run_all = self.run_all_mode
         self.run_all_mode = False
         if self.is_paused:
             self._set_status(step, StepStatus.PAUSED)
@@ -161,6 +165,8 @@ class WorkflowController(QObject):
         else:
             self._set_status(step, StepStatus.FAILED)
             level = "ERROR"
+        if isinstance(error, PartialFailureError):
+            self._set_partial_failure(step, error, resume_run_all=resume_run_all)
         if isinstance(error, PipelineError):
             message = error.user_message
             if error.log_detail:
@@ -247,12 +253,23 @@ class WorkflowController(QObject):
         if self.active_step is not None:
             return False
         self.project.step_statuses[step] = StepStatus.READY.value
+        partial = self.partial_failure(step)
+        if partial:
+            if hasattr(self.service, "force"):
+                self.service.force = False
+            self.run_all_mode = bool(partial.get("resume_run_all"))
+            self.log_emitted.emit(
+                "INFO",
+                f"Thử lại {len(partial['failed_item_ids'])} phần lỗi của bước {step + 1}; "
+                f"giữ {partial['completed']}/{partial['total']} phần đã hoàn thành.",
+            )
         return self.run_step(step)
 
     def reset_step(self, step: int) -> None:
         if self.active_step == step:
             self.stop()
         for index in range(step, 8):
+            self._clear_partial_failure(index)
             status = StepStatus.READY if index == step else StepStatus.PENDING
             self._set_status(index, status)
         self._emit_overall()
@@ -264,6 +281,8 @@ class WorkflowController(QObject):
         self.run_all_mode = False
         self.is_paused = False
         self.project.step_statuses = [StepStatus.READY.value, *([StepStatus.PENDING.value] * 7)]
+        for index in range(8):
+            self._clear_partial_failure(index)
         for index, status in enumerate(self.project.step_statuses):
             self.step_status_changed.emit(index, status)
             self.step_progress_changed.emit(index, 0)
@@ -303,6 +322,29 @@ class WorkflowController(QObject):
     def _set_status(self, step: int, status: StepStatus) -> None:
         self.project.step_statuses[step] = status.value
         self.step_status_changed.emit(step, status.value)
+
+    def partial_failure(self, step: int) -> dict | None:
+        value = self.partial_failures.get(str(step))
+        return dict(value) if value else None
+
+    def _set_partial_failure(
+        self, step: int, error: PartialFailureError, *, resume_run_all: bool = False
+    ) -> None:
+        value = {
+            "completed": error.completed,
+            "total": error.total,
+            "failed_item_ids": list(error.failed_item_ids),
+            "resume_run_all": resume_run_all,
+        }
+        self.partial_failures[str(step)] = value
+        self.project.partial_failures = dict(self.partial_failures)
+        self.partial_failure_changed.emit(step, value)
+        self.dirty_changed.emit(True)
+
+    def _clear_partial_failure(self, step: int) -> None:
+        if self.partial_failures.pop(str(step), None) is not None:
+            self.project.partial_failures = dict(self.partial_failures)
+            self.partial_failure_changed.emit(step, None)
 
     def _emit_overall(self) -> None:
         completed = sum(s == StepStatus.COMPLETED.value for s in self.project.step_statuses)

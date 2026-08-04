@@ -116,6 +116,39 @@ def test_studio_dialog_edits_real_layer_properties(qtbot):
     assert edited["background_color"] == "#123456"
 
 
+def test_subtitle_line_edits_are_committed_before_selecting_another_layer(qtbot):
+    dialog = StudioDialog({"layers": ["Video", "Voice", "Subtitle"]})
+    qtbot.addWidget(dialog)
+    dialog.layers.setCurrentRow(2)
+
+    dialog.font_color.setText("#123456")
+    dialog.background_color.setText("#654321")
+    dialog.layers.setCurrentRow(0)
+
+    subtitle = next(
+        layer for layer in dialog.current_settings()["layers"]
+        if layer["kind"] == "subtitle"
+    )
+    assert subtitle["font_color"] == "#123456"
+    assert subtitle["background_color"] == "#654321"
+
+
+def test_studio_apply_flushes_pending_subtitle_line_edits(qtbot):
+    dialog = StudioDialog({"layers": ["Video", "Voice", "Subtitle"]})
+    qtbot.addWidget(dialog)
+    dialog.layers.setCurrentRow(2)
+    captured = []
+    dialog.settings_applied.connect(captured.append)
+
+    dialog.font_color.setText("#ABCDEF")
+    dialog.apply()
+
+    subtitle = next(
+        layer for layer in captured[0]["layers"] if layer["kind"] == "subtitle"
+    )
+    assert subtitle["font_color"] == "#ABCDEF"
+
+
 def test_scroll_text_controls_disable_without_losing_values(qtbot):
     moving = new_studio_layer("scroll_text", text="Watermark", speed=1.7, bold=False)
     dialog = StudioDialog({"layers": ["Video", "Voice", "Subtitle", moving]})

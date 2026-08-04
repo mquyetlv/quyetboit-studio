@@ -147,7 +147,7 @@ class StudioDialog(QDialog):
         timeline = Card("Layer", "Kéo-thả để đổi thứ tự; bỏ dấu chọn để tắt layer")
         self.layers = QListWidget()
         self.layers.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-        self.layers.currentItemChanged.connect(self._layer_selected)
+        self.layers.currentItemChanged.connect(self._layer_selection_changed)
         self.layers.itemChanged.connect(self._layer_checked)
         timeline.layout.addWidget(self.layers)
         center_layout.addWidget(timeline, 2)
@@ -222,7 +222,7 @@ class StudioDialog(QDialog):
         self.flip_h.toggled.connect(lambda value: self._change_global("flip_horizontal", value))
         self.flip_v.toggled.connect(lambda value: self._change_global("flip_vertical", value))
         self.layer_enabled.toggled.connect(self._layer_enabled_changed)
-        self.text.editingFinished.connect(lambda: self._change_layer("text", self.text.text()))
+        self.text.editingFinished.connect(self._commit_selected_line_edits)
         self.position.currentTextChanged.connect(lambda value: self._change_layer("position", value))
         self.margin.valueChanged.connect(lambda value: self._change_layer("margin", value))
         self.margin_x.valueChanged.connect(lambda value: self._change_layer("margin_x", value))
@@ -230,12 +230,8 @@ class StudioDialog(QDialog):
         self.layer_height.valueChanged.connect(lambda value: self._change_layer("height", value))
         self.opacity.valueChanged.connect(lambda value: self._change_layer("opacity", value))
         self.font_size.valueChanged.connect(lambda value: self._change_layer("font_size", value))
-        self.font_color.editingFinished.connect(
-            lambda: self._change_layer("font_color", self.font_color.text())
-        )
-        self.background_color.editingFinished.connect(
-            lambda: self._change_layer("background_color", self.background_color.text())
-        )
+        self.font_color.editingFinished.connect(self._commit_selected_line_edits)
+        self.background_color.editingFinished.connect(self._commit_selected_line_edits)
         self.background_opacity.valueChanged.connect(
             lambda value: self._change_layer("background_opacity", value)
         )
@@ -299,8 +295,40 @@ class StudioDialog(QDialog):
         self._layer_selected(item)
 
     def current_settings(self) -> dict:
+        self._commit_selected_line_edits()
         self._sync_layer_order()
         return normalize_studio_settings(self.state)
+
+    def _commit_selected_line_edits(self) -> None:
+        self._commit_line_edits(self._selected())
+
+    def _commit_line_edits(self, layer: dict | None) -> None:
+        if self.loading or not layer:
+            return
+        kind = str(layer.get("kind", ""))
+        values: dict[str, str] = {}
+        if kind in {"intro_text", "scroll_text"}:
+            values["text"] = self.text.text()
+        if kind in {"subtitle", "intro_text", "scroll_text"}:
+            values["font_color"] = self.font_color.text()
+        if kind in {"subtitle", "intro_text"}:
+            values["background_color"] = self.background_color.text()
+        changed = {key: value for key, value in values.items() if layer.get(key) != value}
+        if changed:
+            self._remember()
+            layer.update(changed)
+
+    def _layer_selection_changed(
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None,
+    ) -> None:
+        if not self.loading and previous is not None:
+            previous_id = previous.data(Qt.ItemDataRole.UserRole)
+            previous_layer = next(
+                (layer for layer in self.state["layers"] if layer["id"] == previous_id),
+                None,
+            )
+            self._commit_line_edits(previous_layer)
+        self._layer_selected(current)
 
     def add_layer(self, name: str) -> None:
         kind = ASSET_KINDS.get(name)

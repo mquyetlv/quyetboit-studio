@@ -86,7 +86,7 @@ class VietSubPipeline:
     def run_all(self, progress: ProgressCallback | None = None, *, force: bool = False) -> list[StepResult]:
         self.force = force
         output = []
-        for step in range(6):
+        for step in range(8):
             output.append(self.run_step(step, progress))
         return output
 

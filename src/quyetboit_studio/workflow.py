@@ -51,7 +51,6 @@ class WorkflowController(QObject):
     overall_progress_changed = Signal(int)
     log_emitted = Signal(str, str)
     workflow_completed = Signal()
-    automatic_run_completed = Signal()
     dirty_changed = Signal(bool)
     partial_failure_changed = Signal(int, object)
 
@@ -139,16 +138,12 @@ class WorkflowController(QObject):
         self.dirty_changed.emit(True)
         if step < 7:
             self._set_status(step + 1, StepStatus.READY)
-        if self.run_all_mode and step < 5:
+        if self.run_all_mode and step < 7:
             self.pending_step = step + 1
-        elif self.run_all_mode and step == 5:
+        elif self.run_all_mode and step == 7:
             self.run_all_mode = False
-            self.log_emitted.emit(
-                "SUCCESS", "Đã hoàn thành tự động bước 1–6. Hãy căn chỉnh bước 7 và chạy bước 8 thủ công."
-            )
-            self.automatic_run_completed.emit()
+            self.workflow_completed.emit()
         elif step == 7:
-            self.run_all_mode = False
             self.workflow_completed.emit()
 
     @Slot(int, object)
@@ -189,11 +184,11 @@ class WorkflowController(QObject):
         if self.active_step is not None:
             return False
         self.run_all_mode = True
-        first = next((i for i, status in enumerate(self.project.step_statuses[:6])
+        first = next((i for i, status in enumerate(self.project.step_statuses)
                       if status != StepStatus.COMPLETED.value), None)
         if first is None:
-            self.log_emitted.emit("SUCCESS", "Các bước tự động 1–6 đã hoàn thành.")
-            self.automatic_run_completed.emit()
+            self.log_emitted.emit("SUCCESS", "Tất cả 8 bước đã hoàn thành.")
+            self.workflow_completed.emit()
             self.run_all_mode = False
             return True
         if first > 0 and self.project.step_statuses[first - 1] != StepStatus.COMPLETED.value:
@@ -307,16 +302,12 @@ class WorkflowController(QObject):
             self.dirty_changed.emit(True)
             if step < 7:
                 self._set_status(step + 1, StepStatus.READY)
-            if self.run_all_mode and step < 5:
+            if self.run_all_mode and step < 7:
                 QTimer.singleShot(180, lambda: self.run_step(step + 1))
-            elif self.run_all_mode and step == 5:
+            elif self.run_all_mode and step == 7:
                 self.run_all_mode = False
-                self.log_emitted.emit(
-                    "SUCCESS", "Đã hoàn thành tự động bước 1–6. Hãy căn chỉnh bước 7 và chạy bước 8 thủ công."
-                )
-                self.automatic_run_completed.emit()
+                self.workflow_completed.emit()
             elif step == 7:
-                self.run_all_mode = False
                 self.workflow_completed.emit()
 
     def _set_status(self, step: int, status: StepStatus) -> None:

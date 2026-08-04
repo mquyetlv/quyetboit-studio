@@ -26,7 +26,7 @@ def test_vietsub_has_eight_steps(qtbot, tmp_path):
     qtbot.addWidget(window)
     assert window.vietsub.stack.count() == 8
     assert len(window.vietsub.step_rows) == 8
-    assert window.vietsub.run_all_btn.text() == "▶ Chạy bước 1–6"
+    assert window.vietsub.run_all_btn.text() == "▶ Chạy tất cả các bước"
 
 
 def test_custom_context_validation_state(qtbot, tmp_path):

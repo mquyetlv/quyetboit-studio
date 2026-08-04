@@ -699,7 +699,7 @@ class VietSubPage(QWidget):
             b = button(text, text == "Lưu"); b.clicked.connect(signal.emit); header.addWidget(b)
         root.addLayout(header)
         controls = Card(); row = QHBoxLayout()
-        self.run_all_btn = button("▶ Chạy bước 1–6", True); self.pause_btn = button("Tạm dừng"); self.resume_btn = button("Tiếp tục"); self.stop_btn = button("Dừng"); self.reset_all_btn = button("Đặt lại")
+        self.run_all_btn = button("▶ Chạy tất cả các bước", True); self.pause_btn = button("Tạm dừng"); self.resume_btn = button("Tiếp tục"); self.stop_btn = button("Dừng"); self.reset_all_btn = button("Đặt lại")
         self.force_btn = button("Bỏ qua cache"); self.workspace_btn = button("Mở workspace"); self.clear_cache_btn = button("Dọn cache")
         for b in (self.run_all_btn, self.pause_btn, self.resume_btn, self.stop_btn, self.reset_all_btn,
                   self.force_btn, self.workspace_btn, self.clear_cache_btn): row.addWidget(b)
@@ -797,7 +797,6 @@ class VietSubPage(QWidget):
         self.controller.step_status_changed.connect(self._status_changed); self.controller.step_progress_changed.connect(self._step_progress_changed)
         self.controller.overall_progress_changed.connect(self.overall.setValue); self.controller.log_emitted.connect(self.log.append_log)
         self.controller.dirty_changed.connect(self.dirty_changed); self.controller.workflow_completed.connect(self._completed)
-        self.controller.automatic_run_completed.connect(self._automatic_completed)
         self.controller.partial_failure_changed.connect(self._partial_failure_changed)
 
     def select_step(self, index: int) -> None:
@@ -817,6 +816,13 @@ class VietSubPage(QWidget):
 
     def _run_all(self) -> None:
         if not self.pages[0].analyze(): self.select_step(0); return
+        if self.project.translation_context == TranslationContext.CUSTOM.value and not self.project.custom_context.strip():
+            self.select_step(3)
+            QMessageBox.warning(self, "Thiếu context", "Vui lòng nhập context dịch tùy chỉnh.")
+            return
+        if not self.pages[7].validate():
+            self.select_step(7)
+            return
         self._configure_services(self.controller.service)
         self.controller.run_all()
 
@@ -860,16 +866,6 @@ class VietSubPage(QWidget):
 
     def _step_progress_changed(self, index: int, value: int) -> None:
         if index == self.current_step: self.step_progress.setValue(value)
-
-    def _automatic_completed(self) -> None:
-        if isinstance(self.controller.service, VietSubPipeline):
-            self.controller.service.force = False
-        self.select_step(6)
-        QMessageBox.information(
-            self, "Hoàn thành bước 1–6",
-            "Video đã được ghép voice. Hãy mở Layer Studio để căn chỉnh bước 7, "
-            "sau đó chạy bước 7 và bước 8 thủ công.",
-        )
 
     def _completed(self) -> None:
         if isinstance(self.controller.service, VietSubPipeline):

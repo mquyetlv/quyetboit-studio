@@ -7,9 +7,9 @@
 Pipeline chạy trong worker thread, hỗ trợ Stop, resume theo manifest/checksum, cache theo cấu hình
 và fallback encoder GPU sang `libx264`. Project dùng schema v2 và tự migrate file v1.
 
-Nút **Chạy bước 1–6** chỉ tự động tải video, tạo/dịch subtitle, tạo voice và ghép voice. Ứng dụng
-dừng tại bước 7 để người dùng mở Layer Studio căn chỉnh; bước 7 và bước 8 được chạy thủ công bằng
-nút **Chạy bước này**.
+Nút **Chạy tất cả các bước** tự động chạy liên tục toàn bộ pipeline từ tải video đến áp dụng cấu
+hình Layer Studio và xuất file đầu ra. Người dùng vẫn có thể mở Layer Studio trước khi chạy để căn
+chỉnh cấu hình, hoặc chạy lại riêng từng bước bằng nút **Chạy bước này**.
 
 ## Yêu cầu
 

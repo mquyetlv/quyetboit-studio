@@ -26,8 +26,8 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - Đang làm/đã có một phần: **39 task (21,4%)**.
 - Chưa triển khai: **8 task (4,4%)**.
 - Chờ credential/live test hoặc nghiệm thu: **3 task (1,6%)**.
-- Unit/lint hiện tại: **63 test pass**, Ruff pass.
-- Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Theo UX mới, nút chạy tự động chỉ xử lý bước 1–6; bước 7–8 luôn chạy thủ công để căn chỉnh và nghiệm thu output.
+- Unit/lint hiện tại: **65 test pass**, Ruff pass.
+- Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
 
@@ -206,7 +206,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ## 4. Điều phối, lỗi và tối ưu
 
-- [x] Nút chạy tự động chỉ xử lý bước 1–6 rồi dừng với bước 7 ở trạng thái sẵn sàng; Studio và export bước 7–8 luôn chạy thủ công để người dùng căn chỉnh.
+- [x] Nút **Chạy tất cả các bước** điều phối liên tục bước 1–8; cấu hình Studio hiện tại được dùng ở bước 7 và output được xuất ở bước 8. Vẫn hỗ trợ chạy lại riêng từng bước để căn chỉnh.
 - [-] Thay timer mô phỏng bằng state machine thật: `preparing`, `running`, `waiting_remote`, `retrying`, `paused`, `completed`, `failed`, `cancelled`. Worker/state thật đã thay timer trong production; chưa phát event đầy đủ cho mọi state trung gian.
 - [x] Progress tổng dùng trọng số động theo duration/bytes thực tế; không chia đều tám bước.
 - [x] Pause chỉ áp dụng tại boundary an toàn; upload/FFmpeg/Gemini đang chạy được cancel, sau đó resume từ checkpoint.
@@ -260,7 +260,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ### Definition of Done
 
-- [-] Quy trình tổng xử lý video Douyin thật đến file video hoàn chỉnh. Bước 1–6 chạy tự động; bước 7 đã chạy thật, nhưng bước 8/output cuối vẫn cần chạy thủ công và nghiệm thu chính thức.
+- [-] Quy trình tổng xử lý video Douyin thật đến file video hoàn chỉnh. Điều phối tự động bước 1–8 đã có; bước 7 đã chạy thật, nhưng bước 8/output cuối vẫn cần live-test và nghiệm thu chính thức.
 - [x] Mọi logic provider/media được gọi qua module tái sử dụng, không nằm trong widget Qt.
 - [x] Batch Gemini mặc định 50 cue, cấu hình được, async adaptive concurrency mặc định 3.
 - [x] Cue chưa dịch được quét và retry riêng; không dịch lại cue hợp lệ.

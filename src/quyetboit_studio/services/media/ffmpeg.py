@@ -354,6 +354,12 @@ class FilterGraphBuilder:
         return next((path.resolve() for path in candidates if path.exists()), None)
 
     @staticmethod
+    def _font_family(font: Path | None) -> str:
+        if font and font.stem.lower().startswith("dejavu"):
+            return "DejaVu Sans"
+        return "Arial"
+
+    @staticmethod
     def _enable(layer: dict[str, Any]) -> str:
         start = max(0.0, float(layer.get("start", 0)))
         end = start + max(0.1, float(layer.get("duration", 5)))
@@ -405,6 +411,21 @@ class FilterGraphBuilder:
         settings = normalize_studio_settings(settings)
         layers = [layer for layer in settings["layers"] if layer.get("enabled", True)]
         video_filters: list[str] = []
+        timeline_speed = float(settings.get("speed", 1.0))
+        zoom = max(0.5, min(2.0, float(settings.get("zoom", 100)) / 100))
+        if zoom != 1:
+            video_filters.append(
+                f"scale=iw*{zoom:.8g}:ih*{zoom:.8g},crop=iw/{zoom:.8g}:ih/{zoom:.8g}"
+            )
+        if settings.get("flip_horizontal"):
+            video_filters.append("hflip")
+        if settings.get("flip_vertical"):
+            video_filters.append("vflip")
+        color = float(settings.get("color", 100)) / 100
+        if color != 1:
+            video_filters.append(f"eq=saturation={max(0, min(2, color)):.4g}")
+        # Composite subtitles after spatial transforms so configured pixel size and edge margin
+        # are not enlarged or cropped by Studio zoom. Keep them before setpts for cue timing.
         subtitle_layer = next((layer for layer in layers if layer.get("kind") == "subtitle"), None)
         if subtitle and subtitle_layer:
             font_size = int(subtitle_layer.get("font_size", 42))
@@ -423,24 +444,18 @@ class FilterGraphBuilder:
             vertical_margin = margin + max(0, round((height - font_size) / 2))
             primary = self._ass_color(str(subtitle_layer.get("font_color", "white")))
             alignment = 8 if subtitle_layer.get("position") == "top" else 2
+            # SRT is converted by libass with PlayResY=288. Convert requested pixels back
+            # to that coordinate system so Subtitle matches drawtext-based fixed text.
+            ass_scale = 288 / max(1, frame_height)
+            ass_font_size = font_size * ass_scale
+            ass_vertical_margin = vertical_margin * ass_scale
+            font_name = self._font_family(self._font_path(False))
             video_filters.append(
                 f"subtitles='{self.escape_path(str(Path(subtitle).resolve()))}':force_style='"
-                f"FontSize={font_size},PrimaryColour={primary},BorderStyle=1,Outline=0,Shadow=0,"
-                f"Alignment={alignment},MarginL=0,MarginR=0,MarginV={vertical_margin}'"
+                f"FontName={font_name},FontSize={ass_font_size:.6g},PrimaryColour={primary},"
+                f"BorderStyle=1,Outline=0,Shadow=0,Alignment={alignment},MarginL=0,MarginR=0,"
+                f"MarginV={ass_vertical_margin:.6g}'"
             )
-        speed = float(settings.get("speed", 1.0))
-        zoom = max(0.5, min(2.0, float(settings.get("zoom", 100)) / 100))
-        if zoom != 1:
-            video_filters.append(
-                f"scale=iw*{zoom:.8g}:ih*{zoom:.8g},crop=iw/{zoom:.8g}:ih/{zoom:.8g}"
-            )
-        if settings.get("flip_horizontal"):
-            video_filters.append("hflip")
-        if settings.get("flip_vertical"):
-            video_filters.append("vflip")
-        color = float(settings.get("color", 100)) / 100
-        if color != 1:
-            video_filters.append(f"eq=saturation={max(0, min(2, color)):.4g}")
         for layer in layers:
             kind = layer.get("kind")
             if kind not in {"intro_text", "scroll_text"} or not str(layer.get("text", "")).strip():
@@ -451,11 +466,11 @@ class FilterGraphBuilder:
             estimated_glyphs = max(1.0, len(text) * 0.62)
             font_size = max(1, min(requested_size, frame_height, int(frame_width / estimated_glyphs)))
             if kind == "scroll_text":
-                speed = max(0.1, min(10.0, float(layer.get("speed", 1.0))))
+                scroll_speed = max(0.1, min(10.0, float(layer.get("speed", 1.0))))
                 x_range = "max(1\\,w-text_w)"
                 y_range = "max(1\\,h-text_h)"
-                x = f"abs(mod(t*{120 * speed:.6g}\\,2*{x_range})-{x_range})"
-                y = f"abs(mod(t*{83 * speed:.6g}\\,2*{y_range})-{y_range})"
+                x = f"abs(mod(t*{120 * scroll_speed:.6g}\\,2*{x_range})-{x_range})"
+                y = f"abs(mod(t*{83 * scroll_speed:.6g}\\,2*{y_range})-{y_range})"
                 opacity = max(0, min(100, int(layer.get("opacity", 60)))) / 100
                 color = self._ffmpeg_color(str(layer.get("font_color", "#FFFFFF")))
                 font = self._font_path(bool(layer.get("bold", True)))
@@ -482,8 +497,8 @@ class FilterGraphBuilder:
                 f"fontsize={font_size}:fontcolor={font_color}:{shadow}fix_bounds=1:"
                 f"x={x}:y={y}"
             )
-        if speed != 1:
-            video_filters.append(f"setpts=PTS/{speed:.8g}")
+        if timeline_speed != 1:
+            video_filters.append(f"setpts=PTS/{timeline_speed:.8g}")
 
         script_parts: list[str] = []
         image_inputs: list[Path] = []
@@ -533,8 +548,8 @@ class FilterGraphBuilder:
                 audio_filters.extend([
                     f"asetrate=48000*{ratio:.8g}", "aresample=48000", atempo_chain(1 / ratio),
                 ])
-        if speed != 1:
-            audio_filters.append(atempo_chain(speed))
+        if timeline_speed != 1:
+            audio_filters.append(atempo_chain(timeline_speed))
         if audio_filters:
             script_parts.append(f"[0:a]{','.join(audio_filters)}[aout]")
         return RenderGraph(

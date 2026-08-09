@@ -32,6 +32,13 @@ from ..services.media import (
 )
 from ..services.subtitles import find_untranslated, merge_chunk_cues, parse_srt, write_srt
 
+STUDIO_RENDER_VERSION = 2
+
+
+def studio_config_hash(settings: dict[str, Any]) -> str:
+    """Version the cache key when renderer semantics change without a UI config change."""
+    return stable_hash({"renderer_version": STUDIO_RENDER_VERSION, "settings": settings})
+
 
 def workspace_for_project(project: ProjectModel, project_path: str | Path | None = None) -> Path:
     if project.workspace_path:
@@ -491,7 +498,7 @@ class VietSubPipeline:
     def _studio(self, progress: ProgressCallback) -> StepResult:
         mixed = self.services.media.runner.probe.video_artifact(self._previous_artifact(5).path)
         subtitle = self._previous_artifact(3, "translated.vi.srt")
-        config_hash = stable_hash(self.project.studio_settings)
+        config_hash = studio_config_hash(self.project.studio_settings)
         input_hash = stable_hash([mixed.checksum, subtitle.checksum])
         cached = self._cached(6, input_hash, config_hash)
         if cached: return StepResult(6, [cached], cache_hit=True)

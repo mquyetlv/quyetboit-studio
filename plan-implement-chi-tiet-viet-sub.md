@@ -26,7 +26,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - Đang làm/đã có một phần: **39 task (21,4%)**.
 - Chưa triển khai: **8 task (4,4%)**.
 - Chờ credential/live test hoặc nghiệm thu: **3 task (1,6%)**.
-- Unit/lint hiện tại: **65 test pass**, Ruff pass.
+- Unit/lint hiện tại: **67 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -234,7 +234,7 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [-] Gemini batch size, structured schema, missing ID, Han detection và retry-only-missing. Các luồng chính đã test; error matrix chưa đầy đủ.
 - [-] Adaptive limiter giảm khi `429`, tôn trọng `Retry-After` và phục hồi concurrency. Giảm/phục hồi cùng parse/redact/log `Retry-After` đã test; chờ thực tế với `Retry-After` khác 0 chưa có test chuyên biệt.
 - [-] TTS cache key, duration matching, atempo chain và silence padding. Atempo có test; các nhánh còn lại chủ yếu được kiểm chứng qua pipeline.
-- [x] Filter graph cho tùy chọn Studio, subtitle/text bar, logo giữ tỷ lệ, chữ nảy hai trục và escaping path/text; có unit test, test persistence/UI và integration render FFmpeg.
+- [x] Filter graph cho tùy chọn Studio, subtitle/text bar, logo giữ tỷ lệ, chữ nảy hai trục và escaping path/text; tốc độ chữ chạy được tách khỏi timeline video/audio, subtitle được composite sau zoom/crop và quy đổi PlayResY của libass để khớp kích thước pixel/font/margin với Text cố định; có unit test, test persistence/UI và integration render FFmpeg.
 - [x] Artifact/config hash, cache hit, invalidation và schema v1→v2 migration.
 - [x] Redaction bảo đảm không log/lưu Gemini key, password, cookie, STS hoặc authorization.
 

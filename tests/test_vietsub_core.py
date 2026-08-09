@@ -14,9 +14,11 @@ from quyetboit_studio.core import (
     PipelineError,
     SrtCue,
 )
+from quyetboit_studio.core.models import stable_hash
 from quyetboit_studio.core.retry import RetryPolicy
 from quyetboit_studio.models import ProjectModel
 from quyetboit_studio.pipeline import VietSubPipeline
+from quyetboit_studio.pipeline.vietsub import studio_config_hash
 from quyetboit_studio.services.capcut import (
     AwsV4Signer,
     CapCutTtsService,
@@ -39,6 +41,14 @@ from quyetboit_studio.services.subtitles import (
     parse_srt,
     serialize_srt,
 )
+
+
+def test_studio_renderer_version_invalidates_legacy_cache_key():
+    settings = ProjectModel().studio_settings
+
+    assert studio_config_hash(settings) != stable_hash(settings)
+    changed = {**settings, "zoom": 125}
+    assert studio_config_hash(changed) != studio_config_hash(settings)
 
 
 def test_douyin_url_is_https_and_domain_bounded():

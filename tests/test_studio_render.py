@@ -242,12 +242,37 @@ def test_subtitle_and_moving_text_follow_layer_rules(tmp_path):
 
     assert "drawbox=x=0:y=12:w=iw:h=60" in graph.script
     assert "Alignment=8" in graph.script
+    assert "FontName=Arial,FontSize=32" in graph.script
+    assert "MarginV=17.6" in graph.script
     assert "fontcolor=0xFFFFFF@0.6" in graph.script
     assert "t*150" in graph.script
     assert "t*103.75" in graph.script
     assert "max(1\\,w-text_w)" in graph.script
     assert "max(1\\,h-text_h)" in graph.script
     assert graph.script.count("text='Watermark'") == 1
+
+
+def test_scroll_text_speed_does_not_override_video_and_audio_speed(tmp_path):
+    settings = normalize_studio_settings({
+        "speed": 1.1,
+        "zoom": 112,
+        "layers": [
+            "Video", "Voice",
+            new_studio_layer("subtitle", position="bottom", margin=0, font_size=28),
+            new_studio_layer("scroll_text", text="Watermark", speed=0.7),
+        ],
+    })
+
+    graph = FilterGraphBuilder().build(settings, subtitle=tmp_path / "translated.vi.srt")
+
+    assert "t*84" in graph.script
+    assert "t*58.1" in graph.script
+    assert "setpts=PTS/1.1" in graph.script
+    assert "atempo=1.1" in graph.script
+    assert "setpts=PTS/0.7" not in graph.script
+    assert "atempo=0.7" not in graph.script
+    assert graph.script.index("scale=iw*1.12") < graph.script.index("subtitles=")
+    assert graph.script.index("subtitles=") < graph.script.index("setpts=PTS/1.1")
 
 
 @pytest.mark.skipif(

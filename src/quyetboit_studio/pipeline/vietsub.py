@@ -18,6 +18,7 @@ from ..core import (
     ProgressEvent,
     SrtCue,
     StepResult,
+    VideoArtifact,
 )
 from ..core.models import AudioChunk, stable_hash
 from ..models import ProjectModel
@@ -27,6 +28,7 @@ from ..services.gemini import GeminiTranslationService, TranslationConfig
 from ..services.media import (
     AudioProcessor,
     TimelineAudioAssembler,
+    VideoConcatenator,
     VideoRenderer,
     atempo_chain,
 )
@@ -55,6 +57,7 @@ class PipelineDependencies:
     media: AudioProcessor = field(default_factory=AudioProcessor)
     renderer: VideoRenderer = field(default_factory=VideoRenderer)
     assembler: TimelineAudioAssembler = field(default_factory=TimelineAudioAssembler)
+    concatenator: VideoConcatenator = field(default_factory=VideoConcatenator)
     captions: CapCutCaptionService | None = None
     translator: GeminiTranslationService | None = None
     tts: CapCutTtsService | None = None
@@ -155,26 +158,69 @@ class VietSubPipeline:
 
     def _download(self, progress: ProgressCallback) -> StepResult:
         cookies_file = self.project.__dict__.get("_douyin_cookies_file")
-        metadata = self.services.downloader.probe(
-            self.project.source_url, (self.project.browser, self.project.browser_profile), cookies_file
-        )
-        input_hash = stable_hash({"url": metadata.webpage_url, "id": metadata.id})
-        config_hash = stable_hash({"format": "bestvideo*+bestaudio/best", "format_id": metadata.format_id})
+        urls = self.project.selected_source_urls()
+        if not urls:
+            raise PipelineError("missing_source_url", "Hãy nhập ít nhất một link video Douyin.")
+        auth = (self.project.browser, self.project.browser_profile)
+        metadata_list = [
+            self.services.downloader.probe(url, auth, cookies_file) for url in urls
+        ]
+        input_hash = stable_hash([
+            {"url": metadata.webpage_url, "id": metadata.id} for metadata in metadata_list
+        ])
+        config_hash = stable_hash({
+            "format": "bestvideo*+bestaudio/best",
+            "format_ids": [metadata.format_id for metadata in metadata_list],
+            "source_mode": self.project.source_mode,
+        })
         cached = self._cached(0, input_hash, config_hash)
         if cached:
-            return StepResult(0, [cached], metadata, cache_hit=True)
-        artifact = self.services.downloader.download(
-            DownloadRequest(
-                self.project.source_url, self.workspace / "source", self.project.browser,
-                self.project.browser_profile, cookies_file=Path(cookies_file) if cookies_file else None,
-            ),
-            progress, self.cancel,
-        )
+            return StepResult(0, [cached], {"videos": metadata_list}, cache_hit=True)
+        artifacts: list[VideoArtifact] = []
+        count = len(urls)
+        for index, url in enumerate(urls):
+            self.cancel.raise_if_cancelled()
+
+            def download_progress(event: ProgressEvent, item: int = index) -> None:
+                scale = 1.0 if count == 1 else 0.8
+                progress(ProgressEvent(
+                    0, scale * (item + event.fraction) / count,
+                    event.message or f"Đang tải video {item + 1}/{count}",
+                    current=item + event.fraction, total=count, unit="video",
+                    item_id=metadata_list[item].id,
+                ))
+
+            artifacts.append(self.services.downloader.download(
+                DownloadRequest(
+                    url, self.workspace / "source", self.project.browser,
+                    self.project.browser_profile,
+                    cookies_file=Path(cookies_file) if cookies_file else None,
+                ),
+                download_progress, self.cancel,
+            ))
+        if count > 1:
+            def concat_progress(event: ProgressEvent) -> None:
+                progress(ProgressEvent(
+                    0, 0.8 + event.fraction * 0.2, "Đang gộp các video",
+                    current=event.current, total=event.total, unit=event.unit,
+                ))
+
+            artifact = self.services.concatenator.concatenate(
+                artifacts, self.workspace / "source" / "combined.mp4",
+                progress=concat_progress, cancel=self.cancel,
+            )
+        else:
+            artifact = artifacts[0]
         remembered = self._remember(0, artifact, input_hash, config_hash)
-        self.project.metadata = {"id": metadata.id, "title": metadata.title,
-                                 "duration_seconds": metadata.duration_seconds,
-                                 "resolution": f"{metadata.width} × {metadata.height}"}
-        return StepResult(0, [remembered], metadata)
+        first = metadata_list[0]
+        self.project.metadata = {
+            "id": first.id if count == 1 else f"combined-{count}",
+            "title": first.title if count == 1 else f"Đã gộp {count} video",
+            "video_count": count,
+            "duration_seconds": sum(item.duration_seconds for item in metadata_list),
+            "resolution": f"{artifact.width} × {artifact.height}",
+        }
+        return StepResult(0, [remembered], {"videos": metadata_list})
 
     def _audio(self, progress: ProgressCallback) -> StepResult:
         video = self._previous_artifact(0)

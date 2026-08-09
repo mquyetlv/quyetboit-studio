@@ -1,6 +1,6 @@
 import pytest
 
-from quyetboit_studio.models import ProjectModel, VideoSource, detect_video_source
+from quyetboit_studio.models import ProjectModel, SourceMode, VideoSource, detect_video_source
 
 
 @pytest.mark.parametrize(
@@ -35,3 +35,21 @@ def test_project_requires_eight_steps():
     with pytest.raises(ValueError, match="8 bước"):
         ProjectModel.from_dict(data)
 
+
+def test_project_preserves_ordered_multi_source_urls_and_legacy_single_url():
+    legacy = ProjectModel(source_url="https://www.douyin.com/video/1")
+    assert legacy.selected_source_urls() == ["https://www.douyin.com/video/1"]
+
+    restored = ProjectModel.from_dict({
+        **legacy.to_dict(),
+        "source_mode": SourceMode.MULTI.value,
+        "source_urls": [
+            "https://www.douyin.com/video/2",
+            "https://www.douyin.com/video/1",
+            "https://www.douyin.com/video/2",
+        ],
+    })
+    assert restored.selected_source_urls() == [
+        "https://www.douyin.com/video/2",
+        "https://www.douyin.com/video/1",
+    ]

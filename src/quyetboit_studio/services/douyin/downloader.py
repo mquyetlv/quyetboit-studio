@@ -58,6 +58,21 @@ class VideoMetadata:
     filesize: int | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class SeriesEpisode:
+    id: str
+    title: str
+    duration_seconds: float
+    webpage_url: str
+
+
+@dataclass(slots=True, frozen=True)
+class SeriesMetadata:
+    id: str
+    title: str
+    episodes: tuple[SeriesEpisode, ...]
+
+
 class _YdlLogger:
     def debug(self, message: str) -> None:
         return None
@@ -113,6 +128,103 @@ class DouyinDownloader:
             raise
         except Exception as exc:
             raise self._download_error(exc) from exc
+        finally:
+            self._remove_temporary_cookie(temporary_cookie)
+
+    def resolve_series(
+        self, url: str, auth: tuple[str, str] | None = None,
+        cookies_file: str | Path | None = None,
+        cancel: CancellationToken | None = None,
+    ) -> SeriesMetadata:
+        """Resolve a collection URL or one episode into its ordered collection entries."""
+        url = validate_douyin_url(url)
+        options: dict[str, Any] = {
+            "quiet": True, "no_warnings": True, "noplaylist": True, "logger": _YdlLogger(),
+        }
+        temporary_cookie = self._apply_auth(options, auth, cookies_file)
+        try:
+            with self._factory()(options) as ydl:
+                if cancel:
+                    cancel.raise_if_cancelled()
+                mix_id = _mix_id_from_url(url)
+                detail: dict[str, Any] = {}
+                if not mix_id:
+                    info = ydl.extract_info(url, download=False)
+                    metadata = self._metadata(info)
+                    video_id = metadata.id
+                    extractor = ydl.get_info_extractor("Douyin")
+                    response = extractor._download_json(
+                        "https://www.douyin.com/aweme/v1/web/aweme/detail/", video_id,
+                        "Đang lấy thông tin series", query={"aweme_id": video_id},
+                    )
+                    detail = _mapping(response.get("aweme_detail") or response.get("aweme"))
+                    mix = _mapping(detail.get("mix_info") or detail.get("series_info"))
+                    mix_id = str(
+                        mix.get("mix_id") or mix.get("series_id")
+                        or detail.get("mix_id") or detail.get("series_id") or ""
+                    )
+                if not mix_id:
+                    raise PipelineError(
+                        "douyin_series_not_found",
+                        "Video này không thuộc Series/合集 trên Douyin.", provider="douyin",
+                    )
+
+                extractor = ydl.get_info_extractor("Douyin")
+                episodes: list[SeriesEpisode] = []
+                seen: set[str] = set()
+                cursor = 0
+                title = _series_title(detail)
+                received_list_payload = False
+                for _page in range(100):
+                    if cancel:
+                        cancel.raise_if_cancelled()
+                    response = extractor._download_json(
+                        "https://www.douyin.com/aweme/v1/web/mix/aweme/", mix_id,
+                        "Đang lấy danh sách tập",
+                        query=_series_query(mix_id, cursor),
+                    )
+                    raw_items = response.get("aweme_list")
+                    if raw_items is None:
+                        raw_items = response.get("items")
+                    if isinstance(raw_items, list):
+                        received_list_payload = True
+                        items = raw_items
+                    else:
+                        items = []
+                    for item in items:
+                        episode = _series_episode(item)
+                        if episode and episode.id not in seen:
+                            seen.add(episode.id)
+                            episodes.append(episode)
+                            if not title:
+                                title = _series_title(_mapping(item))
+                    if not response.get("has_more"):
+                        break
+                    next_cursor = int(response.get("cursor") or response.get("max_cursor") or 0)
+                    if next_cursor == cursor:
+                        break
+                    cursor = next_cursor
+                if not episodes:
+                    if not received_list_payload:
+                        raise PipelineError(
+                            "douyin_series_list_unavailable",
+                            "Douyin không trả danh sách tập cho Series này. Phiên hoặc cơ chế "
+                            "chống bot có thể đang chặn request; hãy thử lại sau.",
+                            provider="douyin", retryable=True,
+                        )
+                    raise PipelineError(
+                        "douyin_series_empty", "Không tìm thấy tập nào trong Series Douyin này.",
+                        provider="douyin", retryable=True,
+                    )
+                return SeriesMetadata(str(mix_id), title or f"Series {mix_id}", tuple(episodes))
+        except PipelineError:
+            raise
+        except Exception as exc:
+            raise PipelineError(
+                "douyin_series_failed",
+                "Không thể tải danh sách Series. Hãy kiểm tra cookie hoặc thử lại sau.",
+                provider="douyin", retryable=True, debug_detail=str(exc),
+            ) from exc
         finally:
             self._remove_temporary_cookie(temporary_cookie)
 
@@ -306,3 +418,45 @@ def convert_cookie_json_to_netscape(source: str | Path, destination: str | Path)
 
 def _cookie_field(value: Any) -> str:
     return str(value or "").replace("\t", "").replace("\r", "").replace("\n", "")
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _mix_id_from_url(url: str) -> str:
+    match = re.search(r"/(?:collection|mix)/(\d+)(?:/|$)", urlparse(url).path)
+    return match.group(1) if match else ""
+
+
+def _series_title(value: dict[str, Any]) -> str:
+    mix = _mapping(value.get("mix_info") or value.get("series_info"))
+    return str(
+        mix.get("mix_name") or mix.get("series_name") or mix.get("title")
+        or value.get("mix_name") or value.get("series_name") or ""
+    ).strip()[:300]
+
+
+def _series_episode(value: Any) -> SeriesEpisode | None:
+    item = _mapping(value)
+    episode_id = str(item.get("aweme_id") or item.get("id") or "").strip()
+    if not episode_id.isdigit():
+        return None
+    raw_duration = float(item.get("duration") or _mapping(item.get("video")).get("duration") or 0)
+    duration = raw_duration / 1000 if raw_duration > 1000 else raw_duration
+    title = re.sub(
+        r"[\x00-\x1f]+", " ", str(item.get("desc") or item.get("title") or f"Tập {episode_id}"),
+    ).strip()[:300]
+    return SeriesEpisode(
+        episode_id, title, duration, f"https://www.douyin.com/video/{episode_id}",
+    )
+
+
+def _series_query(mix_id: str, cursor: int) -> dict[str, Any]:
+    """Keep volatile Douyin web constants centralized for contract updates."""
+    return {
+        "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
+        "pc_client_type": "1", "version_code": "290100", "version_name": "29.1.0",
+        "cookie_enabled": "true", "browser_platform": "Win32", "platform": "PC",
+        "mix_id": mix_id, "cursor": cursor, "count": 50,
+    }

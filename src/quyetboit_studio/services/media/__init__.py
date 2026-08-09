@@ -4,11 +4,12 @@ from .ffmpeg import (
     FilterGraphBuilder,
     MediaProbe,
     TimelineAudioAssembler,
+    VideoConcatenator,
     VideoRenderer,
     atempo_chain,
 )
 
 __all__ = [
     "AudioProcessor", "FFmpegRunner", "FilterGraphBuilder", "MediaProbe",
-    "TimelineAudioAssembler", "VideoRenderer", "atempo_chain",
+    "TimelineAudioAssembler", "VideoConcatenator", "VideoRenderer", "atempo_chain",
 ]

@@ -191,6 +191,87 @@ class FFmpegRunner:
                 process.kill()
 
 
+class VideoConcatenator:
+    """Normalize and concatenate downloaded videos into one validated source artifact."""
+
+    def __init__(self, runner: FFmpegRunner | None = None) -> None:
+        self.runner = runner or FFmpegRunner()
+
+    def concatenate(
+        self, videos: Iterable[VideoArtifact], output: str | Path, *,
+        progress: ProgressCallback | None = None, cancel: CancellationToken | None = None,
+    ) -> VideoArtifact:
+        sources = list(videos)
+        if not sources:
+            raise PipelineError("concat_empty", "Không có video để gộp.", provider="ffmpeg")
+        if len(sources) == 1:
+            return sources[0]
+        target = Path(output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(f".{target.stem}.partial{target.suffix}")
+        script = target.parent / f".{target.stem}.concat-filters.txt"
+        width = max(2, int(sources[0].width or 1920)) // 2 * 2
+        height = max(2, int(sources[0].height or 1080)) // 2 * 2
+        fps = max(1.0, float(sources[0].fps or 30))
+        filters: list[str] = []
+        labels: list[str] = []
+        for index, video in enumerate(sources):
+            filters.append(
+                f"[{index}:v:0]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,"
+                f"fps={fps:.8g},format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
+            )
+            info = self.runner.probe.inspect(video.path)
+            has_audio = any(
+                stream.get("codec_type") == "audio" for stream in info.get("streams", [])
+            )
+            if has_audio:
+                filters.append(
+                    f"[{index}:a:0]aresample=48000,"
+                    "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                    f"asetpts=PTS-STARTPTS[a{index}]"
+                )
+            else:
+                filters.append(
+                    f"anullsrc=r=48000:cl=stereo,atrim=duration={video.duration_ms / 1000:.6f}"
+                    f",asetpts=PTS-STARTPTS[a{index}]"
+                )
+            labels.append(f"[v{index}][a{index}]")
+        filters.append(
+            f"{''.join(labels)}concat=n={len(sources)}:v=1:a=1[vout][aout]"
+        )
+        script.write_text(";".join(filters), encoding="utf-8")
+        preflight = self.runner.preflight()
+        encoder = preflight.get("encoder") or "libx264"
+        args: list[str] = []
+        for video in sources:
+            args += ["-i", str(video.path)]
+        args += [
+            "-filter_complex_script", str(script), "-map", "[vout]", "-map", "[aout]",
+            "-c:v", encoder, "-c:a", "aac", "-movflags", "+faststart", str(partial),
+        ]
+        duration_ms = sum(video.duration_ms for video in sources)
+        try:
+            try:
+                self.runner.run(
+                    args, duration_ms=duration_ms, progress=progress, cancel=cancel, step=0,
+                )
+            except PipelineError:
+                if encoder == "libx264":
+                    raise
+                args[args.index(encoder)] = "libx264"
+                self.runner.run(
+                    args, duration_ms=duration_ms, progress=progress, cancel=cancel, step=0,
+                )
+            result = self.runner.probe.video_artifact(partial)
+            os.replace(partial, target)
+            result.path = target
+            result.metadata["source_count"] = len(sources)
+            return result.refresh()
+        finally:
+            script.unlink(missing_ok=True)
+
+
 @dataclass(slots=True, frozen=True)
 class SplitConfig:
     target_seconds: int = 240

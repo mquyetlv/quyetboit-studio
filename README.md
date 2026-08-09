@@ -39,6 +39,14 @@ JSON được lọc chỉ giữ domain Douyin, chuyển sang Netscape trong file
 gọi yt-dlp. Chỉ đường dẫn file gốc được giữ trong Credential Manager để lần sau tự nạp lại; nội
 dung cookie không được chép vào project, autosave hoặc workspace.
 
+Tại **Bước 1 — Nhập video**, ứng dụng có ba chế độ:
+
+- **Tải từng tập**: xử lý một link Douyin như trước đây.
+- **Tải Theo Series**: dán link một tập thuộc Series/合集 hoặc link `/collection|mix/<id>`, tải danh sách rồi chọn các tập cần xử lý. Douyin dùng API web private nên thao tác này có thể yêu cầu cookie còn hạn.
+- **Tải nhiều Videos**: dán ít nhất hai link, mỗi dòng một link. Ứng dụng tải theo thứ tự đã nhập, dùng FFmpeg chuẩn hóa hình/âm thanh rồi nối thành một video nguồn trước khi sang bước tách audio.
+
+Danh sách link và chế độ nguồn được lưu trong project. Project cũ chỉ có `source_url` tiếp tục mở ở chế độ **Tải từng tập**.
+
 ## Workspace và resume
 
 Project chưa lưu dùng `%LOCALAPPDATA%/QuyetBoITStudio/workspaces/<project_uuid>`. Artifact của

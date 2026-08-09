@@ -12,6 +12,12 @@ class VideoSource(StrEnum):
     BILIBILI = "bilibili"
 
 
+class SourceMode(StrEnum):
+    SINGLE = "single"
+    SERIES = "series"
+    MULTI = "multi"
+
+
 class SrtProvider(StrEnum):
     CAPCUT = "CapCut API"
     CAPCUT_CN = "CapCut CN API"
@@ -75,6 +81,8 @@ class ProjectModel:
     project_uuid: str = field(default_factory=lambda: str(uuid4()))
     name: str = "Dự án chưa đặt tên"
     source_url: str = ""
+    source_mode: str = SourceMode.SINGLE.value
+    source_urls: list[str] = field(default_factory=list)
     source: str = ""
     srt_provider: str = SrtProvider.CAPCUT.value
     translation_provider: str = TranslationProvider.GEMINI_API.value
@@ -138,6 +146,9 @@ class ProjectModel:
         project = cls(**clean)
         if len(project.step_statuses) != 8:
             raise ValueError("Project phải có trạng thái cho đúng 8 bước.")
+        if project.source_mode not in {mode.value for mode in SourceMode}:
+            project.source_mode = SourceMode.SINGLE.value
+        project.source_urls = [str(url).strip() for url in project.source_urls if str(url).strip()]
         return project
 
     @classmethod
@@ -152,6 +163,22 @@ class ProjectModel:
         ):
             migrated.setdefault(name, getattr(defaults, name))
         return migrated
+
+    def selected_source_urls(self) -> list[str]:
+        """Return ordered, de-duplicated inputs while preserving legacy projects."""
+        candidates = (
+            self.source_urls
+            if self.source_mode in {SourceMode.SERIES.value, SourceMode.MULTI.value}
+            else [self.source_url]
+        )
+        output: list[str] = []
+        seen: set[str] = set()
+        for value in candidates:
+            url = str(value).strip()
+            if url and url not in seen:
+                seen.add(url)
+                output.append(url)
+        return output
 
 
 def detect_video_source(url: str) -> VideoSource:

@@ -22,11 +22,11 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ### Tiến độ cập nhật ngày 2026-08-04
 
-- Hoàn thành: **132/182 task (72,5%)**.
-- Đang làm/đã có một phần: **39 task (21,4%)**.
-- Chưa triển khai: **8 task (4,4%)**.
-- Chờ credential/live test hoặc nghiệm thu: **3 task (1,6%)**.
-- Unit/lint hiện tại: **67 test pass**, Ruff pass.
+- Hoàn thành: **134/185 task (72,4%)**.
+- Đang làm/đã có một phần: **39 task (21,1%)**.
+- Chưa triển khai: **8 task (4,3%)**.
+- Chờ credential/live test hoặc nghiệm thu: **4 task (2,2%)**.
+- Unit/lint hiện tại: **73 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -97,6 +97,9 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Dùng yt-dlp Python API thay vì parse stdout; dùng logger và `progress_hooks` để cập nhật tốc độ, bytes, ETA và phần trăm. Cách nhúng này được yt-dlp hỗ trợ chính thức trong [README](https://github.com/yt-dlp/yt-dlp/blob/master/README.md).
 - [x] Cho chọn Chrome hoặc Edge và profile; không copy/export toàn bộ cookie sang project. Đã hỗ trợ thêm JSON cookie export chuyển tạm sang Netscape.
 - [x] Profile tải mặc định: `bestvideo*+bestaudio/best`, merge/remux MP4, không playlist, không re-encode tại bước tải.
+- [x] Chia UI bước 1 thành ba tab `Tải từng tập`, `Tải Theo Series` và `Tải nhiều Videos`; lưu/khôi phục mode cùng danh sách URL mà không phá project v1/v2.
+- [!] Với link một tập hoặc `/collection|mix/<id>`, resolve `mix_info`, phân trang danh sách Series, dedupe nhưng giữ thứ tự và cho chọn tập. Unit test parser/phân trang đã qua; cần cookie/live test Douyin để nghiệm thu contract API private hiện tại.
+- [x] Chế độ nhiều link tải đúng thứ tự rồi dùng FFmpeg chuẩn hóa resolution/FPS/audio và nối thành một video nguồn `.partial`; integration test hai clip khác tỷ lệ đã thoát process, đạt output ffprobe hợp lệ và không để file tạm.
 - [-] Trước khi tải, gọi `extract_info(download=False)`, sanitize metadata và hiển thị tiêu đề, duration, format, kích thước dự kiến. Probe/sanitize đã có; UI metadata trước download chưa đầy đủ.
 - [x] Tên file dùng video ID/hash, không dùng trực tiếp tiêu đề chưa sanitize.
 - [x] Sau tải chạy ffprobe, xác nhận có video stream, duration > 0 và file đọc được.

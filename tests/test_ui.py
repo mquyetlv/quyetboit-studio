@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QFileDialog
 
 from quyetboit_studio.core.preferences import LastUsedSettingsStore
 from quyetboit_studio.main_window import MainWindow
-from quyetboit_studio.models import ProjectModel
+from quyetboit_studio.models import ProjectModel, SourceMode
 from quyetboit_studio.services.capcut import Voice
 from quyetboit_studio.studio import StudioDialog
 from quyetboit_studio.vietsub import VoiceCatalogDialog
@@ -27,6 +27,29 @@ def test_vietsub_has_eight_steps(qtbot, tmp_path):
     assert window.vietsub.stack.count() == 8
     assert len(window.vietsub.step_rows) == 8
     assert window.vietsub.run_all_btn.text() == "▶ Chạy tất cả các bước"
+
+
+def test_source_step_has_three_download_modes_and_restores_multi_links(qtbot, tmp_path):
+    project = ProjectModel(
+        source_mode=SourceMode.MULTI.value,
+        source_urls=[
+            "https://www.douyin.com/video/1",
+            "https://www.douyin.com/video/2",
+        ],
+    )
+    window = MainWindow(LastUsedSettingsStore(tmp_path / "settings.json"))
+    qtbot.addWidget(window)
+    window.project = project
+    window.vietsub.set_project(project)
+    source = window.vietsub.pages[0]
+
+    assert source.tabs.count() == 3
+    assert [source.tabs.tabText(index) for index in range(3)] == [
+        "Tải từng tập", "Tải Theo Series", "Tải nhiều Videos",
+    ]
+    assert source.tabs.currentIndex() == 2
+    assert source.multi_urls.toPlainText().splitlines() == project.source_urls
+    assert source.analyze() is True
 
 
 def test_custom_context_validation_state(qtbot, tmp_path):

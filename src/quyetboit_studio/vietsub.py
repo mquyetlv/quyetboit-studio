@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +40,7 @@ from .core.preferences import LastUsedSettingsStore
 from .models import (
     STEP_TITLES,
     ProjectModel,
+    SourceMode,
     SrtProvider,
     TranslationContext,
     TranslationProvider,
@@ -48,6 +50,7 @@ from .models import (
 )
 from .pipeline import PipelineDependencies, VietSubPipeline
 from .services.capcut import CapCutTtsService, Voice
+from .services.douyin import DouyinDownloader, SeriesMetadata
 from .studio import StudioDialog
 from .widgets import Badge, Card, LogPanel
 from .workflow import WorkflowController
@@ -279,8 +282,16 @@ class BaseStep(QWidget):
 
 
 class SourceStep(BaseStep):
-    def __init__(self, project: ProjectModel) -> None:
-        super().__init__(project, "1. Nhập video", "Dán link video; nguồn được nhận diện tự động theo domain.")
+    def __init__(
+        self, project: ProjectModel, downloader: DouyinDownloader | None = None,
+    ) -> None:
+        super().__init__(
+            project, "1. Nhập video",
+            "Chọn tải một tập, toàn bộ Series hoặc gộp nhiều link thành một video nguồn.",
+        )
+        self.downloader = downloader or DouyinDownloader()
+        self._tasks: list[ServiceTaskThread] = []
+        self._loading_series = False
         if not project.__dict__.get("_douyin_cookies_file"):
             saved_cookie_path = ""
             try:
@@ -290,12 +301,24 @@ class SourceStep(BaseStep):
                 saved_cookie_path = ""
             if saved_cookie_path and Path(saved_cookie_path).is_file():
                 project.__dict__["_douyin_cookies_file"] = saved_cookie_path
+
         card = Card("Nguồn video")
-        row = QHBoxLayout(); self.url = QLineEdit(project.source_url); self.url.setPlaceholderText("https://www.douyin.com/video/...")
-        paste = button("Dán"); clear = button("Xóa"); analyze = button("Phân tích", True)
-        paste.clicked.connect(self._paste); clear.clicked.connect(self.url.clear); analyze.clicked.connect(self.analyze)
-        row.addWidget(self.url, 1); row.addWidget(paste); row.addWidget(clear); row.addWidget(analyze); card.layout.addLayout(row)
-        self.validation = QLabel("Hỗ trợ Douyin, Xiaohongshu và Bilibili"); self.validation.setObjectName("Subtitle")
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._single_tab(), "Tải từng tập")
+        self.tabs.addTab(self._series_tab(), "Tải Theo Series")
+        self.tabs.addTab(self._multi_tab(), "Tải nhiều Videos")
+        for index, mode in enumerate(SourceMode):
+            self.tabs.tabBar().setTabData(index, mode.value)
+        mode_index = next(
+            (index for index in range(self.tabs.count())
+             if self.tabs.tabBar().tabData(index) == project.source_mode),
+            -1,
+        )
+        self.tabs.setCurrentIndex(max(mode_index, 0))
+        self.tabs.currentChanged.connect(self._source_mode_changed)
+        card.layout.addWidget(self.tabs)
+        self.validation = QLabel("Pipeline hiện hỗ trợ nguồn Douyin")
+        self.validation.setObjectName("Subtitle")
         card.layout.addWidget(self.validation)
         auth_row = QHBoxLayout()
         auth = button("Cookie / profile trình duyệt"); auth.clicked.connect(self.configure_auth)
@@ -303,15 +326,171 @@ class SourceStep(BaseStep):
         auth_row.addWidget(auth); auth_row.addWidget(self.auth_status, 1)
         card.layout.addLayout(auth_row); self.content.addWidget(card)
         self._refresh_auth_status()
-        self.meta = Card("Thông tin video", "Metadata đầy đủ sẽ được yt-dlp xác nhận khi chạy bước tải.")
+        self.meta = Card(
+            "Thông tin video", "Metadata đầy đủ sẽ được yt-dlp xác nhận khi chạy bước tải.",
+        )
         self.meta_grid = QGridLayout(); self.meta.layout.addLayout(self.meta_grid); self.content.addWidget(self.meta)
-        download = button("Sẵn sàng tải", True); download.clicked.connect(lambda: self.changed.emit())
+        download = button("Sẵn sàng tải", True); download.clicked.connect(self.analyze)
         self.meta.layout.addWidget(download, 0, Qt.AlignmentFlag.AlignRight)
-        if project.metadata: self._show_metadata(project.metadata)
+        if project.metadata:
+            self._show_metadata(project.metadata)
 
-    def _paste(self) -> None:
+    def _single_tab(self) -> QWidget:
+        page = QWidget(); row = QHBoxLayout(page); row.setContentsMargins(8, 10, 8, 10)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.url = QLineEdit(self.project.source_url)
+        self.url.setPlaceholderText("https://www.douyin.com/video/...")
+        paste = button("Dán"); clear = button("Xóa")
+        paste.clicked.connect(lambda: self._paste_to(self.url)); clear.clicked.connect(self.url.clear)
+        row.addWidget(self.url, 1); row.addWidget(paste); row.addWidget(clear)
+        return page
+
+    def _series_tab(self) -> QWidget:
+        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(8, 10, 8, 10)
+        row = QHBoxLayout()
+        self.series_url = QLineEdit(self.project.source_url if self.project.source_mode == SourceMode.SERIES else "")
+        self.series_url.setPlaceholderText("Link một tập hoặc https://www.douyin.com/collection/...")
+        paste = button("Dán"); self.load_series_btn = button("Tải danh sách tập", True)
+        paste.clicked.connect(lambda: self._paste_to(self.series_url))
+        self.load_series_btn.clicked.connect(self._load_series)
+        row.addWidget(self.series_url, 1); row.addWidget(paste); row.addWidget(self.load_series_btn)
+        layout.addLayout(row)
+        self.series_status = QLabel("Dán link một tập thuộc Series/合集 rồi tải danh sách.")
+        self.series_status.setObjectName("Subtitle"); layout.addWidget(self.series_status)
+        self.series_table = QTableWidget(0, 4)
+        self.series_table.setHorizontalHeaderLabels(["Chọn", "Tập", "Tiêu đề", "Thời lượng"])
+        self.series_table.verticalHeader().setVisible(False)
+        self.series_table.horizontalHeader().setStretchLastSection(True)
+        self.series_table.itemChanged.connect(self._series_selection_changed)
+        layout.addWidget(self.series_table)
+        if self.project.source_mode == SourceMode.SERIES and self.project.source_urls:
+            self._populate_saved_series(self.project.source_urls)
+        return page
+
+    def _multi_tab(self) -> QWidget:
+        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(8, 10, 8, 10)
+        note = QLabel("Mỗi dòng một link. Video sẽ được tải và nối theo đúng thứ tự bên dưới.")
+        note.setObjectName("Subtitle"); layout.addWidget(note)
+        initial = self.project.source_urls if self.project.source_mode == SourceMode.MULTI else []
+        self.multi_urls = QPlainTextEdit("\n".join(initial))
+        self.multi_urls.setPlaceholderText(
+            "https://www.douyin.com/video/...\nhttps://www.douyin.com/video/..."
+        )
+        layout.addWidget(self.multi_urls)
+        paste = button("Dán danh sách từ clipboard")
+        paste.clicked.connect(lambda: self._paste_to(self.multi_urls))
+        layout.addWidget(paste, 0, Qt.AlignmentFlag.AlignRight)
+        return page
+
+    @staticmethod
+    def _paste_to(target: QWidget) -> None:
         from PySide6.QtWidgets import QApplication
-        self.url.setText(QApplication.clipboard().text())
+        text = QApplication.clipboard().text()
+        if isinstance(target, QLineEdit):
+            target.setText(text)
+        elif isinstance(target, QPlainTextEdit):
+            target.setPlainText(text)
+
+    def _source_mode_changed(self, index: int) -> None:
+        mode = str(self.tabs.tabBar().tabData(index) or SourceMode.SINGLE.value)
+        if self.project.source_mode != mode:
+            self.project.source_mode = mode
+            self.changed.emit()
+
+    def _load_series(self) -> None:
+        url = self.series_url.text().strip()
+        try:
+            if detect_video_source(url) is not VideoSource.DOUYIN:
+                raise ValueError("Series hiện chỉ hỗ trợ Douyin.")
+        except ValueError as exc:
+            self.series_status.setText(str(exc)); self.series_status.setStyleSheet("color:#b42318;")
+            return
+        self.load_series_btn.setEnabled(False)
+        self.series_status.setText("Đang tải danh sách tập từ Douyin…")
+        self.series_status.setStyleSheet("")
+        cookie_file = self.project.__dict__.get("_douyin_cookies_file")
+        task = ServiceTaskThread(
+            lambda: self.downloader.resolve_series(
+                url, (self.project.browser, self.project.browser_profile), cookie_file,
+            ),
+            self,
+        )
+        self._tasks.append(task)
+        task.succeeded.connect(self._series_loaded)
+        task.failed.connect(self._series_failed)
+        task.finished.connect(lambda: self._finish_series_task(task))
+        task.start()
+
+    def _finish_series_task(self, task: ServiceTaskThread) -> None:
+        if task in self._tasks:
+            self._tasks.remove(task)
+        task.deleteLater()
+        self.load_series_btn.setEnabled(not self._tasks)
+
+    def _series_loaded(self, value: object) -> None:
+        series = value if isinstance(value, SeriesMetadata) else None
+        if series is None:
+            self._series_failed("Dữ liệu Series trả về không hợp lệ.")
+            return
+        self._loading_series = True
+        try:
+            self.series_table.setRowCount(len(series.episodes))
+            for row, episode in enumerate(series.episodes):
+                selected = QTableWidgetItem()
+                selected.setFlags(selected.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                selected.setCheckState(Qt.CheckState.Checked)
+                selected.setData(Qt.ItemDataRole.UserRole, episode.webpage_url)
+                self.series_table.setItem(row, 0, selected)
+                self.series_table.setItem(row, 1, QTableWidgetItem(str(row + 1)))
+                self.series_table.setItem(row, 2, QTableWidgetItem(episode.title))
+                duration = f"{round(episode.duration_seconds)} giây" if episode.duration_seconds else "—"
+                self.series_table.setItem(row, 3, QTableWidgetItem(duration))
+        finally:
+            self._loading_series = False
+        self.series_status.setText(f"{series.title} · {len(series.episodes)} tập")
+        self.series_status.setStyleSheet("color:#027a48;")
+        self.project.source_mode = SourceMode.SERIES.value
+        self.project.source_url = self.series_url.text().strip()
+        self.project.source_urls = [episode.webpage_url for episode in series.episodes]
+        self.project.source = VideoSource.DOUYIN.value
+        self.changed.emit()
+
+    def _series_failed(self, message: str) -> None:
+        self.series_status.setText(message)
+        self.series_status.setStyleSheet("color:#b42318;")
+
+    def _populate_saved_series(self, urls: list[str]) -> None:
+        self._loading_series = True
+        try:
+            self.series_table.setRowCount(len(urls))
+            for row, url in enumerate(urls):
+                selected = QTableWidgetItem()
+                selected.setFlags(selected.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                selected.setCheckState(Qt.CheckState.Checked)
+                selected.setData(Qt.ItemDataRole.UserRole, url)
+                self.series_table.setItem(row, 0, selected)
+                self.series_table.setItem(row, 1, QTableWidgetItem(str(row + 1)))
+                self.series_table.setItem(row, 2, QTableWidgetItem("Tập đã lưu trong project"))
+                self.series_table.setItem(row, 3, QTableWidgetItem("—"))
+        finally:
+            self._loading_series = False
+        self.series_status.setText(f"Đã khôi phục {len(urls)} tập từ project")
+
+    def _selected_series_urls(self) -> list[str]:
+        output: list[str] = []
+        for row in range(self.series_table.rowCount()):
+            item = self.series_table.item(row, 0)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                url = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+                if url:
+                    output.append(url)
+        return output
+
+    def _series_selection_changed(self, item: QTableWidgetItem) -> None:
+        if self._loading_series or item.column() != 0:
+            return
+        self.project.source_urls = self._selected_series_urls()
+        self.changed.emit()
 
     def configure_auth(self) -> None:
         browser = QComboBox(); browser.addItems(["chrome", "edge"]); browser.setCurrentText(self.project.browser)
@@ -361,25 +540,67 @@ class SourceStep(BaseStep):
         self.auth_status.setText(f"{self.project.browser}: {self.project.browser_profile}{suffix}")
 
     def analyze(self) -> bool:
-        previous = (self.project.source_url, self.project.source)
+        mode = str(
+            self.tabs.tabBar().tabData(self.tabs.currentIndex()) or SourceMode.SINGLE.value
+        )
+        if mode == SourceMode.SINGLE.value:
+            seed_url = self.url.text().strip()
+            urls = [seed_url] if seed_url else []
+        elif mode == SourceMode.SERIES.value:
+            seed_url = self.series_url.text().strip()
+            urls = self._selected_series_urls()
+            if not urls:
+                self.validation.setText("Hãy tải danh sách Series và chọn ít nhất một tập.")
+                self.validation.setStyleSheet("color:#b42318;")
+                return False
+        else:
+            seed_url = ""
+            urls = [line.strip() for line in self.multi_urls.toPlainText().splitlines() if line.strip()]
+            urls = list(dict.fromkeys(urls))
+            if len(urls) < 2:
+                self.validation.setText("Chế độ Tải nhiều Videos cần ít nhất hai link.")
+                self.validation.setStyleSheet("color:#b42318;")
+                return False
+        if not urls:
+            self.validation.setText("Hãy nhập link video Douyin.")
+            self.validation.setStyleSheet("color:#b42318;")
+            return False
         try:
-            source = detect_video_source(self.url.text())
+            sources = [detect_video_source(url) for url in urls]
+            if seed_url:
+                detect_video_source(seed_url)
         except ValueError as exc:
             self.validation.setText(str(exc)); self.validation.setStyleSheet("color:#b42318;")
             return False
-        names = {VideoSource.DOUYIN: "Douyin", VideoSource.XIAOHONGSHU: "Xiaohongshu", VideoSource.BILIBILI: "Bilibili"}
-        self.project.source_url = self.url.text().strip(); self.project.source = source.value
-        if source is not VideoSource.DOUYIN:
-            self.validation.setText(f"{names[source]} chưa được hỗ trợ trong pipeline thật; hiện chỉ hỗ trợ Douyin.")
+        if any(source is not VideoSource.DOUYIN for source in sources):
+            self.validation.setText("Pipeline thật hiện chỉ hỗ trợ các link Douyin.")
             self.validation.setStyleSheet("color:#b54708;")
-            if previous != (self.project.source_url, self.project.source):
-                self.changed.emit()
             return False
-        self.project.metadata = {"Nền tảng": names[source], "URL": self.project.source_url,
-                                 "Trạng thái": "Sẵn sàng probe bằng yt-dlp"}
-        self.validation.setText(f"✓ URL hợp lệ · Nguồn: {names[source]}"); self.validation.setStyleSheet("color:#027a48;")
+        previous = (
+            self.project.source_mode, self.project.source_url,
+            tuple(self.project.source_urls), self.project.source,
+        )
+        self.project.source_mode = mode
+        self.project.source_url = seed_url or urls[0]
+        self.project.source_urls = [] if mode == SourceMode.SINGLE.value else urls
+        self.project.source = VideoSource.DOUYIN.value
+        labels = {
+            SourceMode.SINGLE.value: "Tải từng tập",
+            SourceMode.SERIES.value: "Tải Theo Series",
+            SourceMode.MULTI.value: "Tải nhiều Videos và gộp",
+        }
+        self.project.metadata = {
+            "Nền tảng": "Douyin", "Chế độ": labels[mode], "Số video": len(urls),
+            "Trạng thái": "Sẵn sàng probe bằng yt-dlp",
+        }
+        self.validation.setText(f"✓ {len(urls)} link Douyin hợp lệ · {labels[mode]}")
+        self.validation.setStyleSheet("color:#027a48;")
         self._show_metadata(self.project.metadata)
-        if previous != (self.project.source_url, self.project.source):
+        current = (
+            self.project.source_mode, self.project.source_url,
+            tuple(self.project.source_urls), self.project.source,
+        )
+        if previous != current:
             self.changed.emit()
         return True
 
@@ -726,12 +947,13 @@ class VietSubPage(QWidget):
         while self.stack.count(): self.stack.removeWidget(self.stack.widget(0))
         for row in self.step_rows: row.deleteLater()
         self.step_rows.clear()
-        self.pages = [SourceStep(project), AudioSplitStep(project), SrtStep(project), TranslateStep(project), TtsStep(project), MixStep(project), StudioStep(project), ExportStep(project)]
+        dependencies = PipelineDependencies()
+        self.pages = [SourceStep(project, dependencies.downloader), AudioSplitStep(project), SrtStep(project), TranslateStep(project), TtsStep(project), MixStep(project), StudioStep(project), ExportStep(project)]
         for i, page in enumerate(self.pages):
             self.stack.addWidget(page)
             row = StepRow(i, STEP_TITLES[i], project.step_statuses[i]); row.clicked.connect(self.select_step); self.step_rows.append(row); self.step_panel.layout.insertWidget(i + 1, row)
         self.pages[2].session_changed.connect(self._capcut_session_changed)
-        pipeline = VietSubPipeline(project, dependencies=PipelineDependencies())
+        pipeline = VietSubPipeline(project, dependencies=dependencies)
         self._configure_services(pipeline)
         self.controller = WorkflowController(project, pipeline); self._connect_controller(); self.select_step(0)
         for index, page in enumerate(self.pages):

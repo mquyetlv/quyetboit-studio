@@ -12,12 +12,14 @@ from quyetboit_studio.core import (
     AudioChunk,
     PartialFailureError,
     PipelineError,
+    ProgressEvent,
     SrtCue,
+    VideoArtifact,
 )
 from quyetboit_studio.core.models import stable_hash
 from quyetboit_studio.core.retry import RetryPolicy
-from quyetboit_studio.models import ProjectModel
-from quyetboit_studio.pipeline import VietSubPipeline
+from quyetboit_studio.models import ProjectModel, SourceMode
+from quyetboit_studio.pipeline import PipelineDependencies, VietSubPipeline
 from quyetboit_studio.pipeline.vietsub import studio_config_hash
 from quyetboit_studio.services.capcut import (
     AwsV4Signer,
@@ -29,11 +31,18 @@ from quyetboit_studio.services.capcut import (
     xor5_hex,
 )
 from quyetboit_studio.services.douyin import (
+    DouyinDownloader,
+    VideoMetadata,
     convert_cookie_json_to_netscape,
     resolve_browser_profile,
     validate_douyin_url,
 )
-from quyetboit_studio.services.media import AudioProcessor, atempo_chain
+from quyetboit_studio.services.media import (
+    AudioProcessor,
+    FFmpegRunner,
+    VideoConcatenator,
+    atempo_chain,
+)
 from quyetboit_studio.services.media.ffmpeg import SplitConfig
 from quyetboit_studio.services.subtitles import (
     find_untranslated,
@@ -86,6 +95,174 @@ def test_cookie_extension_json_converts_to_netscape_and_filters_domains(tmp_path
     assert "#HttpOnly_.douyin.com" in converted
     assert "sessionid\tsecret" in converted
     assert "evil.test" not in converted
+
+
+def test_douyin_series_resolves_mix_from_episode_and_paginates_in_order():
+    class FakeExtractor:
+        def _download_json(self, endpoint, _video_id, _message, query):
+            if endpoint.endswith("/aweme/detail/"):
+                return {"aweme_detail": {"mix_info": {
+                    "mix_id": "900", "mix_name": "Bộ phim",
+                }}}
+            if query["cursor"] == 0:
+                return {
+                    "aweme_list": [
+                        {"aweme_id": "101", "desc": "Tập 1", "duration": 12_000},
+                        {"aweme_id": "102", "desc": "Tập 2", "duration": 13_000},
+                    ],
+                    "has_more": True, "cursor": 2,
+                }
+            return {
+                "aweme_list": [
+                    {"aweme_id": "102", "desc": "Tập 2 trùng", "duration": 13_000},
+                    {"aweme_id": "103", "desc": "Tập 3", "duration": 14_000},
+                ],
+                "has_more": False,
+            }
+
+    class FakeYdl:
+        def __init__(self, _options):
+            self.extractor = FakeExtractor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def extract_info(self, _url, download=False):
+            assert download is False
+            return {
+                "id": "102", "title": "Tập 2", "duration": 13,
+                "webpage_url": "https://www.douyin.com/video/102",
+            }
+
+        def get_info_extractor(self, name):
+            assert name == "Douyin"
+            return self.extractor
+
+    series = DouyinDownloader(ydl_factory=FakeYdl).resolve_series(
+        "https://www.douyin.com/video/102",
+    )
+
+    assert series.id == "900"
+    assert series.title == "Bộ phim"
+    assert [episode.id for episode in series.episodes] == ["101", "102", "103"]
+    assert series.episodes[0].duration_seconds == 12
+
+
+def test_douyin_series_null_list_reports_provider_block_not_empty_series():
+    class FakeExtractor:
+        def _download_json(self, *_args, **_kwargs):
+            return {"status_code": 0, "aweme_list": None}
+
+    class FakeYdl:
+        def __init__(self, _options):
+            self.extractor = FakeExtractor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_info_extractor(self, name):
+            assert name == "Douyin"
+            return self.extractor
+
+    with pytest.raises(PipelineError) as captured:
+        DouyinDownloader(ydl_factory=FakeYdl).resolve_series(
+            "https://www.douyin.com/collection/7651800697272272931",
+        )
+
+    assert captured.value.error_code == "douyin_series_list_unavailable"
+    assert "không trả danh sách tập" in captured.value.user_message
+
+
+def test_multi_source_pipeline_downloads_in_order_and_concatenates(tmp_path):
+    class FakeDownloader:
+        def probe(self, url, _auth, _cookies):
+            video_id = url.rsplit("/", 1)[-1]
+            return VideoMetadata(
+                video_id, f"Video {video_id}", 1,
+                f"https://www.douyin.com/video/{video_id}",
+            )
+
+        def download(self, request, progress, _cancel):
+            video_id = request.url.rsplit("/", 1)[-1]
+            path = request.directory / f"{video_id}.mp4"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(video_id.encode())
+            progress(ProgressEvent(0, 1, "done"))
+            return VideoArtifact(
+                path, duration_ms=1000, width=1080, height=1920, fps=30,
+            ).refresh()
+
+    class FakeConcatenator:
+        def __init__(self):
+            self.ids = []
+
+        def concatenate(self, videos, output, *, progress, cancel):
+            self.ids = [video.path.stem for video in videos]
+            output.write_bytes(b"combined")
+            progress(ProgressEvent(0, 1, "combined"))
+            return VideoArtifact(
+                output, duration_ms=2000, width=1080, height=1920, fps=30,
+            ).refresh()
+
+    concatenator = FakeConcatenator()
+    project = ProjectModel(
+        source_mode=SourceMode.MULTI.value,
+        source_urls=[
+            "https://www.douyin.com/video/2",
+            "https://www.douyin.com/video/1",
+        ],
+        workspace_path=str(tmp_path),
+    )
+    pipeline = VietSubPipeline(
+        project, workspace=tmp_path,
+        dependencies=PipelineDependencies(
+            downloader=FakeDownloader(),  # type: ignore[arg-type]
+            concatenator=concatenator,  # type: ignore[arg-type]
+        ),
+    )
+    result = pipeline.run_step(0)
+
+    assert concatenator.ids == ["2", "1"]
+    assert result.artifacts[0].path.name == "combined.mp4"
+    assert project.metadata["video_count"] == 2
+
+
+def test_video_concatenator_normalizes_and_validates_real_ffmpeg_output(tmp_path, monkeypatch):
+    runner = FFmpegRunner()
+    try:
+        runner.preflight()
+    except PipelineError:
+        pytest.skip("FFmpeg/ffprobe không có trong PATH")
+    monkeypatch.setattr(
+        runner, "preflight", lambda: {"encoder": "libx264", "rubberband": False},
+    )
+    inputs = []
+    for index, size in enumerate(("320x240", "240x320")):
+        path = tmp_path / f"input-{index}.mp4"
+        runner.run([
+            "-f", "lavfi", "-i", f"color=c=black:s={size}:d=0.45",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=0.45",
+            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            str(path),
+        ])
+        inputs.append(runner.probe.video_artifact(path))
+
+    output = tmp_path / "combined.mp4"
+    combined = VideoConcatenator(runner).concatenate(inputs, output)
+
+    assert combined.path == output
+    assert combined.width == 320
+    assert combined.height == 240
+    assert combined.duration_ms >= 800
+    assert combined.metadata["source_count"] == 2
+    assert not (tmp_path / ".combined.partial.mp4").exists()
+    assert not (tmp_path / ".combined.concat-filters.txt").exists()
 
 
 def test_srt_roundtrip_merge_overlap_and_validation():

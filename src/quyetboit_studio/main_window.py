@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .core.preferences import LastUsedSettingsStore
+from .english import EnglishPlaceholderPage
 from .persistence import ProjectStore
 from .vietsub import VietSubPage
 
@@ -53,15 +54,54 @@ class MainWindow(QMainWindow):
         brand.addWidget(self.logo); brand.addWidget(self.brand_name, 1); brand.addWidget(self.toggle); nav.addLayout(brand); nav.addSpacing(18)
         self.vietsub_nav = self._nav_button("🎬  VietSub", "VietSub"); self.audio_nav = self._nav_button("♫  Audio Creator", "Audio Creator")
         self.vietsub_nav.setChecked(True); self.vietsub_nav.clicked.connect(lambda: self._set_page(0)); self.audio_nav.clicked.connect(lambda: self._set_page(1))
-        nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addStretch()
+        self.english_expanded = False
+        self.english_nav = self._nav_button("🌐  Tiếng Anh  ▸", "Tiếng Anh")
+        self.english_nav.clicked.connect(self._toggle_english_menu)
+        self.english_submenu = QWidget()
+        english_submenu_layout = QVBoxLayout(self.english_submenu)
+        english_submenu_layout.setContentsMargins(18, 0, 0, 0)
+        english_submenu_layout.setSpacing(4)
+        self.mini_game_nav = self._subnav_button("🎮  Mini game", "Mini game", 2)
+        self.vocabulary_nav = self._subnav_button("📖  Học từ mới", "Học từ mới", 3)
+        self.conversation_nav = self._subnav_button("💬  Hội thoại", "Hội thoại", 4)
+        self.english_subnav_buttons = (
+            self.mini_game_nav,
+            self.vocabulary_nav,
+            self.conversation_nav,
+        )
+        for subnav_button in self.english_subnav_buttons:
+            english_submenu_layout.addWidget(subnav_button)
+        self.english_submenu.hide()
+        nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addWidget(self.english_nav)
+        nav.addWidget(self.english_submenu); nav.addStretch()
         version = QLabel("VietSub v0.2"); version.setObjectName("Subtitle"); version.setAlignment(Qt.AlignmentFlag.AlignCenter); nav.addWidget(version); self.version_label = version
         root.addWidget(self.sidebar)
         self.pages = QStackedWidget(); self.vietsub = VietSubPage(self.project, self.settings_store); self.vietsub.dirty_changed.connect(self.set_dirty)
         self.vietsub.request_new.connect(self.new_project); self.vietsub.request_open.connect(self.open_project); self.vietsub.request_save.connect(self.save_project)
-        self.pages.addWidget(self.vietsub); self.pages.addWidget(self._audio_placeholder()); root.addWidget(self.pages, 1)
+        self.pages.addWidget(self.vietsub)
+        self.pages.addWidget(self._audio_placeholder())
+        self.pages.addWidget(EnglishPlaceholderPage(
+            "Mini game", "🎮", "Khu vực mẫu cho các trò chơi luyện tiếng Anh tương tác.",
+        ))
+        self.pages.addWidget(EnglishPlaceholderPage(
+            "Học từ mới", "📖", "Khu vực mẫu cho bài học từ vựng, flashcard và ôn tập.",
+        ))
+        self.pages.addWidget(EnglishPlaceholderPage(
+            "Hội thoại", "💬", "Khu vực mẫu cho các bài luyện hội thoại theo tình huống.",
+        ))
+        root.addWidget(self.pages, 1)
 
     def _nav_button(self, text: str, tooltip: str) -> QPushButton:
         b = QPushButton(text); b.setObjectName("NavButton"); b.setCheckable(True); b.setToolTip(tooltip); b.setMinimumHeight(44); return b
+
+    def _subnav_button(self, text: str, tooltip: str, page_index: int) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("SubNavButton")
+        button.setCheckable(True)
+        button.setToolTip(tooltip)
+        button.setMinimumHeight(38)
+        button.clicked.connect(lambda: self._set_page(page_index))
+        return button
 
     def _audio_placeholder(self) -> QWidget:
         page = QWidget(); page.setObjectName("AppRoot"); layout = QVBoxLayout(page); layout.setContentsMargins(50,50,50,50)
@@ -73,12 +113,32 @@ class MainWindow(QMainWindow):
 
     def _set_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index); self.vietsub_nav.setChecked(index == 0); self.audio_nav.setChecked(index == 1)
+        english_page = 2 <= index <= 4
+        self.english_nav.setChecked(english_page)
+        for page_index, button in enumerate(self.english_subnav_buttons, start=2):
+            button.setChecked(index == page_index)
+        if english_page:
+            self._set_english_menu_expanded(True)
+
+    def _toggle_english_menu(self) -> None:
+        if self.sidebar.width() <= 100:
+            self.toggle_sidebar()
+        self._set_english_menu_expanded(not self.english_expanded)
+        self.english_nav.setChecked(2 <= self.pages.currentIndex() <= 4)
+
+    def _set_english_menu_expanded(self, expanded: bool) -> None:
+        self.english_expanded = expanded
+        self.english_submenu.setVisible(expanded and self.sidebar.width() > 100)
+        self.english_nav.setText("🌐  Tiếng Anh  ▾" if expanded else "🌐  Tiếng Anh  ▸")
 
     def toggle_sidebar(self) -> None:
         collapsed = self.sidebar.width() > 100
         self.sidebar.setFixedWidth(76 if collapsed else 236); self.brand_name.setVisible(not collapsed); self.version_label.setVisible(not collapsed)
         self.vietsub_nav.setText("🎬" if collapsed else "🎬  VietSub"); self.audio_nav.setText("♫" if collapsed else "♫  Audio Creator")
         self.vietsub_nav.setStyleSheet("text-align:center;" if collapsed else ""); self.audio_nav.setStyleSheet("text-align:center;" if collapsed else "")
+        self.english_nav.setText("🌐" if collapsed else ("🌐  Tiếng Anh  ▾" if self.english_expanded else "🌐  Tiếng Anh  ▸"))
+        self.english_nav.setStyleSheet("text-align:center;" if collapsed else "")
+        self.english_submenu.setVisible(not collapsed and self.english_expanded)
 
     def set_dirty(self, dirty: bool = True) -> None:
         self.dirty = dirty; marker = " • Chưa lưu" if dirty else " • Đã lưu"

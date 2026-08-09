@@ -13,12 +13,36 @@ def test_shell_sidebar_and_pages(qtbot, tmp_path):
     window = MainWindow(LastUsedSettingsStore(tmp_path / "settings.json"))
     qtbot.addWidget(window)
     assert window.minimumWidth() == 1100
-    assert window.pages.count() == 2
+    assert window.pages.count() == 5
     window.toggle_sidebar()
     assert window.sidebar.width() == 76
     assert window.vietsub_nav.toolTip() == "VietSub"
     qtbot.mouseClick(window.audio_nav, Qt.MouseButton.LeftButton)
     assert window.pages.currentIndex() == 1
+
+
+def test_english_menu_has_three_placeholder_pages(qtbot, tmp_path):
+    window = MainWindow(LastUsedSettingsStore(tmp_path / "settings.json"))
+    qtbot.addWidget(window)
+
+    assert window.english_submenu.isHidden()
+    qtbot.mouseClick(window.english_nav, Qt.MouseButton.LeftButton)
+    assert not window.english_submenu.isHidden()
+    assert window.vietsub_nav.isChecked()
+    assert not window.english_nav.isChecked()
+    assert [button.toolTip() for button in window.english_subnav_buttons] == [
+        "Mini game", "Học từ mới", "Hội thoại",
+    ]
+
+    for expected_index, button in enumerate(window.english_subnav_buttons, start=2):
+        qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
+        assert window.pages.currentIndex() == expected_index
+        assert button.isChecked()
+
+    window.toggle_sidebar()
+    assert window.english_submenu.isHidden()
+    window.toggle_sidebar()
+    assert not window.english_submenu.isHidden()
 
 
 def test_vietsub_has_eight_steps(qtbot, tmp_path):
@@ -50,6 +74,7 @@ def test_source_step_has_three_download_modes_and_restores_multi_links(qtbot, tm
     assert source.tabs.currentIndex() == 2
     assert source.multi_urls.toPlainText().splitlines() == project.source_urls
     assert source.analyze() is True
+    window.dirty = False
 
 
 def test_custom_context_validation_state(qtbot, tmp_path):

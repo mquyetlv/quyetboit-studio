@@ -18,6 +18,9 @@ QPushButton#Primary:hover { background: #4d4ed2; }
 QPushButton#Danger { color: #d92d20; border-color: #fecdca; }
 QPushButton#NavButton { text-align: left; padding: 11px 14px; border: 0; background: transparent; }
 QPushButton#NavButton:checked { background: #eef2ff; color: #4f46e5; font-weight: 650; }
+QPushButton#SubNavButton { text-align: left; padding: 8px 12px; border: 0; background: transparent; color: #667085; }
+QPushButton#SubNavButton:hover { background: #f7f8fc; color: #344054; }
+QPushButton#SubNavButton:checked { background: #eef2ff; color: #4f46e5; font-weight: 650; }
 QPushButton#StepButton { text-align: left; padding: 10px; border: 0; background: transparent; }
 QPushButton#StepButton:checked { background: #eef2ff; color: #4f46e5; }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {

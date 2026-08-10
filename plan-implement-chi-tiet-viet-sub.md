@@ -22,11 +22,11 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ### Tiến độ cập nhật ngày 2026-08-10
 
-- Hoàn thành: **149/202 task (73,76%)**.
-- Đang làm/đã có một phần: **40 task (19,80%)**.
-- Chưa triển khai: **8 task (3,96%)**.
-- Chờ credential/live test hoặc nghiệm thu: **5 task (2,48%)**.
-- Unit/lint hiện tại: **84 test pass**, Ruff pass.
+- Hoàn thành: **150/203 task (73,89%)**.
+- Đang làm/đã có một phần: **40 task (19,70%)**.
+- Chưa triển khai: **8 task (3,94%)**.
+- Chờ credential/live test hoặc nghiệm thu: **5 task (2,46%)**.
+- Unit/lint hiện tại: **85 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -312,6 +312,9 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Thêm dependency chính thức `google-cloud-texttospeech` và import-lazy với lỗi hướng dẫn rõ ràng.
 - [x] Thêm unit test validation, credential-safe serialization, score, timeline, ASS và integration
   render FFmpeg thật xác nhận cả 1920×1080/1080×1920, video/audio stream và progress 100%.
+- [x] Nâng cấp layout bằng typography Unicode, phân cấp English/IPA/nghĩa Việt/example và nhãn voice
+  đồng bộ `LISTEN → SLOW → YOUR TURN`; trim khoảng lặng TTS, thêm cue hook/countdown/reveal/end,
+  chuẩn hóa loudness và render kiểm chứng video dọc thật 1080×1920 có đủ video/audio stream.
 - [x] Thay field voice nhập tay bằng nút **Cấu hình Voice…** mở dialog tải catalog ngoài Qt main
   thread, hỗ trợ lọc ngôn ngữ, loại voice, danh mục, giới tính, tìm kiếm và nghe thử.
 - [x] Google TTS dùng API chính thức `list_voices()` và giữ voice ID, language codes, SSML gender,

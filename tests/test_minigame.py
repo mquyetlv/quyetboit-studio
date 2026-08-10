@@ -17,6 +17,7 @@ from quyetboit_studio.minigame import MinigamePage
 from quyetboit_studio.minigame_voice import MinigameVoiceDialog
 from quyetboit_studio.services.media import FFmpegRunner
 from quyetboit_studio.services.media.minigame import (
+    MinigameAudioService,
     MinigameSubtitleBuilder,
     MinigameVideoRenderer,
 )
@@ -78,6 +79,14 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
     assert sum(path == normal[0] for _, path in timeline.audio_events) == 3
     assert sum(path == slow[0] for _, path in timeline.audio_events) == 1
     assert sum(path == examples[0] for _, path in timeline.audio_events) == 1
+    assert [scene.phase for scene in timeline.scenes if scene.kind == "voice"] == [
+        "listen",
+        "slow",
+        "repeat",
+        "listen",
+        "slow",
+        "repeat",
+    ]
     assert timeline.duration_ms > 0
 
 
@@ -97,10 +106,48 @@ def test_subtitles_keep_supplied_content_and_dynamic_score(tmp_path: Path) -> No
     text = output.read_text(encoding="utf-8-sig")
 
     assert "PlayResX: 1080" in text
-    assert "CAN YOU GET 5/5?" in text
+    assert "CAN YOU GET\\N5 OUT OF 5?" in text
     assert "This is example 1." in text
-    assert "0–2  BEGINNER" in text
-    assert "5/5  PERFECT" in text
+    assert "0–2   KEEP PRACTICING" in text
+    assert "5/5   PERFECT SCORE" in text
+    assert "Segoe UI Semibold" in text
+    assert "🌱" not in text
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_minigame_speech_normalization_trims_provider_silence(tmp_path: Path) -> None:
+    runner = FFmpegRunner()
+    source = tmp_path / "speech-with-silence.wav"
+    runner.run(
+        [
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono:d=0.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=0.25:sample_rate=48000",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono:d=0.6",
+            "-filter_complex",
+            "[0:a][1:a][2:a]concat=n=3:v=0:a=1[a]",
+            "-map",
+            "[a]",
+            "-c:a",
+            "pcm_s16le",
+            str(source),
+        ]
+    )
+
+    output = MinigameAudioService(runner).normalize(source, tmp_path / "trimmed.wav")
+
+    assert 250 <= output.duration_ms <= 500
 
 
 def test_minigame_page_has_real_editor_and_dynamic_rows(qtbot) -> None:

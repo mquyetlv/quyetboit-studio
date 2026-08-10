@@ -113,14 +113,16 @@ class MinigameTimeline:
 
 
 class MinigameTimelineBuilder:
-    HOOK_MS = 3_000
+    HOOK_MS = 2_800
     QUESTION_MS = 3_000
-    BETWEEN_VOICE_MS = (350, 450)
-    AFTER_WORD_MS = 700
-    REVIEW_GAP_MS = 300
-    REVIEW_AFTER_MS = 650
-    SCORE_MS = 4_500
-    CTA_MS = 3_500
+    REVEAL_LEAD_MS = 320
+    BETWEEN_VOICE_MS = (320, 480)
+    AFTER_WORD_MS = 550
+    REVIEW_LEAD_MS = 320
+    REVIEW_GAP_MS = 280
+    REVIEW_AFTER_MS = 500
+    SCORE_MS = 3_000
+    CTA_MS = 2_400
 
     def build(
         self,
@@ -141,11 +143,36 @@ class MinigameTimelineBuilder:
             scenes.append(MinigameScene("word", question_start, reveal, index, "question"))
             normal = word_audio[index]
             slow = slow_audio[index]
-            normal_start = reveal + 450
+            normal_start = reveal + self.REVEAL_LEAD_MS
             slow_start = normal_start + durations[normal] + self.BETWEEN_VOICE_MS[0]
             final_start = slow_start + durations[slow] + self.BETWEEN_VOICE_MS[1]
             cursor = final_start + durations[normal] + self.AFTER_WORD_MS
             scenes.append(MinigameScene("word", reveal, cursor, index, "answer"))
+            scenes.extend(
+                [
+                    MinigameScene(
+                        "voice",
+                        normal_start,
+                        normal_start + durations[normal],
+                        index,
+                        "listen",
+                    ),
+                    MinigameScene(
+                        "voice",
+                        slow_start,
+                        slow_start + durations[slow],
+                        index,
+                        "slow",
+                    ),
+                    MinigameScene(
+                        "voice",
+                        final_start,
+                        final_start + durations[normal],
+                        index,
+                        "repeat",
+                    ),
+                ]
+            )
             audio_events.extend(
                 [(normal_start, normal), (slow_start, slow), (final_start, normal)]
             )
@@ -153,7 +180,7 @@ class MinigameTimelineBuilder:
             normal = word_audio[index]
             example = example_audio[index]
             start = cursor
-            word_start = start + 400
+            word_start = start + self.REVIEW_LEAD_MS
             example_start = word_start + durations[normal] + self.REVIEW_GAP_MS
             cursor = example_start + durations[example] + self.REVIEW_AFTER_MS
             scenes.append(MinigameScene("review", start, cursor, index))

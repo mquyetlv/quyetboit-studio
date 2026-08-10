@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import textwrap
 import wave
 from pathlib import Path
 
@@ -45,7 +46,24 @@ class MinigameAudioService:
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         self.runner.run(
-            ["-i", str(source), "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(partial)],
+            [
+                "-i",
+                str(source),
+                "-vn",
+                "-filter:a",
+                (
+                    "silenceremove=start_periods=1:start_duration=0.04:"
+                    "start_threshold=-45dB:stop_periods=-1:stop_duration=0.10:"
+                    "stop_threshold=-45dB,apad=pad_dur=0.08"
+                ),
+                "-ac",
+                "1",
+                "-ar",
+                "48000",
+                "-c:a",
+                "pcm_s16le",
+                str(partial),
+            ],
             cancel=cancel,
         )
         artifact = self.runner.probe.audio_artifact(partial)
@@ -84,19 +102,68 @@ class MinigameAudioService:
         return artifact.refresh()
 
     def ding(self, output: Path, *, cancel: CancellationToken | None = None) -> AudioArtifact:
+        return self.cue(output, "reveal", cancel=cancel)
+
+    def cue(
+        self,
+        output: Path,
+        kind: str,
+        *,
+        cancel: CancellationToken | None = None,
+    ) -> AudioArtifact:
         if output.is_file():
             return self.runner.probe.audio_artifact(output).refresh()
+        filters = {
+            "tick": "sine=frequency=720:duration=0.09:sample_rate=48000",
+            "reveal": "sine=frequency=1046:duration=0.18:sample_rate=48000",
+            "open": "sine=frequency=880:duration=0.28:sample_rate=48000",
+            "finish": "sine=frequency=1318:duration=0.34:sample_rate=48000",
+        }
+        if kind not in filters:
+            raise ValueError(f"Cue âm thanh minigame không hợp lệ: {kind}")
+        volume = "0.18" if kind == "tick" else "0.30"
+        output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         self.runner.run(
             [
                 "-f",
                 "lavfi",
                 "-i",
-                "sine=frequency=1046:duration=0.18:sample_rate=48000",
+                filters[kind],
                 "-filter:a",
-                "afade=t=out:st=0.08:d=0.10,volume=0.35",
+                f"afade=t=out:st=0.05:d=0.12,volume={volume}",
                 "-ac",
                 "1",
+                "-c:a",
+                "pcm_s16le",
+                str(partial),
+            ],
+            cancel=cancel,
+        )
+        artifact = self.runner.probe.audio_artifact(partial)
+        os.replace(partial, output)
+        artifact.path = output
+        return artifact.refresh()
+
+    def master(
+        self,
+        source: AudioArtifact,
+        output: Path,
+        *,
+        cancel: CancellationToken | None = None,
+    ) -> AudioArtifact:
+        """Apply a consistent social-video loudness target after assembling the timeline."""
+        partial = output.with_name(f".{output.stem}.partial{output.suffix}")
+        self.runner.run(
+            [
+                "-i",
+                str(source.path),
+                "-filter:a",
+                "loudnorm=I=-16:TP=-1.5:LRA=7",
+                "-ac",
+                "1",
+                "-ar",
+                "48000",
                 "-c:a",
                 "pcm_s16le",
                 str(partial),
@@ -153,10 +220,44 @@ class MinigameSubtitleBuilder:
         self, project: MinigameProject, timeline: MinigameTimeline, output: Path, aspect: str
     ) -> Path:
         width, height = (1920, 1080) if aspect == "16:9" else (1080, 1920)
-        title_size = 72 if aspect == "16:9" else 86
-        body_size = 52 if aspect == "16:9" else 64
-        small_size = 34 if aspect == "16:9" else 43
-        margin_v = 100 if aspect == "16:9" else 210
+        horizontal = aspect == "16:9"
+        sizes = {
+            "eyebrow": 30 if horizontal else 40,
+            "hero": 78 if horizontal else 112,
+            "title": 52 if horizontal else 70,
+            "body": 40 if horizontal else 58,
+            "ipa": 36 if horizontal else 52,
+            "small": 28 if horizontal else 38,
+            "countdown": 112 if horizontal else 168,
+        }
+        positions = (
+            {
+                "header": 150,
+                "label": 330,
+                "hero": 475,
+                "ipa": 590,
+                "translation": 700,
+                "phase": 855,
+                "countdown": 760,
+                "example_label": 690,
+                "example": 800,
+                "footer": 910,
+            }
+            if horizontal
+            else {
+                "header": 285,
+                "label": 550,
+                "hero": 745,
+                "ipa": 900,
+                "translation": 1050,
+                "phase": 1300,
+                "countdown": 1240,
+                "example_label": 1090,
+                "example": 1260,
+                "footer": 1510,
+            }
+        )
+        margin = 190 if horizontal else 120
         header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -166,10 +267,14 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Title,Arial,{title_size},&H00FFFFFF,&H000000FF,&H00181733,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,8,70,70,{margin_v},1
-Style: Body,Arial,{body_size},&H00FFFFFF,&H000000FF,&H00181733,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,90,90,0,1
-Style: Accent,Arial,{title_size},&H004FE8FF,&H000000FF,&H00181733,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,80,80,0,1
-Style: Small,Arial,{small_size},&H00E8E7FF,&H000000FF,&H00181733,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,70,70,{margin_v},1
+Style: Eyebrow,Segoe UI Semibold,{sizes['eyebrow']},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,2,0,1,2,0,5,{margin},{margin},0,1
+Style: Hero,Segoe UI Semibold,{sizes['hero']},&H00C5F074,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,{margin},{margin},0,1
+Style: Title,Segoe UI Semibold,{sizes['title']},&H00FFFFFF,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,{margin},{margin},0,1
+Style: Body,Segoe UI,{sizes['body']},&H00FFFFFF,&H000000FF,&H00201813,&H80000000,0,0,0,0,100,100,0,0,1,2,1,5,{margin},{margin},0,1
+Style: IPA,Segoe UI,{sizes['ipa']},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,0,-1,0,0,100,100,1,0,1,2,0,5,{margin},{margin},0,1
+Style: Small,Segoe UI,{sizes['small']},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,0,0,0,0,100,100,0,0,1,2,0,5,{margin},{margin},0,1
+Style: Pill,Segoe UI Semibold,{sizes['small']},&H00FFFFFF,&H000000FF,&H003D2B16,&H803D2B16,-1,0,0,0,100,100,1,0,3,2,0,5,{margin},{margin},0,1
+Style: Countdown,Bahnschrift,{sizes['countdown']},&H0057C8FF,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,5,{margin},{margin},0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -177,55 +282,122 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         events: list[str] = []
         total = len(project.vocabulary)
 
-        def add(scene: MinigameScene, style: str, text: str, *, start: int | None = None, end: int | None = None) -> None:
+        def add(
+            scene: MinigameScene,
+            style: str,
+            text: str,
+            *,
+            y: int,
+            start: int | None = None,
+            end: int | None = None,
+            animation: str = "soft",
+            layer: int = 0,
+        ) -> None:
             begin = scene.start_ms if start is None else start
             finish = scene.end_ms if end is None else end
-            effect = r"{\fad(180,160)\t(0,220,\fscx105\fscy105)}"
+            animation_tag = {
+                "soft": r"\fad(140,120)",
+                "pop": r"\fad(100,100)\fscx94\fscy94\t(0,220,\fscx100\fscy100)",
+                "none": "",
+            }[animation]
+            effect = rf"{{\an5\pos({width // 2},{y}){animation_tag}}}"
             events.append(
-                f"Dialogue: 0,{_ass_time(begin)},{_ass_time(finish)},{style},,0,0,0,,"
+                f"Dialogue: {layer},{_ass_time(begin)},{_ass_time(finish)},{style},,0,0,0,,"
                 f"{effect}{_ass_text(text)}"
             )
 
         for scene in timeline.scenes:
             if scene.kind == "hook":
-                add(scene, "Title", f"CAN YOU GET {total}/{total}?")
-                add(scene, "Small", f"Topic: {project.topic}")
+                add(scene, "Eyebrow", "ENGLISH QUICK CHALLENGE", y=positions["header"])
+                add(scene, "Hero", f"CAN YOU GET\n{total} OUT OF {total}?", y=positions["hero"], animation="pop")
+                add(scene, "Pill", f"TOPIC  •  {project.topic}", y=positions["translation"])
+                add(scene, "Small", "Listen  •  Guess  •  Repeat", y=positions["phase"])
             elif scene.kind == "word" and scene.phase == "question":
                 item = project.vocabulary[scene.item_index]
-                add(scene, "Title", f"QUESTION {scene.item_index + 1}/{total}")
-                add(scene, "Body", item.vietnamese)
+                add(
+                    scene,
+                    "Eyebrow",
+                    f"QUESTION  {scene.item_index + 1} / {total}",
+                    y=positions["header"],
+                )
+                add(scene, "Small", "WHAT IS THIS IN ENGLISH?", y=positions["label"])
+                add(scene, "Title", item.vietnamese, y=positions["hero"], animation="pop")
                 for offset, number in enumerate((3, 2, 1)):
                     add(
                         scene,
-                        "Small",
+                        "Countdown",
                         str(number),
+                        y=positions["countdown"],
                         start=scene.start_ms + offset * 1_000,
                         end=min(scene.end_ms, scene.start_ms + (offset + 1) * 1_000),
+                        animation="pop",
                     )
-            elif scene.kind == "word":
+            elif scene.kind == "word" and scene.phase == "answer":
                 item = project.vocabulary[scene.item_index]
-                add(scene, "Accent", item.english)
-                add(scene, "Small", f"{item.ipa}  •  NORMAL  •  SLOW  •  NATURAL")
+                add(
+                    scene,
+                    "Eyebrow",
+                    f"ANSWER  {scene.item_index + 1} / {total}",
+                    y=positions["header"],
+                )
+                add(scene, "Hero", item.english, y=positions["hero"], animation="pop")
+                add(scene, "IPA", item.ipa, y=positions["ipa"])
+                add(scene, "Pill", item.vietnamese, y=positions["translation"])
+                add(scene, "Small", "Listen first, then repeat aloud", y=positions["footer"])
+            elif scene.kind == "voice":
+                labels = {
+                    "listen": "1  •  LISTEN",
+                    "slow": "2  •  SLOW",
+                    "repeat": "3  •  YOUR TURN — REPEAT",
+                }
+                add(
+                    scene,
+                    "Pill",
+                    labels[scene.phase],
+                    y=positions["phase"],
+                    animation="pop",
+                    layer=2,
+                )
             elif scene.kind == "review":
                 item = project.vocabulary[scene.item_index]
-                add(scene, "Title", f"REVIEW {scene.item_index + 1}/{total}")
-                add(scene, "Accent", f"{item.english}\n{item.ipa}")
-                add(scene, "Small", f"{item.vietnamese}\n{item.example}")
+                max_chars = 58 if horizontal else 34
+                wrapped_example = "\n".join(textwrap.wrap(item.example, width=max_chars))
+                add(
+                    scene,
+                    "Eyebrow",
+                    f"QUICK REVIEW  {scene.item_index + 1} / {total}",
+                    y=positions["header"],
+                )
+                add(scene, "Hero", item.english, y=positions["hero"], animation="pop")
+                add(scene, "IPA", item.ipa, y=positions["ipa"])
+                add(scene, "Pill", item.vietnamese, y=positions["translation"])
+                add(scene, "Eyebrow", "EXAMPLE", y=positions["example_label"])
+                add(scene, "Body", wrapped_example, y=positions["example"])
             elif scene.kind == "score":
                 beginner, good, perfect = score_ranges(total)
-                add(scene, "Title", "HOW DID YOU DO?")
-                lines = [f"{beginner[0]}–{beginner[1]}  BEGINNER  🌱"]
+                add(scene, "Eyebrow", "CHALLENGE COMPLETE", y=positions["header"])
+                add(scene, "Title", "HOW DID YOU DO?", y=positions["label"])
+                lines = [f"{beginner[0]}–{beginner[1]}   KEEP PRACTICING"]
                 if good[0] <= good[1]:
-                    lines.append(f"{good[0]}–{good[1]}  GOOD JOB  🔥")
-                lines.append(f"{perfect[0]}/{total}  PERFECT  🏆")
+                    lines.append(f"{good[0]}–{good[1]}   GREAT JOB")
+                lines.append(f"{perfect[0]}/{total}   PERFECT SCORE")
                 add(
                     scene,
                     "Body",
                     "\n".join(lines),
+                    y=positions["hero"],
+                    animation="pop",
                 )
             elif scene.kind == "cta":
-                add(scene, "Accent", "COMMENT YOUR SCORE!")
-                add(scene, "Small", f"Did you get {total}/{total}?  •  Challenge a friend!")
+                add(scene, "Eyebrow", "ONE LAST THING", y=positions["header"])
+                add(scene, "Hero", "COMMENT\nYOUR SCORE", y=positions["hero"], animation="pop")
+                add(
+                    scene,
+                    "Pill",
+                    f"DID YOU GET {total} / {total}?",
+                    y=positions["translation"],
+                )
+                add(scene, "Small", "Save this video  •  Challenge a friend", y=positions["phase"])
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_suffix(output.suffix + ".partial")
         partial.write_text(header + "\n".join(events) + "\n", encoding="utf-8-sig")
@@ -256,19 +428,23 @@ class MinigameVideoRenderer:
         width, height = (1920, 1080) if aspect == "16:9" else (1080, 1920)
         focus_x = max(0.0, min(1.0, float(focus[0] if focus else 0.5)))
         focus_y = max(0.0, min(1.0, float(focus[1] if len(focus) > 1 else 0.5)))
-        panel_x = round(width * 0.07)
-        panel_y = round(height * (0.13 if aspect == "16:9" else 0.16))
+        panel_x = round(width * (0.10 if aspect == "16:9" else 0.055))
+        panel_y = round(height * 0.075)
         panel_w = width - panel_x * 2
-        panel_h = round(height * (0.72 if aspect == "16:9" else 0.68))
+        panel_h = round(height * (0.85 if aspect == "16:9" else 0.84))
+        accent_h = max(8, round(height * 0.006))
         filter_path = self._escape_filter_path(subtitles)
         graph = (
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height}:(in_w-out_w)*{focus_x:.4f}:(in_h-out_h)*{focus_y:.4f},"
-            "eq=brightness=-0.10:saturation=0.88,"
+            "eq=brightness=-0.08:saturation=0.82,"
+            f"drawbox=x=0:y=0:w={width}:h={height}:color=0x07101f@0.18:t=fill,"
             f"drawbox=x={panel_x}:y={panel_y}:w={panel_w}:h={panel_h}:"
-            "color=0x17152f@0.88:t=fill,"
+            "color=0x0d1930@0.82:t=fill,"
             f"drawbox=x={panel_x}:y={panel_y}:w={panel_w}:h={panel_h}:"
-            "color=0x8b82ff@0.65:t=4,"
+            "color=0x74f0c5@0.72:t=3,"
+            f"drawbox=x={panel_x}:y={panel_y}:w={panel_w}:h={accent_h}:"
+            "color=0x74f0c5@0.95:t=fill,"
             f"subtitles='{filter_path}'[v]"
         )
         output.parent.mkdir(parents=True, exist_ok=True)

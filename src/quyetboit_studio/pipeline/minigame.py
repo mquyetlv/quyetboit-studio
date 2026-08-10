@@ -107,12 +107,33 @@ class MinigamePipeline:
             timeline = self.timeline_builder.build(
                 self.project.vocabulary, word_audio, slow_audio, example_audio, durations
             )
-            ding = self.audio.ding(self.workspace / "audio" / "ding.wav", cancel=self.cancel)
+            cue_dir = self.workspace / "audio" / "cues-v2"
+            tick = self.audio.cue(cue_dir / "tick.wav", "tick", cancel=self.cancel)
+            reveal = self.audio.cue(cue_dir / "reveal.wav", "reveal", cancel=self.cancel)
+            opening = self.audio.cue(cue_dir / "open.wav", "open", cancel=self.cancel)
+            finish = self.audio.cue(cue_dir / "finish.wav", "finish", cancel=self.cancel)
+            timeline.audio_events.append((180, opening.path))
             for scene in timeline.scenes:
+                if scene.kind == "word" and scene.phase == "question":
+                    timeline.audio_events.extend(
+                        (scene.start_ms + offset * 1_000 + 80, tick.path)
+                        for offset in range(3)
+                    )
                 if scene.kind == "word" and scene.phase == "answer":
-                    timeline.audio_events.append((scene.start_ms, ding.path))
-            mixed = self.audio.assemble(
-                timeline.audio_events, self.workspace / "audio" / "timeline.wav", timeline.duration_ms
+                    timeline.audio_events.append((scene.start_ms, reveal.path))
+                if scene.kind == "score":
+                    timeline.audio_events.append((scene.start_ms + 160, finish.path))
+                if scene.kind == "cta":
+                    timeline.audio_events.append((scene.start_ms + 120, opening.path))
+            raw_mix = self.audio.assemble(
+                timeline.audio_events,
+                self.workspace / "audio" / "timeline-v2-raw.wav",
+                timeline.duration_ms,
+            )
+            mixed = self.audio.master(
+                raw_mix,
+                self.workspace / "audio" / "timeline-v2-master.wav",
+                cancel=self.cancel,
             )
             self._emit(progress, 0.62, "Đã tạo timeline audio")
             output_folder = Path(self.project.output_folder).expanduser().resolve()
@@ -175,6 +196,7 @@ class MinigamePipeline:
                 "language": self.project.voice_language,
                 "volume": self.project.volume,
                 "text": text,
+                "speech_processing_version": 2,
             }
         )[:20]
         directory = self.workspace / "audio"

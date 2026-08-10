@@ -10,8 +10,10 @@ và fallback encoder GPU sang `libx264`. Project dùng schema v2 và tự migrat
 Menu **Tiếng Anh → Mini game** tạo video đoán từ từ dữ liệu người dùng nhập. Tính năng hỗ trợ
 YouTube 16:9, TikTok/Shorts 9:16 hoặc xuất đồng thời cả hai; video nền được crop theo điểm focus và
 luôn tắt audio gốc. Mỗi từ bắt buộc có nghĩa tiếng Việt, từ tiếng Anh, IPA và câu ví dụ. Timeline
-gồm hook, countdown, ba lượt phát âm (tự nhiên → chậm → tự nhiên), ôn tập có câu ví dụ, chấm điểm
-động và lời kêu gọi comment.
+gồm hook, countdown có sound cue, ba lượt phát âm được trim khoảng lặng và đồng bộ nhãn
+`LISTEN → SLOW → YOUR TURN`, ôn tập có câu ví dụ, chấm điểm động và lời kêu gọi comment. Layout dùng
+card tối, typography Unicode rõ ràng và tách riêng English, IPA, nghĩa tiếng Việt cùng example;
+audio timeline được chuẩn hóa loudness trước khi render.
 
 Nút **Chạy tất cả các bước** tự động chạy liên tục toàn bộ pipeline từ tải video đến áp dụng cấu
 hình Layer Studio và xuất file đầu ra. Người dùng vẫn có thể mở Layer Studio trước khi chạy để căn

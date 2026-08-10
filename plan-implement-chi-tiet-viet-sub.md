@@ -20,13 +20,13 @@ Douyin URL
 
 Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[!]` bị chặn.
 
-### Tiến độ cập nhật ngày 2026-08-04
+### Tiến độ cập nhật ngày 2026-08-10
 
-- Hoàn thành: **134/185 task (72,4%)**.
-- Đang làm/đã có một phần: **39 task (21,1%)**.
-- Chưa triển khai: **8 task (4,3%)**.
-- Chờ credential/live test hoặc nghiệm thu: **4 task (2,2%)**.
-- Unit/lint hiện tại: **73 test pass**, Ruff pass.
+- Hoàn thành: **149/202 task (73,76%)**.
+- Đang làm/đã có một phần: **40 task (19,80%)**.
+- Chưa triển khai: **8 task (3,96%)**.
+- Chờ credential/live test hoặc nghiệm thu: **5 task (2,48%)**.
+- Unit/lint hiện tại: **84 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -289,3 +289,38 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - TTS dùng CapCut và ưu tiên khớp timestamp tuyệt đối.
 - Bước render tự chọn GPU và fallback CPU.
 - CapCut là private web API không có cam kết ổn định; các constant/version phải tập trung trong cấu hình để cập nhật nhanh.
+
+## 7. English Mini game
+
+- [x] Thay placeholder `Tiếng Anh → Mini game` bằng trang Qt production có cấu hình, bảng từ,
+  progress, Stop và mở thư mục output.
+- [x] Bắt buộc người dùng cung cấp Topic cùng nghĩa tiếng Việt, từ tiếng Anh, IPA và câu ví dụ cho
+  từng từ; không tự dịch, đoán hoặc sửa nội dung.
+- [x] Hỗ trợ 16:9, 9:16 và xuất cả hai; crop kiểu cover theo focus X/Y riêng từng tỷ lệ, loop video
+  ngắn và luôn bỏ audio nền.
+- [x] Timeline động theo số từ gồm hook, countdown, ding, đáp án và ba lượt phát âm tự nhiên → chậm
+  → tự nhiên.
+- [x] Phần ôn tập đọc từ và câu ví dụ; phần chấm điểm tính range theo tổng số từ và có CTA comment.
+- [x] Tách interface TTS dùng chung và adapter CapCut English/Google Cloud Text-to-Speech; slow voice
+  được time-stretch bằng FFmpeg để không phụ thuộc provider có tôn trọng `rate` hay không.
+- [x] Google service-account chỉ được đọc từ file trong phiên chạy; không persist đường dẫn/nội dung,
+  private key hoặc token vào project, workspace hay log.
+- [x] TTS và FFmpeg chạy ngoài Qt main thread, dùng `CancellationToken`; Stop hủy subprocess tại
+  boundary an toàn.
+- [x] Cache voice theo provider + voice + text + volume; output ghi `.partial`, ffprobe validate rồi
+  rename atomically và tự tăng suffix nếu file cũ tồn tại.
+- [x] Thêm dependency chính thức `google-cloud-texttospeech` và import-lazy với lỗi hướng dẫn rõ ràng.
+- [x] Thêm unit test validation, credential-safe serialization, score, timeline, ASS và integration
+  render FFmpeg thật xác nhận cả 1920×1080/1080×1920, video/audio stream và progress 100%.
+- [x] Thay field voice nhập tay bằng nút **Cấu hình Voice…** mở dialog tải catalog ngoài Qt main
+  thread, hỗ trợ lọc ngôn ngữ, loại voice, danh mục, giới tính, tìm kiếm và nghe thử.
+- [x] Google TTS dùng API chính thức `list_voices()` và giữ voice ID, language codes, SSML gender,
+  sample rate cùng nhóm công nghệ; live-test service account trả 2.066 voice/260 voice English.
+- [x] CapCut tải/merge toàn bộ `VOICE_CATEGORIES` theo `tai-lieu-api-capcut.md`; live-test session
+  hiện tại trả 326 voice và giữ đủ category trên từng speaker.
+- [x] Thêm `services-account.json` cùng các pattern service-account vào `.gitignore`; kiểm tra xác
+  nhận credential không còn xuất hiện trong `git status`.
+- [-] Preview hiện mô phỏng đúng nội dung, tỷ lệ và thời lượng dự kiến; chưa hiển thị frame thật của
+  video nền/crop trong editor.
+- [!] Catalog Google và CapCut đã live-test thành công; vẫn cần nghiệm thu synthesize toàn bộ video
+  bằng hai provider với quota/credential test trước khi đánh dấu TTS end-to-end hoàn tất.

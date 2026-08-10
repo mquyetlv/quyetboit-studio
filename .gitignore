@@ -10,3 +10,7 @@ build/
 www.douyin.com_*.json
 cookies*.json
 cookies*.txt
+services-account.json
+service-account*.json
+*-service-account.json
+output/

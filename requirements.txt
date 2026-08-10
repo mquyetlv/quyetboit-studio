@@ -1,5 +1,6 @@
 PySide6>=6.8,<7
 google-genai>=2
+google-cloud-texttospeech>=2.37,<3
 httpx>=0.28
 keyring>=25
 numpy>=2

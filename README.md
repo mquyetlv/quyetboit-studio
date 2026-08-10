@@ -7,6 +7,12 @@
 Pipeline chạy trong worker thread, hỗ trợ Stop, resume theo manifest/checksum, cache theo cấu hình
 và fallback encoder GPU sang `libx264`. Project dùng schema v2 và tự migrate file v1.
 
+Menu **Tiếng Anh → Mini game** tạo video đoán từ từ dữ liệu người dùng nhập. Tính năng hỗ trợ
+YouTube 16:9, TikTok/Shorts 9:16 hoặc xuất đồng thời cả hai; video nền được crop theo điểm focus và
+luôn tắt audio gốc. Mỗi từ bắt buộc có nghĩa tiếng Việt, từ tiếng Anh, IPA và câu ví dụ. Timeline
+gồm hook, countdown, ba lượt phát âm (tự nhiên → chậm → tự nhiên), ôn tập có câu ví dụ, chấm điểm
+động và lời kêu gọi comment.
+
 Nút **Chạy tất cả các bước** tự động chạy liên tục toàn bộ pipeline từ tải video đến áp dụng cấu
 hình Layer Studio và xuất file đầu ra. Người dùng vẫn có thể mở Layer Studio trước khi chạy để căn
 chỉnh cấu hình, hoặc chạy lại riêng từng bước bằng nút **Chạy bước này**.
@@ -16,7 +22,8 @@ chỉnh cấu hình, hoặc chạy lại riêng từng bước bằng nút **Ch�
 - Python 3.11 trở lên.
 - `ffmpeg` và `ffprobe` có trong `PATH`.
 - Chrome hoặc Edge đã đăng nhập Douyin nếu video yêu cầu cookie.
-- Tài khoản CapCut và `GEMINI_API_KEY` để chạy ASR, dịch và TTS.
+- Tài khoản CapCut và `GEMINI_API_KEY` để chạy ASR, dịch và CapCut TTS.
+- Google Cloud Text-to-Speech service-account JSON nếu chọn Google TTS cho Mini game.
 
 ```powershell
 py -3.11 -m venv .venv
@@ -26,6 +33,31 @@ $env:PYTHONPATH="src"
 $env:GEMINI_API_KEY="..."
 python -m quyetboit_studio
 ```
+
+Service-account Google chỉ được đọc trực tiếp từ file người dùng chọn trong phiên chạy. Ứng dụng
+không copy nội dung hoặc đường dẫn credential này vào project/workspace và không ghi private key,
+access token hay nội dung JSON vào log.
+
+## English Mini game
+
+1. Chọn `16:9`, `9:16` hoặc **Xuất cả hai**.
+2. Chọn video nền và chỉnh điểm crop X/Y riêng cho từng tỷ lệ.
+3. Nhập Topic, số từ và đủ bốn cột nội dung. Có thể paste trực tiếp bốn cột từ Excel/Sheets.
+4. Bấm **Cấu hình Voice…**, chọn Google Cloud TTS hoặc CapCut TTS rồi lọc theo ngôn ngữ, loại
+   voice, danh mục, giới tính hoặc tên. Dialog tải catalog ngoài main thread và hỗ trợ nghe thử.
+   Với CapCut, đăng nhập ở phần VietSub trước. Google tự nhận `services-account.json` tại thư mục
+   chạy ứng dụng; cũng có thể chọn file khác ngay trong dialog.
+5. Chọn thư mục rồi bấm **Tạo video**. TTS được cache theo provider, voice, text và volume; đổi crop
+   hoặc xuất thêm tỷ lệ không gọi lại TTS.
+
+Output luôn được render vào file `.partial`, kiểm tra bằng ffprobe rồi mới đổi tên. Nếu tên file đã
+tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
+
+Catalog Google lấy từ `TextToSpeechClient.list_voices()` và giữ language codes, SSML gender, sample
+rate cùng nhóm Chirp 3 HD/Chirp HD/Studio/Neural2/WaveNet/Standard và các loại mới provider trả về.
+Catalog CapCut gọi toàn bộ category cấu hình trong `services/capcut/config.py`, merge voice trùng
+theo speaker ID rồi giữ tất cả category để lọc. File service-account và các biến thể tên phổ biến
+được `.gitignore`; không được stage/commit.
 
 Trong bước SRT, mở **Cấu hình API** để đăng nhập CapCut. Password không được lưu. Cookie phiên
 chỉ được lưu trong Windows Credential Manager. UID/workspace được xác thực lại và cập nhật vào

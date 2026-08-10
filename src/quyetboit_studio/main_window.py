@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from .core.preferences import LastUsedSettingsStore
 from .english import EnglishPlaceholderPage
+from .minigame import MinigamePage
 from .persistence import ProjectStore
 from .vietsub import VietSubPage
 
@@ -80,9 +81,8 @@ class MainWindow(QMainWindow):
         self.vietsub.request_new.connect(self.new_project); self.vietsub.request_open.connect(self.open_project); self.vietsub.request_save.connect(self.save_project)
         self.pages.addWidget(self.vietsub)
         self.pages.addWidget(self._audio_placeholder())
-        self.pages.addWidget(EnglishPlaceholderPage(
-            "Mini game", "🎮", "Khu vực mẫu cho các trò chơi luyện tiếng Anh tương tác.",
-        ))
+        self.minigame = MinigamePage()
+        self.pages.addWidget(self.minigame)
         self.pages.addWidget(EnglishPlaceholderPage(
             "Học từ mới", "📖", "Khu vực mẫu cho bài học từ vựng, flashcard và ôn tập.",
         ))
@@ -201,5 +201,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Đã khôi phục phiên autosave", 5000)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._confirm_discard(): event.accept()
+        if self._confirm_discard():
+            if self.minigame.shutdown():
+                event.accept()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Đang dừng Minigame",
+                    "Tác vụ TTS/render chưa dừng xong. Hãy chờ một chút rồi đóng ứng dụng lại.",
+                )
+                event.ignore()
         else: event.ignore()

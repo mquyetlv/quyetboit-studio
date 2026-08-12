@@ -60,11 +60,33 @@ class TextStyle:
     min_size: int
     max_size: int
     color: str = "#F6F8FF"
+    outline_color: str = "#07152B"
+    shadow_color: str = "#07152B"
+    outline_width: int = 2
+    shadow_depth: int = 1
     bold: bool = False
     italic: bool = False
     spacing: int = 0
     line_spacing: int = 4
     margin: int = 100
+
+
+@dataclass(slots=True, frozen=True)
+class ThemeColorPalette:
+    """Semantic text colors for every surface used by a minigame theme."""
+
+    primary: str
+    secondary: str
+    accent: str
+    outline: str
+    shadow: str
+    review_primary: str
+    review_secondary: str
+    review_accent: str
+    review_outline: str
+    hook_primary: str
+    hook_secondary: str
+    hook_outline: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -89,6 +111,7 @@ class MinigameThemeManifest:
     theme_id: str
     display_name: str
     palette: tuple[str, ...]
+    colors: ThemeColorPalette
     supported_formats: tuple[str, ...]
     canvas: CanvasSpec
     start_screen: Path

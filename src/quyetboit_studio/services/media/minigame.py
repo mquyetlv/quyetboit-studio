@@ -51,9 +51,9 @@ def _ass_text(value: str) -> str:
     )
 
 
-def _ass_color(value: str) -> str:
+def _ass_color(value: str, *, alpha: str = "00") -> str:
     red, green, blue = value.removeprefix("#")[:2], value.removeprefix("#")[2:4], value.removeprefix("#")[4:6]
-    return f"&H00{blue}{green}{red}"
+    return f"&H{alpha}{blue}{green}{red}"
 
 
 class MinigameAudioService:
@@ -442,9 +442,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for style in manifest.styles.values():
             style_lines.append(
                 f"Style: {style.name},{style.font},{style.max_size},{_ass_color(style.color)},"
-                "&H000000FF,&H002B1507,&H802B1507,"
+                f"&H000000FF,{_ass_color(style.outline_color)},"
+                f"{_ass_color(style.shadow_color, alpha='80')},"
                 f"{-1 if style.bold else 0},{-1 if style.italic else 0},0,0,100,100,"
-                f"{style.spacing},0,1,0,0,5,{style.margin},{style.margin},0,1"
+                f"{style.spacing},0,1,{style.outline_width},{style.shadow_depth},5,"
+                f"{style.margin},{style.margin},0,1"
             )
         header = f"""[Script Info]
 ScriptType: v4.00+

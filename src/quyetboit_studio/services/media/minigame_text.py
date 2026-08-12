@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from ...core.minigame import MinigameProject, MinigameThemeManifest
 from ...core.models import PipelineError, sha256_file, stable_hash
@@ -46,6 +46,10 @@ class MinigameTextLayerService:
             self.font_dir / title_style.font_file,
             title_style.max_size,
             title_style.min_size,
+            self._rgba(manifest.colors.hook_primary),
+            self._rgba(manifest.colors.hook_secondary),
+            self._rgba(manifest.colors.hook_outline),
+            title_style.outline_width,
         )
         topic_slot = manifest.slots["start_topic"]
         topic_style = manifest.styles["topic"]
@@ -57,6 +61,9 @@ class MinigameTextLayerService:
             topic_style.max_size,
             topic_style.min_size,
             fill=self._rgba(topic_style.color),
+            stroke_fill=self._rgba(topic_style.outline_color),
+            stroke_width=topic_style.outline_width,
+            bold=topic_style.bold,
             max_lines=topic_slot.max_lines,
         )
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
@@ -167,7 +174,9 @@ class MinigameTextLayerService:
 
     def _draw_gradient_centered(
         self, image: Image.Image, text: str, bounds: tuple[int, int, int, int], font_path: Path,
-        maximum: int, minimum: int,
+        maximum: int, minimum: int, start_color: tuple[int, int, int, int],
+        end_color: tuple[int, int, int, int], outline_color: tuple[int, int, int, int],
+        outline_width: int,
     ) -> None:
         mask = Image.new("L", image.size, 0)
         draw = ImageDraw.Draw(mask)
@@ -177,25 +186,41 @@ class MinigameTextLayerService:
             if box[2] - box[0] <= bounds[2] - bounds[0] and box[3] - box[1] <= bounds[3] - bounds[1]:
                 x = (bounds[0] + bounds[2] - (box[2] - box[0])) // 2
                 y = (bounds[1] + bounds[3] - (box[3] - box[1])) // 2 - box[1]
-                draw.multiline_text((x, y), text, font=font, fill=255, align="center", spacing=-size // 10)
+                draw.multiline_text(
+                    (x, y), text, font=font, fill=255, align="center",
+                    spacing=-size // 10, stroke_width=outline_width,
+                )
                 break
         gradient = Image.new("RGBA", image.size)
         pixels = gradient.load()
         for y in range(bounds[1], bounds[3] + 1):
             ratio = (y - bounds[1]) / max(1, bounds[3] - bounds[1])
-            color = (246 - round(90 * ratio), 248, 255, 255)
+            color = tuple(
+                round(start + (end - start) * ratio)
+                for start, end in zip(start_color, end_color, strict=True)
+            )
             for x in range(bounds[0], bounds[2] + 1):
                 pixels[x, y] = color
-        image.alpha_composite(Image.composite(gradient, Image.new("RGBA", image.size), mask))
+        text_layer = Image.composite(gradient, Image.new("RGBA", image.size), mask)
+        if outline_width:
+            outline_mask = mask.filter(ImageFilter.MaxFilter(outline_width * 2 + 1))
+            outline = Image.new("RGBA", image.size, outline_color)
+            outline.putalpha(ImageChops.subtract(outline_mask, mask))
+            image.alpha_composite(outline)
+        image.alpha_composite(text_layer)
 
     def _draw_centered(
         self, image: Image.Image, text: str, bounds: tuple[int, int, int, int], font_path: Path,
-        maximum: int, minimum: int, *, fill: tuple[int, int, int, int], max_lines: int,
+        maximum: int, minimum: int, *, fill: tuple[int, int, int, int],
+        stroke_fill: tuple[int, int, int, int], stroke_width: int, bold: bool,
+        max_lines: int,
     ) -> None:
         draw = ImageDraw.Draw(image)
         words = text.split()
         for size in range(maximum, minimum - 1, -1):
             font = self._font(font_path, size)
+            if bold and hasattr(font, "set_variation_by_name"):
+                font.set_variation_by_name("SemiBold")
             lines: list[str] = [""]
             for word in words:
                 proposal = f"{lines[-1]} {word}".strip()
@@ -208,5 +233,8 @@ class MinigameTextLayerService:
             if len(lines) <= max_lines and box[3] - box[1] <= bounds[3] - bounds[1]:
                 x = (bounds[0] + bounds[2] - (box[2] - box[0])) // 2
                 y = (bounds[1] + bounds[3] - (box[3] - box[1])) // 2 - box[1]
-                draw.multiline_text((x, y), value, font=font, fill=fill, align="center", spacing=4)
+                draw.multiline_text(
+                    (x, y), value, font=font, fill=fill, align="center", spacing=4,
+                    stroke_fill=stroke_fill, stroke_width=stroke_width,
+                )
                 return

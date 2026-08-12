@@ -66,6 +66,11 @@ từng từ. Nội dung review lấy nguyên bốn trường Vietnamese, English
 ô WORD TYPE được để trống vì project chưa có trường dữ liệu tương ứng. Registry tương thích cả tên
 `review-start-screen.png`, alias `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
 
+Màu chữ được định nghĩa riêng cho từng theme và từng surface. Theme 1/4 dùng foreground sáng trên nền
+tối; Theme 2/3/5 dùng foreground đậm trên nền sáng. Review có palette riêng vì Theme 4 là nền tối còn
+bốn theme kia là panel sáng. Hook, nội dung ASS, outline và shadow đều lấy từ cùng typed palette; cache
+visual tự invalidate khi palette/layout version thay đổi.
+
 Catalog Google lấy từ `TextToSpeechClient.list_voices()` và giữ language codes, SSML gender, sample
 rate cùng nhóm Chirp 3 HD/Chirp HD/Studio/Neural2/WaveNet/Standard và các loại mới provider trả về.
 Catalog CapCut gọi toàn bộ category cấu hình trong `services/capcut/config.py`, merge voice trùng

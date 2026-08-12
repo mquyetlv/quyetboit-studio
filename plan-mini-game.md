@@ -2,10 +2,10 @@
 
 ### Tiến độ cập nhật ngày 2026-08-12
 
-- Hoàn thành: **64/64 task (100%)**.
-- Đang làm một phần: **0/64 task (0%)**.
-- Chưa triển khai: **0/64 task (0%)**.
-- Đã kiểm chứng: **123 test pass**, Ruff/compileall/diff check pass; wheel chứa đủ 10 asset review.
+- Hoàn thành: **69/69 task (100%)**.
+- Đang làm một phần: **0/69 task (0%)**.
+- Chưa triển khai: **0/69 task (0%)**.
+- Đã kiểm chứng: **125 test pass**, Ruff/compileall/diff check pass; wheel chứa đủ 10 asset review.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -332,3 +332,17 @@ git diff --check
   scene và pixel difference khi chuyển sang nền review thật.
 - [x] Render integration toàn timeline 5 từ, ffprobe/progress/cancel vẫn hợp lệ; 49 test Minigame và 123
   test toàn repo pass, Ruff/compileall/diff check pass, wheel chứa đủ 10/10 asset review.
+
+## 9. Hệ màu tương phản theo Theme
+
+- [x] Thêm `ThemeColorPalette` semantic cho từng Theme 1–5, tách primary, secondary, accent, outline,
+  shadow, hook và review thay vì dùng chung chữ trắng cho mọi nền.
+- [x] Áp dụng palette sáng cho nền tối Theme 1/4 và palette chữ đậm cho nền sáng Theme 2/3/5 ở toàn bộ
+  question, answer, voice, score và CTA.
+- [x] Áp dụng palette review riêng: Theme 4 dùng chữ sáng trên nền tối; Theme 1/2/3/5 dùng chữ đậm trên
+  panel sáng.
+- [x] ASS nhận màu outline/shadow và độ dày từ typed style; hook Pillow dùng gradient/outline theo theme,
+  Topic dùng Montserrat SemiBold để không bị outline lấn nét chữ.
+- [x] Đo luminance trên đúng safe-box của asset/composite thật, regression yêu cầu contrast ≥ 4,5:1 từ
+  fill hoặc outline; render QA trực quan đủ hook/body/review cho cả năm theme. 51 test Minigame và 125
+  test toàn repo pass.

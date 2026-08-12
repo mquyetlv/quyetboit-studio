@@ -113,6 +113,103 @@ def test_review_asset_aliases_resolve_for_all_five_themes() -> None:
             assert review.size == (941, 1672)
 
 
+def _relative_luminance(rgb: np.ndarray) -> float:
+    values = rgb.astype(np.float64) / 255.0
+    linear = np.where(
+        values <= 0.04045,
+        values / 12.92,
+        ((values + 0.055) / 1.055) ** 2.4,
+    )
+    return float(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2])
+
+
+def _contrast_ratio(color: str, background: np.ndarray) -> float:
+    foreground = np.array(
+        [int(color[index : index + 2], 16) for index in (1, 3, 5)], dtype=np.uint8
+    )
+    lighter, darker = sorted(
+        (_relative_luminance(foreground), _relative_luminance(background)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_every_theme_palette_is_readable_on_its_actual_surfaces(tmp_path: Path) -> None:
+    for theme_id, manifest in MinigameThemeService().discover().items():
+        assert manifest.palette == (
+            manifest.colors.primary,
+            manifest.colors.accent,
+            manifest.colors.secondary,
+        )
+        mask = MinigameAlphaMaskService().build(manifest, tmp_path / theme_id / "mask")
+        body = MinigameVisualFrameService().build(
+            manifest.background_video,
+            (mask,),
+            tmp_path / theme_id / "frame",
+            layout_key={"contrast": theme_id},
+        )
+        surfaces = (
+            (
+                body,
+                ("meaning", "word", "ipa", "phase"),
+                (manifest.colors.primary, manifest.colors.secondary, manifest.colors.accent),
+                manifest.colors.outline,
+            ),
+            (
+                manifest.review_screen,
+                ("review_meaning", "review_word", "review_ipa", "review_example"),
+                (
+                    manifest.colors.review_primary,
+                    manifest.colors.review_secondary,
+                    manifest.colors.review_accent,
+                ),
+                manifest.colors.review_outline,
+            ),
+            (
+                manifest.start_screen,
+                ("start_title", "start_topic"),
+                (manifest.colors.hook_primary, manifest.colors.hook_secondary),
+                manifest.colors.hook_outline,
+            ),
+        )
+        for source, slots, colors, outline in surfaces:
+            with Image.open(source) as opened:
+                image = np.asarray(
+                    opened.convert("RGB").resize((1080, 1920), Image.Resampling.LANCZOS)
+                )
+            for slot_name in slots:
+                x1, y1, x2, y2 = manifest.slots[slot_name].bounds
+                pixels = image[y1 : y2 + 1, x1 : x2 + 1].reshape(-1, 3)
+                background = np.median(pixels, axis=0).astype(np.uint8)
+                assert all(
+                    max(_contrast_ratio(color, background), _contrast_ratio(outline, background))
+                    >= 4.5
+                    for color in colors
+                ), (theme_id, slot_name)
+        assert manifest.styles["topic"].outline_width >= 1
+        assert all(
+            style.outline_width >= 2
+            for name, style in manifest.styles.items()
+            if name != "topic"
+        )
+
+
+def test_theme_two_ass_uses_dark_palette_and_visible_outline(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-2")
+    project = MinigameProject(topic="Hospital", vocabulary=[_item()])
+    timeline = MinigameTimeline(
+        [MinigameScene("word", 0, 1_000, 0, "answer")], [], 1_000
+    )
+
+    content = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "theme-2.ass", "9:16", manifest
+    ).read_text(encoding="utf-8-sig")
+
+    word_style = next(line for line in content.splitlines() if line.startswith("Style: Word,"))
+    assert "&H005A3A12" in word_style  # #123A5A converted to ASS BGR.
+    assert "&H00FFFFFF" in word_style
+    assert ",1,2,1,5," in word_style
+
+
 def test_theme_preflight_reports_missing_bundled_font_with_action(tmp_path: Path) -> None:
     with pytest.raises(PipelineError, match="cài đặt lại ứng dụng") as caught:
         MinigameThemeService(fonts_root=tmp_path).get("theme-1")

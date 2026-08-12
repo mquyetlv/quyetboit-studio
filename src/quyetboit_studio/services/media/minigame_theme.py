@@ -13,6 +13,7 @@ from ...core.minigame import (
     TextPlacement,
     TextSlot,
     TextStyle,
+    ThemeColorPalette,
 )
 from ...core.models import PipelineError
 
@@ -29,11 +30,41 @@ class MinigameThemeService:
         "theme-5": AlphaMaskProfile(28, 3, 0.88, 30),
     }
     _PALETTES: ClassVar[dict[str, tuple[str, ...]]] = {
-        "theme-1": ("#43E6F4", "#07152B"),
-        "theme-2": ("#BDEFFF", "#426B91"),
-        "theme-3": ("#F5D47A", "#24334D"),
-        "theme-4": ("#72DDF7", "#563D8C"),
-        "theme-5": ("#82D98A", "#315C3B"),
+        "theme-1": ("#F7FBFF", "#43E6F4", "#CBEFFF"),
+        "theme-2": ("#123A5A", "#075E8C", "#315B78"),
+        "theme-3": ("#263247", "#745300", "#4C4B59"),
+        "theme-4": ("#F8F7FF", "#72DDF7", "#DCCFFF"),
+        "theme-5": ("#173E29", "#17652F", "#315C3B"),
+    }
+    # Body themes 1/4 are dark; 2/3/5 are light. Review follows the same split except
+    # Theme 1, whose review card is light. These semantic palettes are deliberately
+    # explicit so no scene inherits an unreadable global white foreground.
+    _COLORS: ClassVar[dict[str, ThemeColorPalette]] = {
+        "theme-1": ThemeColorPalette(
+            "#F7FBFF", "#CBEFFF", "#43E6F4", "#061425", "#061425",
+            "#073A82", "#315B87", "#0B6596", "#F7FBFF",
+            "#F7FBFF", "#9DEBFF", "#061425",
+        ),
+        "theme-2": ThemeColorPalette(
+            "#123A5A", "#315B78", "#075E8C", "#FFFFFF", "#D8EAF4",
+            "#073A82", "#315B87", "#0B6596", "#FFFFFF",
+            "#123A5A", "#075E8C", "#123A5A",
+        ),
+        "theme-3": ThemeColorPalette(
+            "#263247", "#4C4B59", "#745300", "#FFFFFF", "#E9E1CD",
+            "#263247", "#4C4B59", "#745300", "#FFFFFF",
+            "#263247", "#745300", "#263247",
+        ),
+        "theme-4": ThemeColorPalette(
+            "#F8F7FF", "#DCCFFF", "#72DDF7", "#160F31", "#160F31",
+            "#F8F7FF", "#DCCFFF", "#72DDF7", "#160F31",
+            "#F8F7FF", "#B9F1FF", "#160F31",
+        ),
+        "theme-5": ThemeColorPalette(
+            "#173E29", "#315C3B", "#17652F", "#FFFFFF", "#DDEBDF",
+            "#173E29", "#315C3B", "#17652F", "#FFFFFF",
+            "#173E29", "#17652F", "#173E29",
+        ),
     }
 
     def __init__(self, assets_root: Path | None = None, fonts_root: Path | None = None) -> None:
@@ -59,48 +90,70 @@ class MinigameThemeService:
             "review_example": TextSlot("review_example", (148, 1395, 933, 1676), 3),
         }
 
-    @staticmethod
-    def _styles() -> dict[str, TextStyle]:
+    @classmethod
+    def _styles(cls, theme_id: str) -> dict[str, TextStyle]:
+        colors = cls._COLORS[theme_id]
+
+        def style(*args, surface: str = "body", role: str = "primary", **kwargs) -> TextStyle:
+            prefix = "review_" if surface == "review" else ""
+            color = getattr(colors, f"{prefix}{role}")
+            outline = colors.review_outline if surface == "review" else colors.outline
+            return TextStyle(
+                *args,
+                color=color,
+                outline_color=outline,
+                shadow_color=colors.shadow,
+                **kwargs,
+            )
+
         return {
-            "title": TextStyle("Title", "Bebas Neue", "BebasNeue-Regular.ttf", 68, 118),
-            "topic": TextStyle("Topic", "Montserrat", "Montserrat-Variable.ttf", 25, 44),
-            "header": TextStyle(
+            "title": TextStyle(
+                "Title", "Bebas Neue", "BebasNeue-Regular.ttf", 68, 118,
+                colors.hook_primary, colors.hook_outline, colors.shadow, 3, 1,
+            ),
+            "topic": TextStyle(
+                "Topic", "Montserrat", "Montserrat-Variable.ttf", 25, 44,
+                colors.hook_primary, colors.hook_outline, colors.shadow, 1, 1, bold=True,
+            ),
+            "header": style(
                 "Header", "Montserrat", "Montserrat-Variable.ttf", 18, 30,
-                bold=True, spacing=3, margin=80,
+                role="accent", bold=True, spacing=3, margin=80,
             ),
-            "label": TextStyle(
-                "Label", "Montserrat", "Montserrat-Variable.ttf", 16, 24, "#70D8FF",
-                bold=True, spacing=4, margin=80,
+            "label": style(
+                "Label", "Montserrat", "Montserrat-Variable.ttf", 16, 24,
+                role="accent", bold=True, spacing=4, margin=80,
             ),
-            "hero": TextStyle(
+            "hero": style(
                 "Hero", "Montserrat", "Montserrat-Variable.ttf", 36, 88, bold=True,
             ),
-            "word": TextStyle(
+            "word": style(
                 "Word", "Montserrat", "Montserrat-Variable.ttf", 40, 126, bold=True,
             ),
-            "body": TextStyle(
-                "Body", "Montserrat", "Montserrat-Variable.ttf", 18, 34, "#D5EEFF",
+            "body": style(
+                "Body", "Montserrat", "Montserrat-Variable.ttf", 18, 34,
+                role="secondary",
             ),
-            "ipa": TextStyle(
-                "IPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 46, italic=True,
+            "ipa": style(
+                "IPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 46,
+                role="secondary", italic=True,
             ),
-            "review_meaning": TextStyle(
+            "review_meaning": style(
                 "ReviewMeaning", "Montserrat", "Montserrat-Variable.ttf", 30, 68,
-                "#073A82", bold=True,
+                surface="review", bold=True,
             ),
-            "review_word": TextStyle(
+            "review_word": style(
                 "ReviewWord", "Montserrat", "Montserrat-Variable.ttf", 44, 126,
-                "#073A82", bold=True,
+                surface="review", bold=True,
             ),
-            "review_ipa": TextStyle(
+            "review_ipa": style(
                 "ReviewIPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 42,
-                "#073A82", italic=True,
+                surface="review", role="secondary", italic=True,
             ),
-            "review_example": TextStyle(
+            "review_example": style(
                 "ReviewExample", "Montserrat", "Montserrat-Variable.ttf", 18, 38,
-                "#073A82",
+                surface="review", role="secondary",
             ),
-            "start": TextStyle(
+            "start": style(
                 "Start", "Bebas Neue", "BebasNeue-Regular.ttf", 52, 104,
                 bold=True, spacing=1, margin=90,
             ),
@@ -157,12 +210,14 @@ class MinigameThemeService:
         self._validate_image(text, (971, 1619), "background text")
         self._validate_image(review_start, (941, 1672), "review start screen")
         self._validate_image(review, (941, 1672), "review screen")
-        self._validate_fonts(self._styles())
+        styles = self._styles(theme_id)
+        self._validate_fonts(styles)
         checksum = self._checksum((start, background, text, review_start, review))
         return MinigameThemeManifest(
             theme_id,
             theme_id.replace("-", " ").title(),
             self._PALETTES[theme_id],
+            self._COLORS[theme_id],
             ("9:16",),
             self.CANVAS,
             start,
@@ -172,9 +227,9 @@ class MinigameThemeService:
             review,
             self._PROFILES[theme_id],
             self._slots(),
-            self._styles(),
+            styles,
             self._placements(),
-            3,
+            4,
             checksum,
         )
 

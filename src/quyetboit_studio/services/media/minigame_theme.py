@@ -89,6 +89,9 @@ class MinigameThemeService:
             "review_ipa": TextSlot("review_ipa", (193, 1049, 887, 1104), 1),
             "review_word_type": TextSlot("review_word_type", (316, 1189, 764, 1274), 1),
             "review_example": TextSlot("review_example", (148, 1395, 933, 1676), 4),
+            "score_beginner": TextSlot("score_beginner", (390, 510, 730, 620), 1),
+            "score_good": TextSlot("score_good", (390, 925, 730, 1035), 1),
+            "score_perfect": TextSlot("score_perfect", (390, 1320, 730, 1430), 1),
         }
 
     @classmethod
@@ -162,6 +165,10 @@ class MinigameThemeService:
                 "Start", "Bebas Neue", "BebasNeue-Regular.ttf", 52, 104,
                 bold=True, spacing=1, margin=90,
             ),
+            "score": TextStyle(
+                "Score", "Montserrat", "Montserrat-Variable.ttf", 24, 44,
+                "#FFFFFF", "#173A70", "#173A70", 3, 1, bold=True,
+            ),
         }
 
     @staticmethod
@@ -184,13 +191,9 @@ class MinigameThemeService:
             "review_ipa": TextPlacement("review_ipa", "review_ipa"),
             "review_word_type": TextPlacement("review_word_type", "review_word_type"),
             "review_example": TextPlacement("review_example", "review_example"),
-            "score_title": TextPlacement("start", "meaning", 520),
-            "score_beginner": TextPlacement("body", "word", 1040),
-            "score_good": TextPlacement("body", "word", 1130),
-            "score_perfect": TextPlacement("header", "word", 1220),
-            "cta_title": TextPlacement("start", "meaning", 620),
-            "cta_helper": TextPlacement("body", "phase", 1600),
-            "cta_topic": TextPlacement("header", "footer"),
+            "score_beginner": TextPlacement("score", "score_beginner"),
+            "score_good": TextPlacement("score", "score_good"),
+            "score_perfect": TextPlacement("score", "score_perfect"),
         }
 
     def discover(self) -> dict[str, MinigameThemeManifest]:
@@ -206,6 +209,7 @@ class MinigameThemeService:
         if not background.is_file():
             background = root / "backgound-videos.png"
         text = root / "background-text.png"
+        score = root / "score.png"
         review_start = root / "review-start-screen.png"
         if not review_start.is_file():
             review_start = root / "start-review-screen.png"
@@ -215,11 +219,12 @@ class MinigameThemeService:
         self._validate_image(start, (941, 1672), "start screen")
         self._validate_image(background, (941, 1672), "background video")
         self._validate_image(text, (971, 1619), "background text")
+        self._validate_image(score, (941, 1672), "score screen")
         self._validate_image(review_start, (941, 1672), "review start screen")
         self._validate_image(review, (941, 1672), "review screen")
         styles = self._styles(theme_id)
         self._validate_fonts(styles)
-        checksum = self._checksum((start, background, text, review_start, review))
+        checksum = self._checksum((start, background, text, score, review_start, review))
         return MinigameThemeManifest(
             theme_id,
             theme_id.replace("-", " ").title(),
@@ -230,13 +235,14 @@ class MinigameThemeService:
             start,
             background,
             text,
+            score,
             review_start,
             review,
             self._PROFILES[theme_id],
             self._slots(),
             styles,
             self._placements(),
-            5,
+            6,
             checksum,
         )
 

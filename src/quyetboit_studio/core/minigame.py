@@ -22,6 +22,22 @@ class MinigameTtsProvider(StrEnum):
     GOOGLE = "google"
 
 
+class VocabularyLevel(StrEnum):
+    EASY = "Dễ"
+    MEDIUM = "Trung bình"
+    HARD = "Khó"
+
+    @classmethod
+    def normalize(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        aliases = {item.value.casefold(): item.value for item in cls}
+        try:
+            return aliases[normalized]
+        except KeyError as exc:
+            choices = ", ".join(item.value for item in cls)
+            raise ValueError(f"level phải là một trong: {choices}.") from exc
+
+
 @dataclass(slots=True, frozen=True)
 class CanvasSpec:
     width: int = 1080
@@ -118,6 +134,7 @@ class MinigameThemeManifest:
     start_screen: Path
     background_video: Path
     background_text: Path
+    score_screen: Path
     review_start_screen: Path
     review_screen: Path
     mask_profile: AlphaMaskProfile
@@ -136,6 +153,7 @@ class VocabularyItem:
     example: str
     word_type: str = ""
     example_vietnamese: str = ""
+    level: str = VocabularyLevel.EASY.value
 
     def normalized(self) -> VocabularyItem:
         return VocabularyItem(
@@ -145,6 +163,7 @@ class VocabularyItem:
             self.example.strip(),
             self.word_type.strip(),
             self.example_vietnamese.strip(),
+            VocabularyLevel.normalize(self.level),
         )
 
     def validate(self, index: int) -> None:
@@ -157,6 +176,10 @@ class VocabularyItem:
         for name, label in labels.items():
             if not getattr(self, name).strip():
                 raise ValueError(f"Từ #{index}: chưa nhập {label}.")
+        try:
+            VocabularyLevel.normalize(self.level)
+        except ValueError as exc:
+            raise ValueError(f"Từ #{index}: {exc}") from exc
 
     def to_content_dict(self) -> dict[str, str]:
         return {
@@ -166,6 +189,7 @@ class VocabularyItem:
             "wordType": self.word_type,
             "example": self.example,
             "exampleVietnamese": self.example_vietnamese,
+            "level": self.level,
         }
 
 
@@ -179,16 +203,26 @@ class MinigameContent:
 
     _ROOT_KEYS = frozenset({"schemaVersion", "topic", "words"})
     _WORD_KEYS = frozenset(
-        {"vietnamese", "english", "ipa", "wordType", "workType", "example", "exampleVietnamese"}
+        {
+            "vietnamese", "english", "ipa", "wordType", "workType", "example",
+            "exampleVietnamese", "level",
+        }
     )
     _REQUIRED_WORD_KEYS = frozenset(
-        {"vietnamese", "english", "ipa", "example", "exampleVietnamese"}
+        {"vietnamese", "english", "ipa", "example", "exampleVietnamese", "level"}
     )
 
     @classmethod
     def blank(cls, count: int = 5) -> MinigameContent:
         count = max(1, min(50, count))
-        return cls("", [VocabularyItem("", "", "", "", "", "") for _ in range(count)])
+        levels = tuple(VocabularyLevel)
+        return cls(
+            "",
+            [
+                VocabularyItem("", "", "", "", "", "", levels[index % 3].value)
+                for index in range(count)
+            ],
+        )
 
     @classmethod
     def example(cls) -> MinigameContent:
@@ -202,7 +236,16 @@ class MinigameContent:
                     "The doctor checks the patient.",
                     "Noun",
                     "Bác sĩ khám cho bệnh nhân.",
-                )
+                    "Dễ",
+                ),
+                VocabularyItem(
+                    "Y tá", "Nurse", "/nɜːrs/", "The nurse helps the doctor.",
+                    "Noun", "Y tá hỗ trợ bác sĩ.", "Trung bình",
+                ),
+                VocabularyItem(
+                    "Bệnh nhân", "Patient", "/ˈpeɪ.ʃənt/", "The patient is waiting.",
+                    "Noun", "Bệnh nhân đang chờ.", "Khó",
+                ),
             ],
         )
 
@@ -258,11 +301,15 @@ class MinigameContent:
                 "word_type": row.get("wordType", row.get("workType")),
                 "example": row["example"],
                 "example_vietnamese": row["exampleVietnamese"],
+                "level": row["level"],
             }
             invalid = [name for name, item in values.items() if not isinstance(item, str)]
             if invalid:
                 raise ValueError(f"{path}.{invalid[0]} phải là chuỗi.")
-            words.append(VocabularyItem(**values).normalized())
+            try:
+                words.append(VocabularyItem(**values).normalized())
+            except ValueError as exc:
+                raise ValueError(f"{path}.{exc}") from exc
         return cls(payload["topic"].strip(), words)
 
     def to_dict(self) -> dict[str, object]:
@@ -336,10 +383,15 @@ class MinigameProject:
         data.setdefault("schema_version", 1)
         data.setdefault("theme_id", "theme-1")
         vocabulary = data.get("vocabulary", [])
-        data["vocabulary"] = [
-            item if isinstance(item, VocabularyItem) else VocabularyItem(**item)
-            for item in vocabulary
-        ]
+        data["vocabulary"] = []
+        levels = tuple(VocabularyLevel)
+        for index, item in enumerate(vocabulary):
+            if isinstance(item, VocabularyItem):
+                data["vocabulary"].append(item)
+                continue
+            migrated = dict(item)
+            migrated.setdefault("level", levels[index % len(levels)].value)
+            data["vocabulary"].append(VocabularyItem(**migrated))
         data["schema_version"] = 2
         return cls(**data)
 
@@ -371,7 +423,6 @@ class MinigameTimelineBuilder:
     REVIEW_GAP_MS = 280
     REVIEW_AFTER_MS = 500
     SCORE_MS = 3_000
-    CTA_MS = 2_400
 
     def build(
         self,
@@ -425,6 +476,8 @@ class MinigameTimelineBuilder:
             audio_events.extend(
                 [(normal_start, normal), (slow_start, slow), (final_start, normal)]
             )
+        scenes.append(MinigameScene("score", cursor, cursor + self.SCORE_MS))
+        cursor += self.SCORE_MS
         scenes.append(MinigameScene("review_start", cursor, cursor + self.REVIEW_START_MS))
         cursor += self.REVIEW_START_MS
         for index in range(len(items)):
@@ -436,15 +489,24 @@ class MinigameTimelineBuilder:
             cursor = example_start + durations[example] + self.REVIEW_AFTER_MS
             scenes.append(MinigameScene("review", start, cursor, index))
             audio_events.extend([(word_start, normal), (example_start, example)])
-        scenes.append(MinigameScene("score", cursor, cursor + self.SCORE_MS))
-        cursor += self.SCORE_MS
-        scenes.append(MinigameScene("cta", cursor, cursor + self.CTA_MS))
-        cursor += self.CTA_MS
         return MinigameTimeline(scenes, audio_events, cursor)
 
 
-def score_ranges(total: int) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
-    if total < 1:
-        raise ValueError("Tổng số từ phải lớn hơn 0.")
-    beginner_end = max(0, (total * 60 + 99) // 100 - 1)
-    return (0, beginner_end), (beginner_end + 1, total - 1), (total, total)
+def score_ranges(
+    items: list[VocabularyItem],
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+    """Build cumulative score bands from Easy, Medium and Hard word counts."""
+    if not items:
+        raise ValueError("Danh sách từ phải có ít nhất một phần tử.")
+    counts = [sum(item.level == level.value for item in items) for level in VocabularyLevel]
+    easy, medium, _hard = counts
+    return (0, easy), (easy + 1, easy + medium), (easy + medium + 1, len(items))
+
+
+def format_score_range(score_range: tuple[int, int], total: int) -> str:
+    start, end = score_range
+    if start > end:
+        return "— correct"
+    if start == end:
+        return f"{start}/{total} correct"
+    return f"{start}–{end} correct"

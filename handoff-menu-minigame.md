@@ -21,8 +21,8 @@ test, log hay tài liệu handoff.
 
 ## 2. Trạng thái hiện tại
 
-- Checklist Minigame: **76/76 task hoàn thành**.
-- Baseline tự động: **132 test pass**; 58 test nằm trong `tests/test_minigame.py`.
+- Checklist Minigame: **82/82 task hoàn thành**.
+- Baseline tự động: **134 test pass**; 61 test nằm trong `tests/test_minigame.py`.
 - Ruff, `compileall` và `git diff --check` pass.
 - Đã render integration thật bằng FFmpeg: video 1080×1920, có audio/video, progress 100%, output
   ffprobe hợp lệ và không còn file `.partial`/scene tạm.
@@ -47,7 +47,7 @@ Luôn chạy `git status --short --untracked-files=all` trước khi sửa.
 
 ## 3. Chức năng người dùng hiện có
 
-Menu Minigame tạo video đoán từ, phát âm, review, score và CTA theo luồng:
+Menu Minigame tạo video đoán từ, phát âm, score có CTA tích hợp và review theo luồng:
 
 ```text
 JSON content
@@ -94,7 +94,8 @@ Schema máy đọc nằm tại `minigame-content.schema.json`.
       "ipa": "/ˈdɒk.tər/",
       "wordType": "Noun",
       "example": "The doctor checks the patient.",
-      "exampleVietnamese": "Bác sĩ khám cho bệnh nhân."
+      "exampleVietnamese": "Bác sĩ khám cho bệnh nhân.",
+      "level": "Dễ"
     }
   ]
 }
@@ -105,7 +106,8 @@ Quy tắc:
 - Root bắt buộc có đúng `schemaVersion`, `topic`, `words`; field lạ bị từ chối.
 - `schemaVersion` hiện phải bằng `1`.
 - `words` có 1–50 phần tử.
-- Mỗi word phải khai báo đủ sáu key trong ví dụ. Giá trị phải là string.
+- Mỗi word phải khai báo đủ bảy key trong ví dụ. Giá trị phải là string; `level` chỉ nhận `Dễ`,
+  `Trung bình` hoặc `Khó`.
 - Tên chuẩn là `wordType`. Parser chấp nhận alias `workType`, nhưng `to_json()` và nút
   **Định dạng JSON** luôn chuẩn hóa thành `wordType`.
 - `vietnamese`, `english`, `ipa`, `example` phải có nội dung khi render.
@@ -139,10 +141,9 @@ Timeline chuẩn:
    - `question`: Vietnamese + countdown 3→2→1.
    - `answer`: Vietnamese, English, IPA và Word Type nếu có.
    - ba voice phase: `LISTEN → SLOW → YOUR TURN`.
-3. `review_start`: xuất hiện đúng một lần trong 2,8 giây bằng review-start asset.
-4. Mỗi `review`: Vietnamese, English, IPA, Word Type, Example và Example Vietnamese nếu có.
-5. `score`: score ranges tính theo tổng số từ.
-6. `cta`.
+3. `score`: dùng `score.png`; ba range tính theo số từ level Dễ/Trung bình/Khó.
+4. `review_start`: xuất hiện đúng một lần trong 2,8 giây bằng review-start asset.
+5. Mỗi `review`: Vietnamese, English, IPA, Word Type, Example và Example Vietnamese nếu có.
 
 TTS chỉ đọc English word và English example. `exampleVietnamese` là text hiển thị, không đưa vào TTS.
 

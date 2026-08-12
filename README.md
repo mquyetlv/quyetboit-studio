@@ -11,7 +11,8 @@ Menu **Tiếng Anh → Mini game** tạo video đoán từ từ dữ liệu ngư
 YouTube 16:9, TikTok/Shorts 9:16 hoặc xuất đồng thời cả hai; video nền được crop theo điểm focus và
 luôn tắt audio gốc. Mỗi từ bắt buộc có nghĩa tiếng Việt, từ tiếng Anh, IPA và câu ví dụ. Timeline
 gồm hook, countdown có sound cue, ba lượt phát âm được trim khoảng lặng và đồng bộ nhãn
-`LISTEN → SLOW → YOUR TURN`, ôn tập có câu ví dụ, chấm điểm động và lời kêu gọi comment. Layout dùng
+`LISTEN → SLOW → YOUR TURN`, chấm điểm theo level rồi ôn tập có câu ví dụ. Màn score dùng
+`score.png` của theme và đã chứa lời kêu gọi comment. Layout dùng
 card tối, typography Unicode rõ ràng và tách riêng English, IPA, nghĩa tiếng Việt cùng example;
 audio timeline được chuẩn hóa loudness trước khi render.
 
@@ -75,18 +76,21 @@ JSON nội dung dùng `schemaVersion: 1`, chứa `topic` và từ 1–50 phần 
       "ipa": "/ˈdɒk.tər/",
       "wordType": "Noun",
       "example": "The doctor checks the patient.",
-      "exampleVietnamese": "Bác sĩ khám cho bệnh nhân."
+      "exampleVietnamese": "Bác sĩ khám cho bệnh nhân.",
+      "level": "Dễ"
     }
   ]
 }
 ```
 
 Tên chuẩn là `wordType`; parser cũng nhận `workType` và chuẩn hóa lại khi bấm **Định dạng JSON**.
+`level` bắt buộc nhận một trong ba giá trị `Dễ`, `Trung bình`, `Khó`. Ba nhóm này lần lượt xác định
+dải điểm Beginner, Good và Perfect; dải chỉ có một mốc được ghi dạng `3/5 correct`.
 Không đặt credential, API key hoặc đường dẫn service-account trong JSON nội dung. Schema máy đọc nằm
 tại `minigame-content.schema.json`.
 
-Sau vòng đoán từ, video hiển thị một lần màn mở đầu review theo theme rồi dùng nền review riêng cho
-từng từ. Review hiển thị Vietnamese, English Word, IPA, Word Type, Example Sentence và bản dịch ví dụ
+Sau vòng đoán từ, video hiển thị màn score theo theme, tiếp theo là màn mở đầu review rồi dùng nền
+review riêng cho từng từ. Review hiển thị Vietnamese, English Word, IPA, Word Type, Example Sentence và bản dịch ví dụ
 nếu được cung cấp. Registry tương thích cả tên `review-start-screen.png`, alias
 `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
 

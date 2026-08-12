@@ -278,7 +278,8 @@ class MinigamePage(QWidget):
         content_card, vocabulary_layout = self._card("2. Nội dung bắt buộc")
         json_help = QLabel(
             "Nhập một object JSON gồm schemaVersion, topic và words. Mỗi từ có đủ: "
-            "vietnamese, english, ipa, wordType, example, exampleVietnamese."
+            "vietnamese, english, ipa, wordType, example, exampleVietnamese, level "
+            "(Dễ, Trung bình hoặc Khó)."
         )
         json_help.setWordWrap(True)
         json_help.setObjectName("Subtitle")

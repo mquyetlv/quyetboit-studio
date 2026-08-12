@@ -13,6 +13,7 @@ from ...core.minigame import (
     MinigameScene,
     MinigameThemeManifest,
     MinigameTimeline,
+    format_score_range,
     score_ranges,
 )
 from ...core.models import (
@@ -411,13 +412,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "Eyebrow", "EXAMPLE", y=positions["example_label"])
                 add(scene, "Body", wrapped_example, y=positions["example"])
             elif scene.kind == "score":
-                beginner, good, perfect = score_ranges(total)
+                beginner, good, perfect = score_ranges(project.vocabulary)
                 add(scene, "Eyebrow", "CHALLENGE COMPLETE", y=positions["header"])
                 add(scene, "Title", "HOW DID YOU DO?", y=positions["label"])
-                lines = [f"{beginner[0]}–{beginner[1]}   KEEP PRACTICING"]
-                if good[0] <= good[1]:
-                    lines.append(f"{good[0]}–{good[1]}   GREAT JOB")
-                lines.append(f"{perfect[0]}/{total}   PERFECT SCORE")
+                lines = [format_score_range(beginner, total)]
+                lines.append(format_score_range(good, total))
+                lines.append(format_score_range(perfect, total))
                 add(
                     scene,
                     "Body",
@@ -425,16 +425,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     y=positions["hero"],
                     animation="pop",
                 )
-            elif scene.kind == "cta":
-                add(scene, "Eyebrow", "ONE LAST THING", y=positions["header"])
-                add(scene, "Hero", "COMMENT\nYOUR SCORE", y=positions["hero"], animation="pop")
-                add(
-                    scene,
-                    "Pill",
-                    f"DID YOU GET {total} / {total}?",
-                    y=positions["translation"],
-                )
-                add(scene, "Small", "Save this video  •  Challenge a friend", y=positions["phase"])
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_suffix(output.suffix + ".partial")
         partial.write_text(header + "\n".join(events) + "\n", encoding="utf-8-sig")
@@ -542,18 +532,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     example += f"\n{item.example_vietnamese}"
                 add(scene, "review_example", example)
             elif scene.kind == "score":
-                beginner, good, perfect = score_ranges(total)
-                add(scene, "ending_header", "CHALLENGE COMPLETE")
-                add(scene, "score_title", "HOW DID YOU DO?")
-                add(scene, "score_beginner", f"{beginner[0]}–{beginner[1]}  KEEP PRACTICING")
-                if good[0] <= good[1]:
-                    add(scene, "score_good", f"{good[0]}–{good[1]}  GREAT JOB")
-                add(scene, "score_perfect", f"{perfect[0]}/{total}  PERFECT SCORE")
-            elif scene.kind == "cta":
-                add(scene, "ending_header", "ONE LAST THING")
-                add(scene, "cta_title", "COMMENT\\NYOUR SCORE")
-                add(scene, "cta_helper", "Save this video • Challenge a friend")
-                add(scene, "cta_topic", project.topic.upper())
+                beginner, good, perfect = score_ranges(project.vocabulary)
+                add(scene, "score_beginner", format_score_range(beginner, total))
+                add(scene, "score_good", format_score_range(good, total))
+                add(scene, "score_perfect", format_score_range(perfect, total))
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_suffix(output.suffix + ".partial")
         partial.write_text(header + "\n".join(events) + "\n", encoding="utf-8-sig")

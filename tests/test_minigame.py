@@ -18,6 +18,8 @@ from quyetboit_studio.core.minigame import (
     MinigameTimeline,
     MinigameTimelineBuilder,
     VocabularyItem,
+    VocabularyLevel,
+    format_score_range,
     score_ranges,
 )
 from quyetboit_studio.core.models import CancellationToken, PipelineError
@@ -39,8 +41,10 @@ from quyetboit_studio.services.minigame_tts import CatalogVoice, google_voice_fa
 
 
 def _item(index: int = 1) -> VocabularyItem:
+    level = tuple(VocabularyLevel)[(index - 1) % 3].value
     return VocabularyItem(
-        f"nghĩa {index}", f"word{index}", f"/wɜːd {index}/", f"This is example {index}."
+        f"nghĩa {index}", f"word{index}", f"/wɜːd {index}/", f"This is example {index}.",
+        level=level,
     )
 
 
@@ -55,6 +59,7 @@ def _content_json(count: int = 1, topic: str = "Hospital") -> str:
                 f"This is example {index}.",
                 "Noun",
                 f"Đây là ví dụ {index}.",
+                tuple(VocabularyLevel)[(index - 1) % 3].value,
             )
             for index in range(1, count + 1)
         ],
@@ -68,10 +73,12 @@ def test_minigame_content_json_round_trips_every_field_and_normalizes_alias() ->
     assert content.topic == "Hospital"
     assert content.words[0].word_type == "Noun"
     assert content.words[0].example_vietnamese == "Đây là ví dụ 1."
+    assert content.words[0].level == "Dễ"
     assert MinigameContent.from_json(value.replace('"wordType"', '"workType"')).words[
         0
     ].word_type == "Noun"
     assert '"wordType": "Noun"' in content.to_json()
+    assert '"level": "Dễ"' in content.to_json()
     assert '"workType"' not in content.to_json()
 
 
@@ -118,17 +125,35 @@ def test_safe_project_serialization_excludes_service_account_path() -> None:
 
 def test_legacy_minigame_project_migrates_to_default_theme() -> None:
     project = MinigameProject.from_dict(
-        {"schema_version": 1, "topic": "Food", "background_video": "legacy.mp4"}
+        {
+            "schema_version": 1,
+            "topic": "Food",
+            "background_video": "legacy.mp4",
+            "vocabulary": [
+                {"vietnamese": "một", "english": "one", "ipa": "/wʌn/", "example": "One."},
+                {"vietnamese": "hai", "english": "two", "ipa": "/tuː/", "example": "Two."},
+                {"vietnamese": "ba", "english": "three", "ipa": "/θriː/", "example": "Three."},
+            ],
+        }
     )
 
     assert project.schema_version == 2
     assert project.theme_id == "theme-1"
     assert project.background_video == "legacy.mp4"
+    assert [item.level for item in project.vocabulary] == ["Dễ", "Trung bình", "Khó"]
+
+
+def test_content_json_rejects_unknown_level_with_word_path() -> None:
+    value = _content_json().replace('"level": "Dễ"', '"level": "Siêu khó"')
+
+    with pytest.raises(ValueError, match=r"words\[0\]\.level phải là một trong"):
+        MinigameContent.from_json(value)
 
 
 def test_image_theme_does_not_require_legacy_background_video() -> None:
     project = MinigameProject(
-        topic="Food", tts_provider="capcut", voice="voice", vocabulary=[_item()]
+        topic="Food", tts_provider="capcut", voice="voice",
+        vocabulary=[_item(1), _item(2), _item(3)],
     )
 
     project.validate()
@@ -141,6 +166,7 @@ def test_theme_discovery_and_mask_are_complete_for_all_five_themes(tmp_path: Pat
     for manifest in manifests.values():
         assert manifest.start_screen.is_file()
         assert manifest.background_video.is_file()
+        assert manifest.score_screen.is_file()
         assert manifest.review_start_screen.is_file()
         assert manifest.review_screen.is_file()
         result = MinigameAlphaMaskService().build(manifest, tmp_path)
@@ -561,16 +587,15 @@ def test_json_only_fields_are_rendered_in_answer_and_review(tmp_path: Path) -> N
     assert rf"\pos({(x1 + x2) // 2},{(y1 + y2) // 2})" in content
 
 
-def test_theme_review_score_and_cta_have_dedicated_content(tmp_path: Path) -> None:
-    project = MinigameProject(topic="Hospital", vocabulary=[_item()])
+def test_theme_review_and_level_score_have_dedicated_content(tmp_path: Path) -> None:
+    project = MinigameProject(topic="Hospital", vocabulary=[_item(1), _item(2), _item(3)])
     timeline = MinigameTimeline(
         [
             MinigameScene("review", 0, 1_000, 0),
             MinigameScene("score", 1_000, 2_000),
-            MinigameScene("cta", 2_000, 3_000),
         ],
         [],
-        3_000,
+        2_000,
     )
     content = MinigameSubtitleBuilder().build(
         project, timeline, tmp_path / "ending.ass", "9:16", MinigameThemeService().get("theme-1")
@@ -581,9 +606,10 @@ def test_theme_review_score_and_cta_have_dedicated_content(tmp_path: Path) -> No
     assert "/wɜːd 1/" in content
     assert "This is example 1." in content
     assert "WORD TYPE" not in content
-    assert "CHALLENGE COMPLETE" in content
-    assert "PERFECT SCORE" in content
-    assert "Save this video" in content
+    assert "0–1 correct" in content
+    assert "2/3 correct" in content
+    assert "3/3 correct" in content
+    assert "Save this video" not in content
 
 
 def test_hook_title_and_topic_are_pre_rendered_to_rgba(tmp_path: Path) -> None:
@@ -754,9 +780,27 @@ def test_text_measurement_reduces_long_vietnamese_and_ipa_to_safe_box() -> None:
 
 
 def test_score_ranges_are_dynamic() -> None:
-    assert score_ranges(5) == ((0, 2), (3, 4), (5, 5))
-    assert score_ranges(7) == ((0, 4), (5, 6), (7, 7))
-    assert score_ranges(1) == ((0, 0), (1, 0), (1, 1))
+    items = [_item(index) for index in range(1, 6)]
+    assert score_ranges(items) == ((0, 2), (3, 4), (5, 5))
+    assert format_score_range((3, 3), 5) == "3/5 correct"
+    assert format_score_range((3, 4), 5) == "3–4 correct"
+    assert format_score_range((3, 2), 5) == "— correct"
+
+
+def test_score_range_uses_level_distribution_and_single_value_fraction() -> None:
+    items = [
+        replace(_item(1), level="Dễ"),
+        replace(_item(2), level="Dễ"),
+        replace(_item(3), level="Trung bình"),
+        replace(_item(4), level="Khó"),
+        replace(_item(5), level="Khó"),
+    ]
+
+    beginner, good, perfect = score_ranges(items)
+
+    assert format_score_range(beginner, 5) == "0–2 correct"
+    assert format_score_range(good, 5) == "3/5 correct"
+    assert format_score_range(perfect, 5) == "4–5 correct"
 
 
 def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) -> None:
@@ -782,7 +826,9 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
     review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
     last_word = max(scene.end_ms for scene in timeline.scenes if scene.kind == "word")
     first_review = min(scene.start_ms for scene in timeline.scenes if scene.kind == "review")
-    assert review_start.start_ms == last_word
+    score = next(scene for scene in timeline.scenes if scene.kind == "score")
+    assert score.start_ms == last_word
+    assert score.end_ms == review_start.start_ms
     assert review_start.end_ms == first_review
     assert review_start.end_ms - review_start.start_ms == MinigameTimelineBuilder.REVIEW_START_MS
     assert sum(path == normal[0] for _, path in timeline.audio_events) == 3
@@ -805,7 +851,10 @@ def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path
     example = [tmp_path / "example.wav"]
     durations = {normal[0]: 500, slow[0]: 800, example[0]: 900}
     timeline = MinigameTimelineBuilder().build([_item()], normal, slow, example, durations)
-    paths = [tmp_path / name for name in ("hook.png", "body.png", "review-start.png", "review.png")]
+    paths = [
+        tmp_path / name
+        for name in ("hook.png", "body.png", "score.png", "review-start.png", "review.png")
+    ]
 
     scenes = MinigamePipeline._visual_scenes(timeline, *paths)
 
@@ -814,10 +863,11 @@ def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path
         paths[1],
         paths[2],
         paths[3],
-        paths[1],
+        paths[4],
     ]
     assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
-    assert scenes[2].duration_ms == MinigameTimelineBuilder.REVIEW_START_MS
+    assert scenes[2].duration_ms == MinigameTimelineBuilder.SCORE_MS
+    assert scenes[3].duration_ms == MinigameTimelineBuilder.REVIEW_START_MS
 
 
 def test_subtitles_keep_supplied_content_and_dynamic_score(tmp_path: Path) -> None:
@@ -838,8 +888,8 @@ def test_subtitles_keep_supplied_content_and_dynamic_score(tmp_path: Path) -> No
     assert "PlayResX: 1080" in text
     assert "CAN YOU GET\\N5 OUT OF 5?" in text
     assert "This is example 1." in text
-    assert "0–2   KEEP PRACTICING" in text
-    assert "5/5   PERFECT SCORE" in text
+    assert "0–2 correct" in text
+    assert "5/5 correct" in text
     assert "Segoe UI Semibold" in text
     assert "🌱" not in text
 

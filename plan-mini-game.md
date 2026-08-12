@@ -2,10 +2,10 @@
 
 ### Tiến độ cập nhật ngày 2026-08-12
 
-- Hoàn thành: **76/76 task (100%)**.
-- Đang làm một phần: **0/76 task (0%)**.
-- Chưa triển khai: **0/76 task (0%)**.
-- Đã kiểm chứng: **132 test pass**, Ruff/compileall/diff check pass; wheel chứa đủ 10 asset review.
+- Hoàn thành: **82/82 task (100%)**.
+- Đang làm một phần: **0/82 task (0%)**.
+- Chưa triển khai: **0/82 task (0%)**.
+- Đã kiểm chứng: **134 test pass**, Ruff/compileall/diff check pass; package-data chứa đủ asset review và score.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -209,8 +209,7 @@ Màu baseline lấy từ ảnh mẫu:
   khung C hiện phase/loại từ nếu có dữ liệu; không tự đoán part of speech khi model chưa có field.
 - [x] Voice scene đồng bộ `LISTEN → SLOW → YOUR TURN` trong khung D với audio event hiện tại.
 - [x] Review dùng khung A/B/D cho English, IPA, nghĩa Việt và example; wrap example theo pixel width.
-- [x] Score/CTA dùng `background-video.png` và style đúng theme; score range vẫn
-  tính động theo `score_ranges(total)`.
+- [x] Score dùng `score.png` và ba range tính động theo level; CTA comment nằm sẵn trong artwork.
 - [x] Giữ cue âm thanh, trim silence, loudness, cache TTS và timeline động hiện có; regression xác nhận
   đổi theme/layout không đổi TTS cache key nếu text/voice giữ nguyên.
 
@@ -307,7 +306,7 @@ git diff --check
   matte đen hoặc halo sau composite.
 - [x] Title/topic trên start screen đúng safe box và font đã duyệt ở 1080×1920.
 - [x] Question/answer/IPA/example/voice phase nằm đúng khung, không tràn với bộ fixture biên.
-- [x] Video 5 từ chạy qua hook→question→answer→voice→review→score→CTA, audio/text đồng bộ.
+- [x] Video 5 từ chạy qua hook→question→answer→voice→score→review_start→review, audio/text đồng bộ.
 - [x] Output được ghi `.partial`, ffprobe hợp lệ rồi rename atomic; Stop không để process/file mồ côi.
 - [x] Không làm giảm test hiện có và không phá project Minigame cũ.
 
@@ -325,7 +324,7 @@ git diff --check
   2,8 giây được tính vào timeline/progress tổng.
 - [x] Render `review-start-screen.png`/alias thành full-frame riêng, cache theo checksum theme và ghép đúng
   boundary với audio/timeline.
-- [x] Render `rewview.png` làm full-frame nền cho mọi item review; score/CTA quay lại nền chính như cũ.
+- [x] Render `rewview.png` làm full-frame nền cho mọi item review; score dùng asset riêng `score.png`.
 - [x] Đặt đúng bốn dữ liệu người dùng cung cấp vào các vùng Vietnamese, English Word, IPA và Example
   Sentence; để trống WORD TYPE vì model chưa có field và không tự suy đoán.
 - [x] Thêm regression cho alias asset, vị trí text, scene không có text động ở màn mở đầu, chuỗi visual
@@ -338,7 +337,7 @@ git diff --check
 - [x] Thêm `ThemeColorPalette` semantic cho từng Theme 1–5, tách primary, secondary, accent, outline,
   shadow, hook và review thay vì dùng chung chữ trắng cho mọi nền.
 - [x] Áp dụng palette sáng cho nền tối Theme 1/4 và palette chữ đậm cho nền sáng Theme 2/3/5 ở toàn bộ
-  question, answer, voice, score và CTA.
+  question, answer và voice; score có style tương phản riêng trên ba pill của asset.
 - [x] Áp dụng palette review riêng: Theme 4 dùng chữ sáng trên nền tối; Theme 1/2/3/5 dùng chữ đậm trên
   panel sáng.
 - [x] ASS nhận màu outline/shadow và độ dày từ typed style; hook Pillow dùng gradient/outline theo theme,
@@ -349,8 +348,8 @@ git diff --check
 
 ## 10. Nhập nội dung bằng JSON
 
-- [x] Định nghĩa `MinigameContent` schema v1 typed gồm `topic`, 1–50 `words` và đủ sáu trường mỗi từ:
-  `vietnamese`, `english`, `ipa`, `wordType`, `example`, `exampleVietnamese`.
+- [x] Định nghĩa `MinigameContent` schema v1 typed gồm `topic`, 1–50 `words` và đủ bảy trường mỗi từ:
+  `vietnamese`, `english`, `ipa`, `wordType`, `example`, `exampleVietnamese`, `level`.
 - [x] Parser báo lỗi theo dòng/cột hoặc đường dẫn `words[index]`, từ chối root/field lạ và nhận alias
   `workType` nhưng luôn serialize về tên chuẩn `wordType`.
 - [x] Thay Topic/spinbox/table bằng JSON editor; hỗ trợ mở file UTF-8 tối đa 2 MiB, định dạng JSON và
@@ -361,5 +360,20 @@ git diff --check
   schema v2 và migration cũ không bị phá.
 - [x] Render Word Type trong answer/review và bản dịch dưới Example Sentence; tăng layout version để
   invalidate cache visual cũ. Đã render QA thật Theme 2 xác nhận chữ nằm đúng panel.
-- [x] Thêm JSON Schema máy đọc, unit/UI/persistence/subtitle regression; 58 test Minigame và 132 test
+- [x] Thêm JSON Schema máy đọc, unit/UI/persistence/subtitle regression; 61 test Minigame và 134 test
   toàn repo pass, Ruff/compileall/diff check pass.
+
+## 11. Score theo Level trước Review
+
+- [x] Thêm `level` bắt buộc vào JSON content với ba giá trị `Dễ`, `Trung bình`, `Khó`; serialize,
+  formatter, JSON Schema, JSON mẫu và UI help dùng cùng contract.
+- [x] Project v2 cũ thiếu `level` vẫn mở được; migration phân bổ tuần tự ba level mà không đổi schema
+  project hoặc lưu dữ liệu nhạy cảm.
+- [x] Tính dải Beginner/Good/Perfect theo số từ từng level và cộng dồn; dải một giá trị hiển thị
+  `x/N correct`, level không có từ hiển thị `— correct` thay vì tạo range đảo.
+- [x] Đổi timeline thành `hook → words → score → review_start → review items`; bỏ scene CTA riêng vì
+  CTA comment đã nằm trong artwork `score.png`.
+- [x] Discovery/validate/cache checksum bao gồm `score.png` 941×1672 của cả Theme 1–5 và dùng asset này
+  làm full-frame riêng cho scene score.
+- [x] Đặt ba text động vào đúng ba ô Beginner, Good, Perfect; tăng `layout_version` để invalidate cache
+  visual cũ.

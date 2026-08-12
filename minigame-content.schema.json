@@ -25,7 +25,8 @@
           "ipa",
           "wordType",
           "example",
-          "exampleVietnamese"
+          "exampleVietnamese",
+          "level"
         ],
         "properties": {
           "vietnamese": { "type": "string" },
@@ -33,7 +34,11 @@
           "ipa": { "type": "string" },
           "wordType": { "type": "string" },
           "example": { "type": "string" },
-          "exampleVietnamese": { "type": "string" }
+          "exampleVietnamese": { "type": "string" },
+          "level": {
+            "type": "string",
+            "enum": ["Dễ", "Trung bình", "Khó"]
+          }
         }
       }
     }

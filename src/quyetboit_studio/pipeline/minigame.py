@@ -166,8 +166,6 @@ class MinigamePipeline:
                     timeline.audio_events.append((scene.start_ms + 120, opening.path))
                 if scene.kind == "score":
                     timeline.audio_events.append((scene.start_ms + 160, finish.path))
-                if scene.kind == "cta":
-                    timeline.audio_events.append((scene.start_ms + 120, opening.path))
             raw_mix = self.audio.assemble(
                 timeline.audio_events,
                 self.workspace / "audio" / "timeline-v2-raw.wav",
@@ -228,6 +226,7 @@ class MinigamePipeline:
                         timeline,
                         hook_frame,
                         body_frame,
+                        manifest.score_screen,
                         review_start_frame,
                         review_frame,
                     ),
@@ -249,6 +248,7 @@ class MinigamePipeline:
         timeline,
         hook_frame: Path,
         body_frame: Path,
+        score_frame: Path,
         review_start_frame: Path,
         review_frame: Path,
     ) -> list[MinigameVisualScene]:
@@ -256,11 +256,13 @@ class MinigamePipeline:
         review_start = next(
             scene for scene in timeline.scenes if scene.kind == "review_start"
         )
+        score = next(scene for scene in timeline.scenes if scene.kind == "score")
         reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
         scenes = [MinigameVisualScene(hook_frame, hook.end_ms - hook.start_ms)]
-        before_review = review_start.start_ms - hook.end_ms
-        if before_review > 0:
-            scenes.append(MinigameVisualScene(body_frame, before_review))
+        before_score = score.start_ms - hook.end_ms
+        if before_score > 0:
+            scenes.append(MinigameVisualScene(body_frame, before_score))
+        scenes.append(MinigameVisualScene(score_frame, score.end_ms - score.start_ms))
         scenes.append(
             MinigameVisualScene(
                 review_start_frame, review_start.end_ms - review_start.start_ms
@@ -272,11 +274,6 @@ class MinigamePipeline:
                     review_frame, reviews[-1].end_ms - reviews[0].start_ms
                 )
             )
-            after_review = timeline.duration_ms - reviews[-1].end_ms
-        else:
-            after_review = timeline.duration_ms - review_start.end_ms
-        if after_review > 0:
-            scenes.append(MinigameVisualScene(body_frame, after_review))
         return scenes
 
     def _speech_clip(

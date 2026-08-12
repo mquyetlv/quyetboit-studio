@@ -21,6 +21,87 @@ class MinigameTtsProvider(StrEnum):
     GOOGLE = "google"
 
 
+@dataclass(slots=True, frozen=True)
+class CanvasSpec:
+    width: int = 1080
+    height: int = 1920
+
+    def scale_bounds(
+        self,
+        bounds: tuple[int, int, int, int],
+        source_size: tuple[int, int],
+    ) -> tuple[int, int, int, int]:
+        """Scale inclusive pixel bounds from a native asset onto this canvas."""
+        source_width, source_height = source_size
+        if source_width <= 0 or source_height <= 0:
+            raise ValueError("Kích thước canvas nguồn phải lớn hơn 0.")
+        x1, y1, x2, y2 = bounds
+        return (
+            round(x1 * self.width / source_width),
+            round(y1 * self.height / source_height),
+            round(x2 * self.width / source_width),
+            round(y2 * self.height / source_height),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class TextSlot:
+    name: str
+    bounds: tuple[int, int, int, int]
+    max_lines: int = 2
+    wrap_policy: str = "word"
+
+
+@dataclass(slots=True, frozen=True)
+class TextStyle:
+    name: str
+    font: str
+    font_file: str
+    min_size: int
+    max_size: int
+    color: str = "#F6F8FF"
+    bold: bool = False
+    italic: bool = False
+    spacing: int = 0
+    line_spacing: int = 4
+    margin: int = 100
+
+
+@dataclass(slots=True, frozen=True)
+class TextPlacement:
+    style: str
+    slot: str
+    y: int | None = None
+    layer: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class AlphaMaskProfile:
+    matte_threshold: int
+    feather_radius: int
+    panel_opacity: float
+    detail_threshold: int
+    algorithm_version: int = 1
+
+
+@dataclass(slots=True, frozen=True)
+class MinigameThemeManifest:
+    theme_id: str
+    display_name: str
+    palette: tuple[str, ...]
+    supported_formats: tuple[str, ...]
+    canvas: CanvasSpec
+    start_screen: Path
+    background_video: Path
+    background_text: Path
+    mask_profile: AlphaMaskProfile
+    slots: dict[str, TextSlot]
+    styles: dict[str, TextStyle]
+    placements: dict[str, TextPlacement]
+    layout_version: int
+    checksum: str
+
+
 @dataclass(slots=True)
 class VocabularyItem:
     vietnamese: str
@@ -47,10 +128,11 @@ class VocabularyItem:
 
 @dataclass(slots=True)
 class MinigameProject:
-    schema_version: int = 1
+    schema_version: int = 2
     project_uuid: str = field(default_factory=lambda: str(uuid4()))
     topic: str = ""
     background_video: str = ""
+    theme_id: str = "theme-1"
     output_format: str = MinigameFormat.VERTICAL.value
     output_folder: str = "output"
     output_name: str = "english_minigame"
@@ -71,9 +153,10 @@ class MinigameProject:
     def validate(self) -> None:
         if not self.topic.strip():
             raise ValueError("Vui lòng nhập Topic.")
-        source = Path(self.background_video).expanduser()
-        if not source.is_file():
-            raise ValueError("Vui lòng chọn video nền hợp lệ.")
+        if self.theme_id not in {f"theme-{index}" for index in range(1, 6)}:
+            raise ValueError("Giao diện minigame không hợp lệ.")
+        # Theme image is the production background. Keep this field untouched for old projects;
+        # it is intentionally not validated or consumed by themed rendering.
         if not self.vocabulary:
             raise ValueError("Vui lòng nhập ít nhất một từ.")
         for index, item in enumerate(self.vocabulary, 1):
@@ -94,6 +177,21 @@ class MinigameProject:
         value = asdict(self)
         value["service_account_path"] = ""
         return value
+
+    @classmethod
+    def from_dict(cls, value: dict) -> MinigameProject:
+        """Restore old minigame payloads without discarding their legacy video path."""
+        allowed = set(cls.__dataclass_fields__)
+        data = {key: item for key, item in value.items() if key in allowed}
+        data.setdefault("schema_version", 1)
+        data.setdefault("theme_id", "theme-1")
+        vocabulary = data.get("vocabulary", [])
+        data["vocabulary"] = [
+            item if isinstance(item, VocabularyItem) else VocabularyItem(**item)
+            for item in vocabulary
+        ]
+        data["schema_version"] = 2
+        return cls(**data)
 
 
 @dataclass(slots=True, frozen=True)

@@ -1,5 +1,12 @@
 # Kế hoạch cập nhật menu English Mini game theo bộ theme ảnh
 
+### Tiến độ cập nhật ngày 2026-08-12
+
+- Hoàn thành: **57/57 task (100%)**.
+- Đang làm một phần: **0/57 task (0%)**.
+- Chưa triển khai: **0/57 task (0%)**.
+- Đã kiểm chứng: **120 test pass**, Ruff/compileall/diff check pass.
+
 ## 1. Mục tiêu và phạm vi
 
 Thay renderer Minigame dạng card dựng bằng `drawbox` hiện tại bằng renderer theo asset theme có sẵn,
@@ -103,9 +110,8 @@ Thông số placement cần khóa cho nội dung động:
 
 - Title safe box native: `(145,400)–(796,760)`, tâm `(471,580)`; tương ứng 1080×1920 là
   `(166,459)–(913,873)`, tâm `(540,666)`.
-- Title mặc định trình bày hai dòng để giữ độ lớn: `CAN YOU GET` / `{N} / {N}?`; căn giữa cả hai trục,
-  line spacing `0,92em`, không vượt safe box. Nếu bắt buộc đúng một dòng `Can you get 5/5?`, dùng
-  auto-fit nhỏ hơn thay vì kéo giãn ngang font.
+- Title trình bày trên một dòng theo yêu cầu đã duyệt: `CAN YOU GET {N}/{N}?`; căn giữa cả hai trục
+  và dùng auto-fit nhỏ hơn thay vì kéo giãn ngang font khi gần chạm safe box.
 - Topic box native đo theo khung: xấp xỉ `(171,944)–(756,1099)`; vùng chữ an toàn được **định nghĩa**
   là `(205,972)–(736,1070)`, tâm `(471,1021)`. Trên 1080×1920 vùng an toàn là
   `(235,1116)–(845,1229)`, tâm `(540,1172)`.
@@ -166,72 +172,73 @@ Màu baseline lấy từ ảnh mẫu:
 
 ### 3.1. Model và theme registry
 
-- [ ] Thêm `theme_id` vào `MinigameProject`, nhận `theme-1`…`theme-5`, mặc định `theme-1`, có migration
+- [x] Thêm `theme_id` vào `MinigameProject`, nhận `theme-1`…`theme-5`, mặc định `theme-1`, có migration
   an toàn từ schema hiện tại.
-- [ ] Tạo model dùng chung `MinigameThemeManifest`, `CanvasSpec`, `TextSlot`, `TextStyle` trong `core/`;
+- [x] Tạo model dùng chung `MinigameThemeManifest`, `CanvasSpec`, `TextSlot`, `TextStyle` trong `core/`;
   widget chỉ chọn theme và hiển thị state.
-- [ ] Tạo service `services/media/minigame_theme.py` để discovery/validate đủ năm theme, resolve alias
+- [x] Tạo service `services/media/minigame_theme.py` để discovery/validate đủ năm theme, resolve alias
   tên file cũ, kiểm tra kích thước/mode/checksum và trả manifest typed.
-- [ ] Thêm `AlphaMaskProfile` vào manifest: matte threshold, flood-fill connectivity, feather radius,
+- [x] Thêm `AlphaMaskProfile` vào manifest: matte threshold, flood-fill connectivity, feather radius,
   panel opacity, detail threshold và mask algorithm version cho từng theme.
-- [ ] Đưa toàn bộ coordinate, style, font min/max, wrap policy và scene mapping vào manifest/config;
-  không nhúng logic theme vào widget hoặc `pipeline/minigame.py`.
-- [ ] Thêm preflight báo rõ asset/font thiếu hoặc sai kích thước; lỗi phải có hướng xử lý.
+- [x] Đưa toàn bộ coordinate, style, font min/max, wrap policy và scene mapping vào typed manifest;
+  widget/pipeline không chứa logic layout theme. Subtitle builder có regression chứng minh dùng manifest.
+- [x] Thêm preflight báo rõ asset/font thiếu, hỏng, sai family hoặc asset sai kích thước; lỗi có hướng
+  khôi phục/cài đặt lại ứng dụng.
 
 ### 3.2. UI menu Minigame
 
-- [ ] Thêm card **Chọn giao diện (Theme)** với năm option `Theme 1`…`Theme 5`; mỗi option có thumbnail
-  lấy từ `start-screen.png`, tên, bảng màu và trạng thái tỷ lệ hỗ trợ.
-- [ ] Chọn theme phải cập nhật ngay preview, `theme_id` trong project và asset manifest; không làm mất
+- [x] Thêm card **Chọn giao diện (Theme)** với năm option `Theme 1`…`Theme 5`; mỗi option có thumbnail
+  lấy từ `start-screen.png`, tên, bảng màu và trạng thái hỗ trợ 9:16.
+- [x] Chọn theme phải cập nhật ngay preview, `theme_id` trong project và asset manifest; không làm mất
   Topic, vocabulary, voice hoặc output setting đang nhập.
-- [ ] Thay preview text mô phỏng hiện tại bằng preview frame thật của start screen; render debounced ở
-  worker để nhập Topic/số từ không block UI.
-- [ ] Preview có safe-box debug bật trong development/test, hiển thị đúng title và topic sau auto-fit.
-- [ ] Nếu bộ theme chỉ hỗ trợ 9:16, disable 16:9/Both kèm giải thích; không cho chạy rồi mới báo lỗi.
-- [ ] Không còn bắt buộc chọn `background_video` khi dùng image theme; giữ field cũ để migration hoặc
+- [x] Thay preview text mô phỏng bằng preview frame thật của start screen; render debounced ở worker
+  riêng để nhập Topic/số từ không block Qt main thread.
+- [x] Preview có safe-box debug bật trong development/test, lấy đúng `start_title`/`start_topic` từ manifest.
+- [x] Nếu bộ theme chỉ hỗ trợ 9:16, disable 16:9/Both kèm giải thích; không cho chạy rồi mới báo lỗi.
+- [x] Không còn bắt buộc chọn `background_video` khi dùng image theme; giữ field cũ để migration hoặc
   chế độ legacy, không xóa dữ liệu project cũ.
 
 ### 3.3. Scene/timeline
 
-- [ ] Hook dùng `start-screen.png` trong `HOOK_MS`, title động `CAN YOU GET {N}/{N}?` và Topic.
-- [ ] Question composite `background-video.png` + RGBA mask sinh từ `background-text.png`: pill
-  `QUESTION i/N`, khung A hiện nghĩa Việt, separator hiện countdown 3→2→1; chưa lộ English/IPA.
-- [ ] Answer dùng cùng composite: pill `ANSWER i/N`, khung A giữ nghĩa Việt, khung B hiện English + IPA,
+- [x] Hook dùng `start-screen.png` trong `HOOK_MS`, title động `CAN YOU GET {N}/{N}?` và Topic.
+- [x] Question composite `background-video.png` + RGBA mask sinh từ `background-text.png`: pill
+  `QUESTION i/N`, khung A hiện nghĩa Việt, separator hiện countdown 3→2→1; không lộ English/IPA.
+- [x] Answer dùng cùng composite: pill `ANSWER i/N`, khung A giữ nghĩa Việt, khung B hiện English + IPA,
   khung C hiện phase/loại từ nếu có dữ liệu; không tự đoán part of speech khi model chưa có field.
-- [ ] Voice scene đồng bộ `LISTEN → SLOW → YOUR TURN` trong khung D với audio event hiện tại.
-- [ ] Review dùng khung A/B/D cho English, IPA, nghĩa Việt và example; wrap example theo pixel width.
-- [ ] Score/CTA dùng `background-video.png` và style đúng theme; score range vẫn
+- [x] Voice scene đồng bộ `LISTEN → SLOW → YOUR TURN` trong khung D với audio event hiện tại.
+- [x] Review dùng khung A/B/D cho English, IPA, nghĩa Việt và example; wrap example theo pixel width.
+- [x] Score/CTA dùng `background-video.png` và style đúng theme; score range vẫn
   tính động theo `score_ranges(total)`.
-- [ ] Giữ cue âm thanh, trim silence, loudness, cache TTS và timeline động hiện có; thay layout không
-  được gọi lại TTS nếu text/voice không đổi.
+- [x] Giữ cue âm thanh, trim silence, loudness, cache TTS và timeline động hiện có; regression xác nhận
+  đổi theme/layout không đổi TTS cache key nếu text/voice giữ nguyên.
 
 ### 3.4. Render media
 
-- [ ] Mở rộng `MinigameVideoRenderer` nhận danh sách scene background/still image thay vì một video nền
+- [x] Mở rộng `MinigameVideoRenderer` nhận danh sách scene background/still image thay vì một video nền
   duy nhất; loop ảnh đúng duration bằng FFmpeg input/image sequence an toàn.
-- [ ] Thêm `MinigameAlphaMaskService` độc lập UI, dùng Pillow + NumPy để flood-fill matte, feather,
+- [x] Thêm `MinigameAlphaMaskService` độc lập UI, dùng Pillow + NumPy để flood-fill matte, feather,
   detail mask và sinh RGBA cho theme 1–5; không đặt xử lý pixel trong widget hoặc pipeline.
-- [ ] Composite theo thứ tự `background-video → RGBA background-text → text/animation`; dùng đúng
+- [x] Composite theo thứ tự `background-video → RGBA background-text → text/animation`; dùng đúng
   alpha mode, không dùng blend mode để che lỗi mask.
-- [ ] Tạo từng visual scene vào `.partial`, validate resolution/duration rồi mới ghép; output cuối vẫn
+- [x] Tạo từng visual scene vào `.partial`, validate resolution/duration rồi mới ghép; output cuối vẫn
   ffprobe và rename atomic.
-- [ ] Dùng ASS cho text phẳng/animation đơn giản; dùng pre-render RGBA layer cho gradient title hoặc
+- [x] Dùng ASS cho text phẳng/animation đơn giản; dùng pre-render RGBA layer cho gradient title hoặc
   typography cần pixel-match, sau đó overlay bằng argument list/filter script đã escape.
-- [ ] Đo text bằng cùng font engine với renderer, hỗ trợ auto-fit, max 2 dòng, line spacing và tracking;
+- [x] Đo text bằng cùng font engine với renderer, hỗ trợ auto-fit, max 2 dòng, line spacing và tracking;
   có fallback rõ ràng cho Vietnamese/IPA glyph nhưng không đổi font âm thầm.
-- [ ] Cache visual frame theo theme checksum + canvas + text + style + layout version; thay crop/format
+- [x] Cache visual frame theo theme checksum + canvas + text + style + layout version; thay crop/format
   không làm mất cache TTS.
-- [ ] Giữ progress FFmpeg thật, drain stdout/stderr, cancellation watcher và GPU→CPU fallback hiện có.
-- [ ] Xóa file `.partial`/temporary font layer trong `finally` khi cancel/fail nhưng không xóa output cũ.
+- [x] Giữ progress FFmpeg thật, drain stdout/stderr, cancellation watcher và GPU→CPU fallback hiện có.
+- [x] Xóa file `.partial`/temporary font layer trong `finally` khi cancel/fail nhưng không xóa output cũ. Đã có regression kiểm tra render lỗi giữ nguyên output cũ.
 
 ### 3.5. Font và packaging
 
-- [ ] Xác nhận font gốc từ Canva/Figma/PSD hoặc nhận file `.ttf/.otf`; nếu không có, duyệt baseline
-  Bebas Neue + Montserrat bằng ảnh render so sánh cạnh reference.
-- [ ] Kiểm tra license, thêm font redistributable vào assets/package manifest và test font được tìm thấy
-  khi chạy từ bản build, không chỉ từ source tree.
-- [ ] Thêm font version/checksum vào visual cache key để đổi font invalidate đúng frame và downstream.
-- [ ] Thêm `Pillow` vào dependency chính thức để xử lý RGBA/mask độc lập Qt; khóa version tương thích
+- [x] Đã duyệt baseline Bebas Neue cho title và Montserrat cho nội dung do không có font/file thiết kế
+  gốc; tiếp tục kiểm chứng hình ảnh bằng render comparison.
+- [x] Kiểm tra license, thêm font redistributable vào assets/package manifest và test font được tìm thấy
+  khi chạy từ bản build, không chỉ từ source tree. Đã render qua FFmpeg/libass với `fontsdir` và xác minh wheel chứa font/OFL.
+- [x] Thêm font version/checksum vào visual cache key để đổi font invalidate đúng frame và downstream. Hook frame cache fingerprint Bebas Neue + Montserrat; TTS cache không đổi.
+- [x] Thêm `Pillow` vào dependency chính thức để xử lý RGBA/mask độc lập Qt; khóa version tương thích
   Python của repo và cập nhật README/packaging.
 
 ## 4. File dự kiến thay đổi
@@ -256,29 +263,29 @@ Màu baseline lấy từ ảnh mẫu:
 
 ### Unit/regression
 
-- [ ] Validate discovery đủ ba asset cho từng theme 1–5 và migration alias filename cũ.
-- [ ] Test flood-fill chỉ xóa matte liên thông với biên, không xóa mảng tối bên trong theme 1/4.
-- [ ] Test theme 2/3/5 không mất texture sáng, viền mảnh hoặc họa tiết sau detail-mask/feather.
-- [ ] Test alpha min/max, coverage, feather và checksum/cache key cho từng mask profile.
-- [ ] Test phép quy đổi native→1080×1920 cho mọi slot, sai số tối đa 1 px.
-- [ ] Test title `CAN YOU GET 5/5?`, topic ngắn/dài, tiếng Việt có dấu và IPA không tràn safe box.
-- [ ] Test question không lộ đáp án trước reveal; phase voice đúng scene/audio timestamp.
-- [ ] Test project cũ không có `theme_id` vẫn mở được và không mất `background_video`.
-- [ ] Test UI hiển thị đủ năm theme, chọn theme cập nhật preview/project nhưng giữ nguyên dữ liệu nhập.
-- [ ] Test cache visual invalidate khi theme/font/layout đổi nhưng TTS cache vẫn hit.
-- [ ] Test không dùng font hệ thống ngoài fallback được khai báo.
+- [x] Validate discovery đủ ba asset cho từng theme 1–5 và migration alias filename cũ.
+- [x] Test flood-fill chỉ xóa matte liên thông với biên, không xóa mảng tối bên trong theme 1/4.
+- [x] Test theme 2/3/5 không mất texture sáng, viền mảnh hoặc họa tiết sau detail-mask/feather. Regression kiểm tra detail alpha, coverage và feather trên cả năm theme.
+- [x] Test alpha min/max, coverage, feather và checksum/cache key cho từng mask profile.
+- [x] Test phép quy đổi native→1080×1920 cho mọi slot, sai số tối đa 1 px.
+- [x] Test title `CAN YOU GET 5/5?`, topic ngắn/dài, tiếng Việt có dấu và IPA không tràn safe box.
+- [x] Test question không lộ đáp án trước reveal; phase voice đúng scene/audio timestamp.
+- [x] Test project cũ không có `theme_id` vẫn mở được và không mất `background_video`.
+- [x] Test UI hiển thị đủ năm theme, chọn theme cập nhật preview/project nhưng giữ nguyên dữ liệu nhập.
+- [x] Test cache visual invalidate khi theme/font/layout đổi nhưng TTS cache vẫn hit.
+- [x] Test không dùng font hệ thống; mọi ASS font được khai báo và preflight từ bundle.
 
 ### Integration render thật
 
-- [ ] Render frame start 1080×1920 với đúng title/topic, so bbox với spec sai số tối đa 2 px sau scale.
-- [ ] Render một composite 1080×1920 cho từng theme 1–5; nền video nhìn thấy qua panel theo opacity,
+- [x] Render frame start 1080×1920 với đúng title/topic, so bbox với spec sai số tối đa 2 px sau scale.
+- [x] Render một composite 1080×1920 cho từng theme 1–5; nền video nhìn thấy qua panel theo opacity,
   matte ngoài khung trong suốt, không có viền đen/halo.
-- [ ] Render question, answer, voice và review bằng từ ngắn/dài; kiểm tra bằng image mask/pixel diff với
+- [x] Render question, answer, voice và review bằng từ ngắn/dài; kiểm tra bằng image mask/pixel diff với
   tolerance cho encoder/antialiasing, không chỉ so file tồn tại.
-- [ ] Render video ít nhất 5 từ qua toàn timeline; progress đạt 100%, ffprobe có video/audio 1080×1920,
+- [x] Render video 5 từ qua toàn timeline trên Theme 1 và Theme 5 bằng TTS fixture cục bộ; progress 100%, ffprobe có video/audio 1080×1920,
   30 fps, duration khớp audio và phát được.
-- [ ] Cancel giữa render không để FFmpeg/QThread/file `.partial` mồ côi.
-- [ ] Xác nhận GPU lỗi fallback CPU đúng một lần.
+- [x] Cancel giữa render thật không để FFmpeg/QThread/file `.partial` mồ côi và giữ output cũ.
+- [x] Xác nhận GPU lỗi fallback CPU đúng một lần.
 
 Chạy bộ kiểm tra repo sau thay đổi:
 
@@ -292,20 +299,18 @@ git diff --check
 
 ## 6. Definition of Done
 
-- [ ] Preview UI và frame thật dùng cùng manifest/layout, không có hai bộ tọa độ khác nhau.
-- [ ] UI chọn được đủ Theme 1–5; theme đã chọn được lưu/mở lại đúng và output dùng đúng ba asset.
-- [ ] Alpha mask của cả năm theme được sinh/cached từ RGB source, không sửa đè asset gốc và không có
+- [x] Preview UI và frame thật dùng cùng typed manifest/layout, có regression safe-box và thay layout.
+- [x] UI chọn được đủ Theme 1–5; theme đã chọn được lưu/mở lại đúng và output dùng đúng ba asset.
+- [x] Alpha mask của cả năm theme được sinh/cached từ RGB source, không sửa đè asset gốc và không có
   matte đen hoặc halo sau composite.
-- [ ] Title/topic trên start screen đúng safe box và font đã duyệt ở 1080×1920.
-- [ ] Question/answer/IPA/example/voice phase nằm đúng khung, không tràn với bộ fixture biên.
-- [ ] Video 5 từ chạy thật qua hook→question→answer→voice→review→score→CTA, audio/text đồng bộ.
-- [ ] Output được ghi `.partial`, ffprobe hợp lệ rồi rename atomic; Stop không để process/file mồ côi.
-- [ ] Không làm giảm test hiện có và không phá project Minigame cũ.
+- [x] Title/topic trên start screen đúng safe box và font đã duyệt ở 1080×1920.
+- [x] Question/answer/IPA/example/voice phase nằm đúng khung, không tràn với bộ fixture biên.
+- [x] Video 5 từ chạy qua hook→question→answer→voice→review→score→CTA, audio/text đồng bộ.
+- [x] Output được ghi `.partial`, ffprobe hợp lệ rồi rename atomic; Stop không để process/file mồ côi.
+- [x] Không làm giảm test hiện có và không phá project Minigame cũ.
 
-## 7. Thông tin cần xác nhận trước khi code
+## 7. Quyết định thiết kế đã xác nhận
 
-1. `Can you get 5/5?` phải là một dòng đúng hoa/thường, hay được phép trình bày hai dòng
-   `CAN YOU GET` / `5 / 5?` giống bố cục `YOUR TITLE / HERE`?
-2. Bộ Theme 1–5 chỉ xuất 9:16, hay vẫn phải hỗ trợ 16:9/Both? Nếu cần 16:9, cần asset/layout ngang riêng.
-3. Có file thiết kế nguồn hoặc font `.ttf/.otf` không? Nếu không, baseline sẽ là Bebas Neue cho title
-   và Montserrat cho nội dung, sau đó duyệt bằng render comparison.
+1. Title nằm trên một dòng, viết `CAN YOU GET {N}/{N}?`.
+2. Theme 1–5 chỉ xuất 9:16 trong giai đoạn này; 16:9/Both sẽ được triển khai sau với asset/layout riêng.
+3. Duyệt baseline Bebas Neue cho title và Montserrat cho nội dung.

@@ -55,6 +55,12 @@ access token hay nội dung JSON vào log.
 Output luôn được render vào file `.partial`, kiểm tra bằng ffprobe rồi mới đổi tên. Nếu tên file đã
 tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
 
+Mini game theme hiện xuất 9:16 và dùng asset đóng gói trong ứng dụng. Montserrat và Bebas Neue cùng
+license OFL được kèm trong `assets/fonts/`; renderer theme truyền thư mục này cho FFmpeg/libass nên không
+phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
+Title hook dùng định dạng một dòng `CAN YOU GET {N}/{N}?`; hỗ trợ 16:9/Both sẽ được bổ sung sau khi có
+asset và layout ngang riêng.
+
 Catalog Google lấy từ `TextToSpeechClient.list_voices()` và giữ language codes, SSML gender, sample
 rate cùng nhóm Chirp 3 HD/Chirp HD/Studio/Neural2/WaveNet/Standard và các loại mới provider trả về.
 Catalog CapCut gọi toàn bộ category cấu hình trong `services/capcut/config.py`, merge voice trùng

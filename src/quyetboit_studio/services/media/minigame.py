@@ -3,11 +3,18 @@ from __future__ import annotations
 import os
 import textwrap
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from ...core.minigame import MinigameProject, MinigameScene, MinigameTimeline, score_ranges
+from ...core.minigame import (
+    MinigameProject,
+    MinigameScene,
+    MinigameThemeManifest,
+    MinigameTimeline,
+    score_ranges,
+)
 from ...core.models import (
     AudioArtifact,
     CancellationToken,
@@ -16,6 +23,14 @@ from ...core.models import (
     VideoArtifact,
 )
 from .ffmpeg import FFmpegRunner, atempo_chain
+from .minigame_text import MinigameTextLayerService
+
+
+@dataclass(slots=True, frozen=True)
+class MinigameVisualScene:
+    background: Path
+    duration_ms: int
+    overlays: tuple[Path, ...] = ()
 
 
 def _ass_time(milliseconds: int) -> str:
@@ -34,6 +49,11 @@ def _ass_text(value: str) -> str:
         .replace("\r", " ")
         .replace("\n", r"\N")
     )
+
+
+def _ass_color(value: str) -> str:
+    red, green, blue = value.removeprefix("#")[:2], value.removeprefix("#")[2:4], value.removeprefix("#")[4:6]
+    return f"&H00{blue}{green}{red}"
 
 
 class MinigameAudioService:
@@ -216,9 +236,19 @@ class MinigameAudioService:
 
 
 class MinigameSubtitleBuilder:
+    def __init__(self) -> None:
+        self.text_layers = MinigameTextLayerService()
+
     def build(
-        self, project: MinigameProject, timeline: MinigameTimeline, output: Path, aspect: str
+        self,
+        project: MinigameProject,
+        timeline: MinigameTimeline,
+        output: Path,
+        aspect: str,
+        manifest: MinigameThemeManifest | None = None,
     ) -> Path:
+        if manifest is not None:
+            return self._build_theme(project, timeline, output, manifest)
         width, height = (1920, 1080) if aspect == "16:9" else (1080, 1920)
         horizontal = aspect == "16:9"
         sizes = {
@@ -404,10 +434,124 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         os.replace(partial, output)
         return output
 
+    def _build_theme(
+        self, project: MinigameProject, timeline: MinigameTimeline, output: Path,
+        manifest: MinigameThemeManifest,
+    ) -> Path:
+        style_lines = []
+        for style in manifest.styles.values():
+            style_lines.append(
+                f"Style: {style.name},{style.font},{style.max_size},{_ass_color(style.color)},"
+                "&H000000FF,&H002B1507,&H802B1507,"
+                f"{-1 if style.bold else 0},{-1 if style.italic else 0},0,0,100,100,"
+                f"{style.spacing},0,1,0,0,5,{style.margin},{style.margin},0,1"
+            )
+        header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {manifest.canvas.width}
+PlayResY: {manifest.canvas.height}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+{chr(10).join(style_lines)}
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+        events: list[str] = []
+        total = len(project.vocabulary)
+
+        def add(
+            scene: MinigameScene, placement_name: str, text: str,
+        ) -> None:
+            placement = manifest.placements[placement_name]
+            slot = manifest.slots[placement.slot]
+            style = manifest.styles[placement.style]
+            x1, y1, x2, y2 = slot.bounds
+            center_y = (y1 + y2) // 2 if placement.y is None else placement.y
+            size = self.text_layers.fit_size(
+                text,
+                slot.bounds,
+                style.max_size,
+                style.min_size,
+                title=style.font == "Bebas Neue",
+                max_lines=slot.max_lines,
+                font_file=style.font_file,
+                tracking=style.spacing,
+                line_spacing=style.line_spacing,
+            )
+            wrapped = self.text_layers.wrap_text(
+                text, slot.bounds, size, style.font_file, style.spacing
+            )
+            events.append(
+                f"Dialogue: {placement.layer},{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},"
+                f"{style.name},,0,0,0,,{{\\an5\\pos({(x1+x2)//2},{center_y})\\fs{size}\\fad(120,100)}}"
+                f"{_ass_text(wrapped)}"
+            )
+
+        for scene in timeline.scenes:
+            if scene.kind == "hook":
+                continue
+            elif scene.kind == "word":
+                item = project.vocabulary[scene.item_index]
+                label = "QUESTION" if scene.phase == "question" else "ANSWER"
+                add(scene, "word_header", f"{label} {scene.item_index + 1} / {total}")
+                add(scene, "meaning_label", "VIETNAMESE MEANING")
+                add(scene, "meaning_value", item.vietnamese)
+                if scene.phase == "question":
+                    add(scene, "reveal_label", "REVEALING ANSWER IN")
+                    for number, offset in zip((3, 2, 1), range(3), strict=True):
+                        countdown = MinigameScene("count", scene.start_ms + offset * 1000,
+                                                 min(scene.end_ms, scene.start_ms + (offset + 1) * 1000))
+                        add(countdown, "countdown", str(number))
+                else:
+                    add(scene, "english_label", "ENGLISH WORD")
+                    add(scene, "english_word", item.english)
+                    add(scene, "ipa", item.ipa)
+            elif scene.kind == "voice":
+                labels = {"listen": "1 • LISTEN", "slow": "2 • SLOW", "repeat": "3 • YOUR TURN"}
+                helpers = {
+                    "listen": "Listen first, then repeat aloud",
+                    "slow": "Hear every sound clearly",
+                    "repeat": "Say it out loud now",
+                }
+                add(scene, "voice_header", labels[scene.phase])
+                add(scene, "voice_helper", helpers[scene.phase])
+            elif scene.kind == "review":
+                item = project.vocabulary[scene.item_index]
+                add(scene, "word_header", f"REVIEW {scene.item_index + 1} / {total}")
+                add(scene, "english_label", "ENGLISH WORD")
+                add(scene, "english_word", item.english)
+                add(scene, "ipa", item.ipa)
+                add(scene, "review_label", "MEANING & EXAMPLE")
+                add(scene, "review_meaning", item.vietnamese)
+                add(scene, "review_example", item.example)
+            elif scene.kind == "score":
+                beginner, good, perfect = score_ranges(total)
+                add(scene, "ending_header", "CHALLENGE COMPLETE")
+                add(scene, "score_title", "HOW DID YOU DO?")
+                add(scene, "score_beginner", f"{beginner[0]}–{beginner[1]}  KEEP PRACTICING")
+                if good[0] <= good[1]:
+                    add(scene, "score_good", f"{good[0]}–{good[1]}  GREAT JOB")
+                add(scene, "score_perfect", f"{perfect[0]}/{total}  PERFECT SCORE")
+            elif scene.kind == "cta":
+                add(scene, "ending_header", "ONE LAST THING")
+                add(scene, "cta_title", "COMMENT\\NYOUR SCORE")
+                add(scene, "cta_helper", "Save this video • Challenge a friend")
+                add(scene, "cta_topic", project.topic.upper())
+        output.parent.mkdir(parents=True, exist_ok=True)
+        partial = output.with_suffix(output.suffix + ".partial")
+        partial.write_text(header + "\n".join(events) + "\n", encoding="utf-8-sig")
+        os.replace(partial, output)
+        return output
+
 
 class MinigameVideoRenderer:
     def __init__(self, runner: FFmpegRunner | None = None) -> None:
         self.runner = runner or FFmpegRunner()
+        self.font_dir = Path(__file__).resolve().parents[2] / "assets" / "fonts"
 
     @staticmethod
     def _escape_filter_path(path: Path) -> str:
@@ -415,7 +559,7 @@ class MinigameVideoRenderer:
 
     def render(
         self,
-        background: VideoArtifact,
+        background: VideoArtifact | None,
         audio: AudioArtifact,
         subtitles: Path,
         output: Path,
@@ -424,9 +568,31 @@ class MinigameVideoRenderer:
         *,
         progress: ProgressCallback | None = None,
         cancel: CancellationToken | None = None,
+        theme_background: Path | None = None,
+        theme_overlay: Path | None = None,
+        start_background: Path | None = None,
+        hook_text_overlay: Path | None = None,
+        hook_duration_ms: int = 0,
+        visual_scenes: list[MinigameVisualScene] | None = None,
     ) -> VideoArtifact:
         width, height = (1920, 1080) if aspect == "16:9" else (1080, 1920)
+        if theme_background is not None:
+            return self._render_theme(
+                audio,
+                subtitles,
+                output,
+                theme_background,
+                theme_overlay,
+                progress=progress,
+                cancel=cancel,
+                start_background=start_background,
+                hook_text_overlay=hook_text_overlay,
+                hook_duration_ms=hook_duration_ms,
+                visual_scenes=visual_scenes,
+            )
         focus_x = max(0.0, min(1.0, float(focus[0] if focus else 0.5)))
+        if background is None:
+            raise PipelineError("minigame_background_missing", "Thiếu video nền legacy.")
         focus_y = max(0.0, min(1.0, float(focus[1] if len(focus) > 1 else 0.5)))
         panel_x = round(width * (0.10 if aspect == "16:9" else 0.055))
         panel_y = round(height * 0.075)
@@ -479,33 +645,204 @@ class MinigameVideoRenderer:
             str(partial),
         ]
         try:
-            self.runner.run(
-                args,
-                duration_ms=audio.duration_ms,
-                progress=progress,
-                cancel=cancel,
-                step=0,
+            try:
+                self.runner.run(
+                    args,
+                    duration_ms=audio.duration_ms,
+                    progress=progress,
+                    cancel=cancel,
+                    step=0,
+                )
+            except PipelineError:
+                if encoder == "libx264":
+                    raise
+                args[args.index(encoder)] = "libx264"
+                self.runner.run(
+                    args,
+                    duration_ms=audio.duration_ms,
+                    progress=progress,
+                    cancel=cancel,
+                    step=0,
+                )
+            info = self.runner.probe.inspect(partial)
+            stream_types = {stream.get("codec_type") for stream in info.get("streams", [])}
+            result = self.runner.probe.video_artifact(partial)
+            if "audio" not in stream_types or result.width != width or result.height != height:
+                raise PipelineError(
+                    "minigame_output_invalid",
+                    "Video minigame xuất ra không đúng resolution hoặc thiếu audio.",
+                    provider="ffmpeg",
+                )
+            os.replace(partial, output)
+            result.path = output
+            return result.refresh()
+        finally:
+            partial.unlink(missing_ok=True)
+
+    def _render_theme(
+        self, audio: AudioArtifact, subtitles: Path, output: Path, background: Path,
+        overlay: Path | None, *, progress: ProgressCallback | None,
+        cancel: CancellationToken | None,
+        start_background: Path | None,
+        hook_text_overlay: Path | None,
+        hook_duration_ms: int,
+        visual_scenes: list[MinigameVisualScene] | None = None,
+    ) -> VideoArtifact:
+        if overlay is None or not background.is_file() or not overlay.is_file():
+            raise PipelineError("theme_asset_missing", "Theme chưa có đủ background hoặc alpha mask.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        partial = output.with_name(f".{output.stem}.partial{output.suffix}")
+        filter_path = self._escape_filter_path(subtitles)
+        font_dir = self._escape_filter_path(self.font_dir)
+        scenes = visual_scenes or self._legacy_theme_scenes(
+            audio.duration_ms,
+            background,
+            overlay,
+            start_background,
+            hook_text_overlay,
+            hook_duration_ms,
+        )
+        if not scenes or sum(scene.duration_ms for scene in scenes) != audio.duration_ms:
+            raise PipelineError("theme_scene_invalid", "Timeline visual scene không khớp timeline audio.")
+        encoder = self.runner.preflight()["encoder"] or "libx264"
+        scene_paths: list[Path] = []
+        try:
+            for index, scene in enumerate(scenes):
+                scene_path = output.with_name(f".{output.stem}.scene-{index}.mp4")
+                scene_partial = output.with_name(f".{output.stem}.scene-{index}.partial.mp4")
+                scene_paths.append(scene_path)
+                inputs = ["-loop", "1", "-framerate", "30", "-i", str(scene.background)]
+                graph_parts = ["[0:v]scale=1080:1920,format=rgba[v0]"]
+                current = "v0"
+                for overlay_index, overlay_path in enumerate(scene.overlays, 1):
+                    inputs.extend(
+                        ["-loop", "1", "-framerate", "30", "-i", str(overlay_path)]
+                    )
+                    next_name = f"v{overlay_index}"
+                    graph_parts.append(
+                        f"[{overlay_index}:v]format=rgba[o{overlay_index}];"
+                        f"[{current}][o{overlay_index}]overlay=0:0[{next_name}]"
+                    )
+                    current = next_name
+                graph_parts.append(f"[{current}]format=yuv420p[v]")
+                scene_args = [
+                    *inputs,
+                    "-filter_complex",
+                    ";".join(graph_parts),
+                    "-map",
+                    "[v]",
+                    "-t",
+                    f"{scene.duration_ms / 1000:.3f}",
+                    "-r",
+                    "30",
+                    "-an",
+                    "-c:v",
+                    encoder,
+                    str(scene_partial),
+                ]
+                try:
+                    self.runner.run(
+                        scene_args, duration_ms=scene.duration_ms, cancel=cancel, step=0
+                    )
+                except PipelineError:
+                    if encoder == "libx264":
+                        raise
+                    encoder = "libx264"
+                    scene_args[scene_args.index("-c:v") + 1] = encoder
+                    self.runner.run(
+                        scene_args, duration_ms=scene.duration_ms, cancel=cancel, step=0
+                    )
+                artifact = self.runner.probe.video_artifact(scene_partial)
+                if (
+                    (artifact.width, artifact.height) != (1080, 1920)
+                    or abs(artifact.duration_ms - scene.duration_ms) > 80
+                ):
+                    raise PipelineError(
+                        "theme_scene_invalid",
+                        "Visual scene không đúng resolution hoặc duration.",
+                    )
+                os.replace(scene_partial, scene_path)
+            inputs = [value for path in scene_paths for value in ("-i", str(path))]
+            concat_inputs = "".join(f"[{index}:v]" for index in range(len(scene_paths)))
+            graph = (
+                f"{concat_inputs}concat=n={len(scene_paths)}:v=1:a=0,"
+                f"subtitles=filename='{filter_path}':fontsdir='{font_dir}',format=yuv420p[v]"
             )
-        except PipelineError:
-            if encoder == "libx264":
-                raise
-            args[args.index(encoder)] = "libx264"
-            self.runner.run(
-                args,
-                duration_ms=audio.duration_ms,
-                progress=progress,
-                cancel=cancel,
-                step=0,
+            audio_index = len(scene_paths)
+            args = [
+                *inputs,
+                "-i",
+                str(audio.path),
+                "-filter_complex",
+                graph,
+                "-map",
+                "[v]",
+                "-map",
+                f"{audio_index}:a:0",
+                "-t",
+                f"{audio.duration_ms / 1000:.3f}",
+                "-r",
+                "30",
+                "-c:v",
+                encoder,
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+                str(partial),
+            ]
+            try:
+                self.runner.run(
+                    args, duration_ms=audio.duration_ms, progress=progress, cancel=cancel, step=0
+                )
+            except PipelineError:
+                if encoder == "libx264":
+                    raise
+                args[args.index("-c:v") + 1] = "libx264"
+                self.runner.run(
+                    args, duration_ms=audio.duration_ms, progress=progress, cancel=cancel, step=0
+                )
+            info = self.runner.probe.inspect(partial)
+            stream_types = {stream.get("codec_type") for stream in info.get("streams", [])}
+            result = self.runner.probe.video_artifact(partial)
+            if "audio" not in stream_types or (result.width, result.height) != (1080, 1920):
+                raise PipelineError(
+                    "minigame_output_invalid",
+                    "Video theme không đúng khung 1080×1920 hoặc thiếu audio.",
+                    provider="ffmpeg",
+                )
+            os.replace(partial, output)
+            result.path = output
+            return result.refresh()
+        finally:
+            partial.unlink(missing_ok=True)
+            for index, scene_path in enumerate(scene_paths):
+                scene_path.unlink(missing_ok=True)
+                output.with_name(f".{output.stem}.scene-{index}.partial.mp4").unlink(
+                    missing_ok=True
+                )
+
+    @staticmethod
+    def _legacy_theme_scenes(
+        duration_ms: int,
+        background: Path,
+        overlay: Path,
+        start_background: Path | None,
+        hook_text_overlay: Path | None,
+        hook_duration_ms: int,
+    ) -> list[MinigameVisualScene]:
+        hook_duration = max(0, min(hook_duration_ms, duration_ms))
+        scenes: list[MinigameVisualScene] = []
+        if start_background is not None and start_background.is_file() and hook_duration:
+            overlays = (
+                (hook_text_overlay,)
+                if hook_text_overlay is not None and hook_text_overlay.is_file()
+                else ()
             )
-        info = self.runner.probe.inspect(partial)
-        stream_types = {stream.get("codec_type") for stream in info.get("streams", [])}
-        result = self.runner.probe.video_artifact(partial)
-        if "audio" not in stream_types or result.width != width or result.height != height:
-            raise PipelineError(
-                "minigame_output_invalid",
-                "Video minigame xuất ra không đúng resolution hoặc thiếu audio.",
-                provider="ffmpeg",
-            )
-        os.replace(partial, output)
-        result.path = output
-        return result.refresh()
+            scenes.append(MinigameVisualScene(start_background, hook_duration, overlays))
+        remaining = duration_ms - hook_duration
+        if remaining:
+            scenes.append(MinigameVisualScene(background, remaining, (overlay,)))
+        return scenes

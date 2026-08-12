@@ -4,5 +4,6 @@ google-cloud-texttospeech>=2.37,<3
 httpx>=0.28
 keyring>=25
 numpy>=2
+Pillow>=10.4,<12
 pydantic>=2
 yt-dlp>=2025.1.15

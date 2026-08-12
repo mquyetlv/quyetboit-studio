@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .core.minigame import MinigameProject
 from .core.preferences import LastUsedSettingsStore
 from .english import EnglishPlaceholderPage
 from .minigame import MinigamePage
@@ -82,6 +83,8 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.vietsub)
         self.pages.addWidget(self._audio_placeholder())
         self.minigame = MinigamePage()
+        self.minigame.set_project(MinigameProject.from_dict(self.project.minigame_settings))
+        self.minigame.dirty_changed.connect(self.set_dirty)
         self.pages.addWidget(self.minigame)
         self.pages.addWidget(EnglishPlaceholderPage(
             "Học từ mới", "📖", "Khu vực mẫu cho bài học từ vựng, flashcard và ôn tập.",
@@ -153,7 +156,7 @@ class MainWindow(QMainWindow):
 
     def new_project(self) -> None:
         if not self._confirm_discard(): return
-        self.project = self.settings_store.new_project(); self.project_path = None; self.vietsub.set_project(self.project); self.set_dirty(False)
+        self.project = self.settings_store.new_project(); self.project_path = None; self.vietsub.set_project(self.project); self.minigame.set_project(MinigameProject.from_dict(self.project.minigame_settings)); self.set_dirty(False)
 
     def open_project(self) -> None:
         if not self._confirm_discard(): return
@@ -165,10 +168,11 @@ class MainWindow(QMainWindow):
         self.project = project; self.project_path = Path(path)
         if not project.workspace_path:
             project.workspace_path = str(self.project_path.parent / ".qbstudio-work" / project.project_uuid)
-        self.vietsub.set_project(project); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
+        self.vietsub.set_project(project); self.minigame.set_project(MinigameProject.from_dict(project.minigame_settings)); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
 
     def save_project(self) -> bool:
         if self.project_path is None: return self.save_project_as()
+        self._sync_minigame_project()
         try: self.store.save(self.project, self.project_path)
         except OSError as exc:
             QMessageBox.critical(self, "Không thể lưu", str(exc)); return False
@@ -186,6 +190,7 @@ class MainWindow(QMainWindow):
 
     def _autosave(self) -> None:
         if self.dirty:
+            self._sync_minigame_project()
             try: self.store.autosave(self.project, self.autosave_path)
             except OSError: pass
 
@@ -197,8 +202,11 @@ class MainWindow(QMainWindow):
         try: project = self.store.load(self.autosave_path)
         except ValueError as exc:
             QMessageBox.critical(self, "Autosave bị lỗi", str(exc)); return
-        self.project = project; self.project_path = None; self.vietsub.set_project(project); self.set_dirty(True)
+        self.project = project; self.project_path = None; self.vietsub.set_project(project); self.minigame.set_project(MinigameProject.from_dict(project.minigame_settings)); self.set_dirty(True)
         self.statusBar().showMessage("Đã khôi phục phiên autosave", 5000)
+
+    def _sync_minigame_project(self) -> None:
+        self.project.minigame_settings = self.minigame._collect_project().to_safe_dict()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._confirm_discard():

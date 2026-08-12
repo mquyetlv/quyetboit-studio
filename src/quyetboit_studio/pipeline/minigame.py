@@ -24,7 +24,12 @@ from ..services.media.minigame import (
     MinigameAudioService,
     MinigameSubtitleBuilder,
     MinigameVideoRenderer,
+    MinigameVisualScene,
 )
+from ..services.media.minigame_frame import MinigameVisualFrameService
+from ..services.media.minigame_mask import MinigameAlphaMaskService
+from ..services.media.minigame_text import MinigameTextLayerService
+from ..services.media.minigame_theme import MinigameThemeService
 from ..services.minigame_tts import (
     CapCutEnglishSpeechService,
     GoogleCloudSpeechService,
@@ -59,6 +64,10 @@ class MinigamePipeline:
         self.audio = MinigameAudioService(self.runner)
         self.renderer = MinigameVideoRenderer(self.runner)
         self.subtitles = MinigameSubtitleBuilder()
+        self.themes = MinigameThemeService()
+        self.masks = MinigameAlphaMaskService()
+        self.frames = MinigameVisualFrameService()
+        self.text_layers = MinigameTextLayerService()
         self.timeline_builder = MinigameTimelineBuilder()
         self.speech_factory = speech_factory or self._default_speech
 
@@ -81,7 +90,27 @@ class MinigamePipeline:
             self.project.validate()
             self.cancel.raise_if_cancelled()
             self.runner.preflight()
-            background = self.runner.probe.video_artifact(self.project.background_video)
+            manifest = self.themes.get(self.project.theme_id)
+            mask = self.masks.build(manifest, self.workspace / "theme-mask")
+            hook_text = self.text_layers.build_hook(self.project, manifest, self.workspace / "theme-text")
+            frame_layout_key = {
+                "version": manifest.layout_version,
+                "slots": manifest.slots,
+                "styles": manifest.styles,
+                "placements": manifest.placements,
+            }
+            hook_frame = self.frames.build(
+                manifest.start_screen,
+                (hook_text,),
+                self.workspace / "visual-frame",
+                layout_key=frame_layout_key,
+            )
+            body_frame = self.frames.build(
+                manifest.background_video,
+                (mask,),
+                self.workspace / "visual-frame",
+                layout_key=frame_layout_key,
+            )
             speech = self.speech_factory(self.project)
             word_audio: list[Path] = []
             slow_audio: list[Path] = []
@@ -139,6 +168,8 @@ class MinigamePipeline:
             output_folder = Path(self.project.output_folder).expanduser().resolve()
             output_folder.mkdir(parents=True, exist_ok=True)
             formats = MinigameFormat(self.project.output_format).outputs
+            if formats != ("9:16",):
+                raise ValueError("Theme hiện chỉ hỗ trợ xuất video dọc 9:16.")
             outputs: list[Path] = []
             for format_index, aspect in enumerate(formats):
                 self.cancel.raise_if_cancelled()
@@ -147,6 +178,7 @@ class MinigamePipeline:
                     timeline,
                     self.workspace / f"minigame-{aspect.replace(':', 'x')}.ass",
                     aspect,
+                    manifest,
                 )
                 target = self._available_output(output_folder, aspect, len(formats) > 1)
                 base = 0.62 + 0.38 * format_index / len(formats)
@@ -165,7 +197,7 @@ class MinigamePipeline:
                     )
 
                 rendered = self.renderer.render(
-                    background,
+                    None,
                     mixed,
                     ass,
                     target,
@@ -173,6 +205,21 @@ class MinigamePipeline:
                     self.project.crop_focus.get(aspect, [0.5, 0.5]),
                     progress=render_progress,
                     cancel=self.cancel,
+                    theme_background=manifest.background_video,
+                    theme_overlay=mask,
+                    start_background=manifest.start_screen,
+                    hook_text_overlay=hook_text,
+                    hook_duration_ms=self.timeline_builder.HOOK_MS,
+                    visual_scenes=[
+                        MinigameVisualScene(
+                            hook_frame,
+                            self.timeline_builder.HOOK_MS,
+                        ),
+                        MinigameVisualScene(
+                            body_frame,
+                            mixed.duration_ms - self.timeline_builder.HOOK_MS,
+                        ),
+                    ],
                 )
                 outputs.append(rendered.path)
             self._emit(progress, 1.0, "Đã hoàn thành video minigame")
@@ -189,16 +236,7 @@ class MinigamePipeline:
     def _speech_clip(
         self, speech: MinigameSpeechService, text: str, item_id: str
     ):
-        key = stable_hash(
-            {
-                "provider": self.project.tts_provider,
-                "voice": self.project.voice,
-                "language": self.project.voice_language,
-                "volume": self.project.volume,
-                "text": text,
-                "speech_processing_version": 2,
-            }
-        )[:20]
+        key = self._speech_cache_key(text)
         directory = self.workspace / "audio"
         normalized = directory / f"{item_id}-{key}.wav"
         if normalized.is_file():
@@ -210,6 +248,18 @@ class MinigamePipeline:
         raw = directory / f"{item_id}-{key}.source{suffix}"
         speech.synthesize(text, raw, cancel=self.cancel)
         return self.audio.normalize(raw, normalized, cancel=self.cancel)
+
+    def _speech_cache_key(self, text: str) -> str:
+        return stable_hash(
+            {
+                "provider": self.project.tts_provider,
+                "voice": self.project.voice,
+                "language": self.project.voice_language,
+                "volume": self.project.volume,
+                "text": text,
+                "speech_processing_version": 2,
+            }
+        )[:20]
 
     def _slow_clip(self, normal, index: int):
         rate = max(0.5, min(1.0, float(self.project.slow_rate)))

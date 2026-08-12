@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+.tmp-*
 *.egg-info/
 .quyetboit-autosave.json
 www.douyin.com_*.json

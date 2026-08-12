@@ -2,10 +2,10 @@
 
 ### Tiến độ cập nhật ngày 2026-08-12
 
-- Hoàn thành: **69/69 task (100%)**.
-- Đang làm một phần: **0/69 task (0%)**.
-- Chưa triển khai: **0/69 task (0%)**.
-- Đã kiểm chứng: **125 test pass**, Ruff/compileall/diff check pass; wheel chứa đủ 10 asset review.
+- Hoàn thành: **76/76 task (100%)**.
+- Đang làm một phần: **0/76 task (0%)**.
+- Chưa triển khai: **0/76 task (0%)**.
+- Đã kiểm chứng: **132 test pass**, Ruff/compileall/diff check pass; wheel chứa đủ 10 asset review.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -346,3 +346,20 @@ git diff --check
 - [x] Đo luminance trên đúng safe-box của asset/composite thật, regression yêu cầu contrast ≥ 4,5:1 từ
   fill hoặc outline; render QA trực quan đủ hook/body/review cho cả năm theme. 51 test Minigame và 125
   test toàn repo pass.
+
+## 10. Nhập nội dung bằng JSON
+
+- [x] Định nghĩa `MinigameContent` schema v1 typed gồm `topic`, 1–50 `words` và đủ sáu trường mỗi từ:
+  `vietnamese`, `english`, `ipa`, `wordType`, `example`, `exampleVietnamese`.
+- [x] Parser báo lỗi theo dòng/cột hoặc đường dẫn `words[index]`, từ chối root/field lạ và nhận alias
+  `workType` nhưng luôn serialize về tên chuẩn `wordType`.
+- [x] Thay Topic/spinbox/table bằng JSON editor; hỗ trợ mở file UTF-8 tối đa 2 MiB, định dạng JSON và
+  sao chép mẫu mà không đưa credential vào payload.
+- [x] Preview, ước lượng thời lượng, save/restore project và pipeline đều dùng content đã parse; khi JSON
+  đang gõ dở, autosave giữ bản hợp lệ gần nhất còn Render từ chối với lỗi có dòng/cột.
+- [x] Mở rộng `VocabularyItem` tương thích project cũ với `word_type` và `example_vietnamese`; project
+  schema v2 và migration cũ không bị phá.
+- [x] Render Word Type trong answer/review và bản dịch dưới Example Sentence; tăng layout version để
+  invalidate cache visual cũ. Đã render QA thật Theme 2 xác nhận chữ nằm đúng panel.
+- [x] Thêm JSON Schema máy đọc, unit/UI/persistence/subtitle regression; 58 test Minigame và 132 test
+  toàn repo pass, Ruff/compileall/diff check pass.

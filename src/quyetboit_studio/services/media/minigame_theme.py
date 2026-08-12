@@ -87,7 +87,8 @@ class MinigameThemeService:
             "review_meaning": TextSlot("review_meaning", (202, 304, 878, 423), 2),
             "review_word": TextSlot("review_word", (147, 529, 932, 952), 2),
             "review_ipa": TextSlot("review_ipa", (193, 1049, 887, 1104), 1),
-            "review_example": TextSlot("review_example", (148, 1395, 933, 1676), 3),
+            "review_word_type": TextSlot("review_word_type", (316, 1189, 764, 1274), 1),
+            "review_example": TextSlot("review_example", (148, 1395, 933, 1676), 4),
         }
 
     @classmethod
@@ -149,6 +150,10 @@ class MinigameThemeService:
                 "ReviewIPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 42,
                 surface="review", role="secondary", italic=True,
             ),
+            "review_word_type": style(
+                "ReviewWordType", "Montserrat", "Montserrat-Variable.ttf", 18, 34,
+                surface="review", role="accent", bold=True,
+            ),
             "review_example": style(
                 "ReviewExample", "Montserrat", "Montserrat-Variable.ttf", 18, 38,
                 surface="review", role="secondary",
@@ -173,9 +178,11 @@ class MinigameThemeService:
             "ipa": TextPlacement("ipa", "ipa", 1305),
             "voice_header": TextPlacement("header", "phase", 1605, 2),
             "voice_helper": TextPlacement("body", "phase", 1655, 2),
+            "answer_word_type": TextPlacement("header", "phase", 1585, 2),
             "review_meaning": TextPlacement("review_meaning", "review_meaning"),
             "review_word": TextPlacement("review_word", "review_word"),
             "review_ipa": TextPlacement("review_ipa", "review_ipa"),
+            "review_word_type": TextPlacement("review_word_type", "review_word_type"),
             "review_example": TextPlacement("review_example", "review_example"),
             "score_title": TextPlacement("start", "meaning", 520),
             "score_beginner": TextPlacement("body", "word", 1040),
@@ -229,7 +236,7 @@ class MinigameThemeService:
             self._slots(),
             styles,
             self._placements(),
-            4,
+            5,
             checksum,
         )
 

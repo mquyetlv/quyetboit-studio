@@ -44,7 +44,8 @@ access token hay nội dung JSON vào log.
 
 1. Chọn `16:9`, `9:16` hoặc **Xuất cả hai**.
 2. Chọn video nền và chỉnh điểm crop X/Y riêng cho từng tỷ lệ.
-3. Nhập Topic, số từ và đủ bốn cột nội dung. Có thể paste trực tiếp bốn cột từ Excel/Sheets.
+3. Nhập/dán JSON nội dung theo schema bên dưới hoặc mở file `.json`; UI có nút định dạng và sao chép
+   JSON mẫu.
 4. Bấm **Cấu hình Voice…**, chọn Google Cloud TTS hoặc CapCut TTS rồi lọc theo ngôn ngữ, loại
    voice, danh mục, giới tính hoặc tên. Dialog tải catalog ngoài main thread và hỗ trợ nghe thử.
    Với CapCut, đăng nhập ở phần VietSub trước. Google tự nhận `services-account.json` tại thư mục
@@ -61,10 +62,33 @@ phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
 Title hook dùng định dạng một dòng `CAN YOU GET {N}/{N}?`; hỗ trợ 16:9/Both sẽ được bổ sung sau khi có
 asset và layout ngang riêng.
 
+JSON nội dung dùng `schemaVersion: 1`, chứa `topic` và từ 1–50 phần tử trong `words`:
+
+```json
+{
+  "schemaVersion": 1,
+  "topic": "Hospital",
+  "words": [
+    {
+      "vietnamese": "Bác sĩ",
+      "english": "Doctor",
+      "ipa": "/ˈdɒk.tər/",
+      "wordType": "Noun",
+      "example": "The doctor checks the patient.",
+      "exampleVietnamese": "Bác sĩ khám cho bệnh nhân."
+    }
+  ]
+}
+```
+
+Tên chuẩn là `wordType`; parser cũng nhận `workType` và chuẩn hóa lại khi bấm **Định dạng JSON**.
+Không đặt credential, API key hoặc đường dẫn service-account trong JSON nội dung. Schema máy đọc nằm
+tại `minigame-content.schema.json`.
+
 Sau vòng đoán từ, video hiển thị một lần màn mở đầu review theo theme rồi dùng nền review riêng cho
-từng từ. Nội dung review lấy nguyên bốn trường Vietnamese, English Word, IPA và Example Sentence;
-ô WORD TYPE được để trống vì project chưa có trường dữ liệu tương ứng. Registry tương thích cả tên
-`review-start-screen.png`, alias `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
+từng từ. Review hiển thị Vietnamese, English Word, IPA, Word Type, Example Sentence và bản dịch ví dụ
+nếu được cung cấp. Registry tương thích cả tên `review-start-screen.png`, alias
+`start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
 
 Màu chữ được định nghĩa riêng cho từng theme và từng surface. Theme 1/4 dùng foreground sáng trên nền
 tối; Theme 2/3/5 dùng foreground đậm trên nền sáng. Review có palette riêng vì Theme 4 là nền tối còn

@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 from quyetboit_studio.core.minigame import (
+    MinigameContent,
     MinigameProject,
     MinigameScene,
     MinigameTimeline,
@@ -41,6 +42,57 @@ def _item(index: int = 1) -> VocabularyItem:
     return VocabularyItem(
         f"nghĩa {index}", f"word{index}", f"/wɜːd {index}/", f"This is example {index}."
     )
+
+
+def _content_json(count: int = 1, topic: str = "Hospital") -> str:
+    return MinigameContent(
+        topic,
+        [
+            VocabularyItem(
+                f"nghĩa {index}",
+                f"word{index}",
+                f"/wɜːd {index}/",
+                f"This is example {index}.",
+                "Noun",
+                f"Đây là ví dụ {index}.",
+            )
+            for index in range(1, count + 1)
+        ],
+    ).to_json()
+
+
+def test_minigame_content_json_round_trips_every_field_and_normalizes_alias() -> None:
+    value = _content_json()
+    content = MinigameContent.from_json(value)
+
+    assert content.topic == "Hospital"
+    assert content.words[0].word_type == "Noun"
+    assert content.words[0].example_vietnamese == "Đây là ví dụ 1."
+    assert MinigameContent.from_json(value.replace('"wordType"', '"workType"')).words[
+        0
+    ].word_type == "Noun"
+    assert '"wordType": "Noun"' in content.to_json()
+    assert '"workType"' not in content.to_json()
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("{", "dòng 1, cột 2"),
+        ('{"schemaVersion": 1, "topic": "x", "words": []}', "từ 1 đến 50"),
+        (
+            '{"schemaVersion": 1, "topic": "x", "words": [{}]}',
+            "thiếu trường",
+        ),
+        (
+            '{"schemaVersion": 1, "topic": "x", "words": [], "token": "secret"}',
+            "trường gốc không hỗ trợ: token",
+        ),
+    ],
+)
+def test_minigame_content_json_reports_actionable_paths(value: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        MinigameContent.from_json(value)
 
 
 def test_project_requires_every_user_supplied_field(tmp_path: Path) -> None:
@@ -477,6 +529,38 @@ def test_review_content_uses_new_full_screen_design_slots(tmp_path: Path) -> Non
         assert rf"\pos({(x1 + x2) // 2},{(y1 + y2) // 2})" in content
 
 
+def test_json_only_fields_are_rendered_in_answer_and_review(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-2")
+    item = VocabularyItem(
+        "bác sĩ",
+        "Doctor",
+        "/ˈdɒk.tər/",
+        "The doctor checks the patient.",
+        "Noun",
+        "Bác sĩ khám cho bệnh nhân.",
+    )
+    project = MinigameProject(topic="Hospital", vocabulary=[item])
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("word", 0, 1_000, 0, "answer"),
+            MinigameScene("review", 1_000, 2_000, 0),
+        ],
+        [],
+        2_000,
+    )
+
+    content = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "json-fields.ass", "9:16", manifest
+    ).read_text(encoding="utf-8-sig")
+
+    assert "WORD TYPE • NOUN" in content
+    assert "NOUN" in content
+    assert "Bác sĩ khám cho bệnh nhân." in content
+    placement = manifest.placements["review_word_type"]
+    x1, y1, x2, y2 = manifest.slots[placement.slot].bounds
+    assert rf"\pos({(x1 + x2) // 2},{(y1 + y2) // 2})" in content
+
+
 def test_theme_review_score_and_cta_have_dedicated_content(tmp_path: Path) -> None:
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
     timeline = MinigameTimeline(
@@ -796,31 +880,44 @@ def test_minigame_speech_normalization_trims_provider_silence(tmp_path: Path) ->
     assert 250 <= output.duration_ms <= 500
 
 
-def test_minigame_page_has_real_editor_and_dynamic_rows(qtbot) -> None:
+def test_minigame_page_has_json_editor_and_tracks_valid_content(qtbot) -> None:
     page = MinigamePage()
     qtbot.addWidget(page)
 
-    assert page.table.rowCount() == 5
+    assert len(MinigameContent.from_json(page.content_editor.toPlainText()).words) == 5
     assert page.aspect.count() == 3
     assert page.theme_id.count() == 5
     assert len(page.theme_cards) == 5
     assert all("9:16" in card.text() for card in page.theme_cards)
     assert page.voice_config_button.text() == "Cấu hình Voice…"
     assert "Google Cloud TTS" in page.voice_summary.text()
-    page.word_count.setValue(7)
-    assert page.table.rowCount() == 7
-    page.table.item(0, 0).setText("giữ nguyên")
+    page.content_editor.setPlainText(_content_json(7, "Food"))
+    assert "7 từ" in page.content_status.text()
     page.theme_id.setCurrentIndex(4)
-    assert page._collect_project().theme_id == "theme-5"
+    result = page._collect_project()
+    assert result.theme_id == "theme-5"
+    assert result.topic == "Food"
+    assert len(result.vocabulary) == 7
     assert page.theme_cards[4].isChecked()
-    assert page.table.item(0, 0).text() == "giữ nguyên"
+
+
+def test_minigame_page_keeps_last_valid_content_while_json_is_incomplete(qtbot) -> None:
+    page = MinigamePage()
+    qtbot.addWidget(page)
+    page.content_editor.setPlainText(_content_json(2, "Travel"))
+    page.content_editor.setPlainText("{")
+
+    assert "JSON chưa hợp lệ" in page.content_status.text()
+    assert page._collect_project().topic == "Travel"
+    with pytest.raises(ValueError, match="JSON không hợp lệ"):
+        page._collect_project(strict_content=True)
 
 
 def test_minigame_preview_runs_debounced_and_safe_boxes_use_manifest(qtbot) -> None:
     page = MinigamePage()
     qtbot.addWidget(page)
     page.show()
-    page.topic.setText("Chăm sóc sức khỏe bằng tiếng Việt")
+    page.content_editor.setPlainText(_content_json(2, "Chăm sóc sức khỏe bằng tiếng Việt"))
     page.theme_cards[2].click()
 
     qtbot.waitUntil(
@@ -844,11 +941,17 @@ def test_minigame_page_round_trips_selected_theme_and_content_safely(qtbot) -> N
     source.show()
     restored.show()
     source.theme_id.setCurrentIndex(4)
-    source.topic.setText("Hospital")
-    source.word_count.setValue(1)
-    values = ("bệnh viện", "hospital", "/ˈhɒs.pɪ.təl/", "She works at a hospital.")
-    for column, value in enumerate(values):
-        source.table.item(0, column).setText(value)
+    values = (
+        "bệnh viện",
+        "hospital",
+        "/ˈhɒs.pɪ.təl/",
+        "She works at a hospital.",
+        "Noun",
+        "Cô ấy làm việc tại bệnh viện.",
+    )
+    source.content_editor.setPlainText(
+        MinigameContent("Hospital", [VocabularyItem(*values)]).to_json()
+    )
     source.service_account_path = "C:/secret/service-account.json"
 
     payload = source._collect_project().to_safe_dict()
@@ -858,6 +961,9 @@ def test_minigame_page_round_trips_selected_theme_and_content_safely(qtbot) -> N
     assert result.theme_id == "theme-5"
     assert result.topic == "Hospital"
     assert result.vocabulary[0] == VocabularyItem(*values)
+    assert MinigameContent.from_json(restored.content_editor.toPlainText()).words[0] == VocabularyItem(
+        *values
+    )
     assert payload["service_account_path"] == ""
     assert source.shutdown()
     assert restored.shutdown()

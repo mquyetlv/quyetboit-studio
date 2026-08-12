@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -133,10 +134,17 @@ class VocabularyItem:
     english: str
     ipa: str
     example: str
+    word_type: str = ""
+    example_vietnamese: str = ""
 
     def normalized(self) -> VocabularyItem:
         return VocabularyItem(
-            self.vietnamese.strip(), self.english.strip(), self.ipa.strip(), self.example.strip()
+            self.vietnamese.strip(),
+            self.english.strip(),
+            self.ipa.strip(),
+            self.example.strip(),
+            self.word_type.strip(),
+            self.example_vietnamese.strip(),
         )
 
     def validate(self, index: int) -> None:
@@ -149,6 +157,123 @@ class VocabularyItem:
         for name, label in labels.items():
             if not getattr(self, name).strip():
                 raise ValueError(f"Từ #{index}: chưa nhập {label}.")
+
+    def to_content_dict(self) -> dict[str, str]:
+        return {
+            "vietnamese": self.vietnamese,
+            "english": self.english,
+            "ipa": self.ipa,
+            "wordType": self.word_type,
+            "example": self.example,
+            "exampleVietnamese": self.example_vietnamese,
+        }
+
+
+@dataclass(slots=True)
+class MinigameContent:
+    """Credential-free JSON input used by the Minigame content editor."""
+
+    topic: str
+    words: list[VocabularyItem]
+    schema_version: int = 1
+
+    _ROOT_KEYS = frozenset({"schemaVersion", "topic", "words"})
+    _WORD_KEYS = frozenset(
+        {"vietnamese", "english", "ipa", "wordType", "workType", "example", "exampleVietnamese"}
+    )
+    _REQUIRED_WORD_KEYS = frozenset(
+        {"vietnamese", "english", "ipa", "example", "exampleVietnamese"}
+    )
+
+    @classmethod
+    def blank(cls, count: int = 5) -> MinigameContent:
+        count = max(1, min(50, count))
+        return cls("", [VocabularyItem("", "", "", "", "", "") for _ in range(count)])
+
+    @classmethod
+    def example(cls) -> MinigameContent:
+        return cls(
+            "Hospital",
+            [
+                VocabularyItem(
+                    "Bác sĩ",
+                    "Doctor",
+                    "/ˈdɒk.tər/",
+                    "The doctor checks the patient.",
+                    "Noun",
+                    "Bác sĩ khám cho bệnh nhân.",
+                )
+            ],
+        )
+
+    @classmethod
+    def from_json(cls, value: str) -> MinigameContent:
+        try:
+            payload = json.loads(value.lstrip("\ufeff"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"JSON không hợp lệ tại dòng {exc.lineno}, cột {exc.colno}: {exc.msg}."
+            ) from exc
+        try:
+            return cls.from_dict(payload)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @classmethod
+    def from_dict(cls, payload: object) -> MinigameContent:
+        if not isinstance(payload, dict):
+            raise TypeError("JSON gốc phải là một object.")
+        unknown = sorted(set(payload) - cls._ROOT_KEYS)
+        if unknown:
+            raise ValueError(f"JSON có trường gốc không hỗ trợ: {', '.join(unknown)}.")
+        missing = sorted(cls._ROOT_KEYS - set(payload))
+        if missing:
+            raise ValueError(f"JSON thiếu trường gốc: {', '.join(missing)}.")
+        if payload["schemaVersion"] != 1:
+            raise ValueError("schemaVersion phải bằng 1.")
+        if not isinstance(payload["topic"], str):
+            raise TypeError("topic phải là chuỗi.")
+        rows = payload["words"]
+        if not isinstance(rows, list):
+            raise TypeError("words phải là một array.")
+        if not 1 <= len(rows) <= 50:
+            raise ValueError("words phải có từ 1 đến 50 phần tử.")
+        words: list[VocabularyItem] = []
+        for index, row in enumerate(rows):
+            path = f"words[{index}]"
+            if not isinstance(row, dict):
+                raise TypeError(f"{path} phải là một object.")
+            unknown = sorted(set(row) - cls._WORD_KEYS)
+            if unknown:
+                raise ValueError(f"{path} có trường không hỗ trợ: {', '.join(unknown)}.")
+            missing = sorted(cls._REQUIRED_WORD_KEYS - set(row))
+            if "wordType" not in row and "workType" not in row:
+                missing.append("wordType")
+            if missing:
+                raise ValueError(f"{path} thiếu trường: {', '.join(sorted(missing))}.")
+            values = {
+                "vietnamese": row["vietnamese"],
+                "english": row["english"],
+                "ipa": row["ipa"],
+                "word_type": row.get("wordType", row.get("workType")),
+                "example": row["example"],
+                "example_vietnamese": row["exampleVietnamese"],
+            }
+            invalid = [name for name, item in values.items() if not isinstance(item, str)]
+            if invalid:
+                raise ValueError(f"{path}.{invalid[0]} phải là chuỗi.")
+            words.append(VocabularyItem(**values).normalized())
+        return cls(payload["topic"].strip(), words)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schemaVersion": self.schema_version,
+            "topic": self.topic,
+            "words": [word.to_content_dict() for word in self.words],
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2) + "\n"
 
 
 @dataclass(slots=True)

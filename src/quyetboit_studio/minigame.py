@@ -3,7 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSize, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap, QShowEvent
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFontDatabase,
+    QIcon,
+    QPainter,
+    QPen,
+    QPixmap,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -15,23 +24,26 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
-    QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .core.minigame import MinigameFormat, MinigameProject, MinigameTtsProvider, VocabularyItem
+from .core.minigame import (
+    MinigameContent,
+    MinigameFormat,
+    MinigameProject,
+    MinigameTtsProvider,
+    VocabularyItem,
+)
 from .core.models import PipelineError, ProgressEvent
 from .minigame_voice import MinigameVoiceDialog
 from .pipeline.minigame import MinigamePipeline, MinigameResult
@@ -108,6 +120,7 @@ class MinigamePage(QWidget):
         self.last_outputs: list[Path] = []
         self.project_uuid = MinigameProject().project_uuid
         self._loading_project = False
+        self._last_valid_content = MinigameContent.blank(5)
         default_account = Path.cwd() / "services-account.json"
         self.voice_provider = MinigameTtsProvider.GOOGLE.value
         self.voice_id = "en-US-Neural2-F"
@@ -128,7 +141,7 @@ class MinigamePage(QWidget):
         self.preview_timer.setInterval(180)
         self.preview_timer.timeout.connect(self._start_preview_render)
         self._build_ui()
-        self._set_word_count(5)
+        self._content_changed()
         self._update_preview()
 
     def showEvent(self, event: QShowEvent) -> None:
@@ -263,32 +276,38 @@ class MinigamePage(QWidget):
         layout.addWidget(source_card)
 
         content_card, vocabulary_layout = self._card("2. Nội dung bắt buộc")
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Topic"))
-        self.topic = QLineEdit()
-        self.topic.setPlaceholderText("Ví dụ: Travel, Food, Animals…")
-        self.topic.textChanged.connect(self._update_preview)
-        top.addWidget(self.topic, 1)
-        top.addWidget(QLabel("Số từ"))
-        self.word_count = QSpinBox()
-        self.word_count.setRange(1, 50)
-        self.word_count.setValue(5)
-        self.word_count.valueChanged.connect(self._set_word_count)
-        top.addWidget(self.word_count)
-        paste = QPushButton("Dán bảng")
-        paste.setToolTip("Dán 4 cột: Nghĩa Việt, English, IPA, Câu ví dụ")
-        paste.clicked.connect(self._paste_table)
-        top.addWidget(paste)
-        vocabulary_layout.addLayout(top)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(
-            ["Nghĩa tiếng Việt", "English", "IPA", "Câu ví dụ tiếng Anh"]
+        json_help = QLabel(
+            "Nhập một object JSON gồm schemaVersion, topic và words. Mỗi từ có đủ: "
+            "vietnamese, english, ipa, wordType, example, exampleVietnamese."
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.verticalHeader().setDefaultSectionSize(36)
-        self.table.setAlternatingRowColors(True)
-        self.table.itemChanged.connect(self._update_preview)
-        vocabulary_layout.addWidget(self.table)
+        json_help.setWordWrap(True)
+        json_help.setObjectName("Subtitle")
+        vocabulary_layout.addWidget(json_help)
+        json_actions = QHBoxLayout()
+        load_json = QPushButton("Mở file JSON…")
+        load_json.clicked.connect(self._load_content_json)
+        format_json = QPushButton("Định dạng JSON")
+        format_json.clicked.connect(self._format_content_json)
+        copy_example = QPushButton("Sao chép JSON mẫu")
+        copy_example.clicked.connect(self._copy_content_example)
+        json_actions.addWidget(load_json)
+        json_actions.addWidget(format_json)
+        json_actions.addWidget(copy_example)
+        json_actions.addStretch()
+        vocabulary_layout.addLayout(json_actions)
+        self.content_editor = QPlainTextEdit()
+        self.content_editor.setObjectName("MinigameJsonEditor")
+        self.content_editor.setMinimumHeight(420)
+        self.content_editor.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.content_editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.content_editor.setPlaceholderText("Dán JSON nội dung minigame tại đây…")
+        self.content_editor.setPlainText(self._last_valid_content.to_json())
+        self.content_editor.textChanged.connect(self._content_changed)
+        vocabulary_layout.addWidget(self.content_editor)
+        self.content_status = QLabel()
+        self.content_status.setWordWrap(True)
+        self.content_status.setObjectName("Subtitle")
+        vocabulary_layout.addWidget(self.content_status)
         layout.addWidget(content_card)
 
         voice_card, voice = self._card("3. Voice")
@@ -370,38 +389,62 @@ class MinigamePage(QWidget):
         layout.addWidget(self.estimate)
         return card
 
-    def _set_word_count(self, count: int) -> None:
-        if not hasattr(self, "table"):
-            return
-        old = self.table.rowCount()
-        self.table.setRowCount(count)
-        for row in range(old, count):
-            for column in range(4):
-                self.table.setItem(row, column, QTableWidgetItem(""))
+    @Slot()
+    def _content_changed(self) -> None:
+        try:
+            content = MinigameContent.from_json(self.content_editor.toPlainText())
+        except ValueError as exc:
+            self.content_status.setText(f"JSON chưa hợp lệ — chưa thể lưu/chạy: {exc}")
+        else:
+            self._last_valid_content = content
+            self.content_status.setText(
+                f"Cấu trúc JSON hợp lệ · Topic: {content.topic or '(chưa nhập)'} · "
+                f"{len(content.words)} từ"
+            )
         self._update_preview()
 
-    def _paste_table(self) -> None:
-        lines = [line for line in QApplication.clipboard().text().splitlines() if line.strip()]
-        rows = [line.split("\t") for line in lines]
-        if not rows or any(len(row) < 4 for row in rows):
-            QMessageBox.warning(self, "Dữ liệu không hợp lệ", "Hãy dán bảng có đủ 4 cột.")
+    def _load_content_json(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Mở dữ liệu Minigame", "", "JSON (*.json)"
+        )
+        if not path:
             return
-        self.word_count.setValue(len(rows))
-        for row_index, values in enumerate(rows):
-            for column, value in enumerate(values[:4]):
-                self.table.setItem(row_index, column, QTableWidgetItem(value.strip()))
+        source = Path(path)
+        try:
+            if source.stat().st_size > 2 * 1024 * 1024:
+                raise ValueError("File JSON vượt quá giới hạn 2 MiB.")
+            value = source.read_text(encoding="utf-8-sig")
+            content = MinigameContent.from_json(value)
+        except (OSError, UnicodeError, ValueError) as exc:
+            QMessageBox.warning(self, "JSON không hợp lệ", str(exc))
+            return
+        self.content_editor.setPlainText(content.to_json())
 
-    def _collect_project(self) -> MinigameProject:
-        vocabulary = []
-        for row in range(self.table.rowCount()):
-            values = [
-                self.table.item(row, column).text() if self.table.item(row, column) else ""
-                for column in range(4)
-            ]
-            vocabulary.append(VocabularyItem(*values))
+    def _format_content_json(self) -> None:
+        try:
+            content = MinigameContent.from_json(self.content_editor.toPlainText())
+        except ValueError as exc:
+            QMessageBox.warning(self, "JSON không hợp lệ", str(exc))
+            return
+        self.content_editor.setPlainText(content.to_json())
+
+    def _copy_content_example(self) -> None:
+        QApplication.clipboard().setText(MinigameContent.example().to_json())
+        self.content_status.setText("Đã sao chép JSON mẫu vào clipboard.")
+
+    def _content(self, *, strict: bool) -> MinigameContent:
+        try:
+            return MinigameContent.from_json(self.content_editor.toPlainText())
+        except ValueError:
+            if strict:
+                raise
+            return self._last_valid_content
+
+    def _collect_project(self, *, strict_content: bool = False) -> MinigameProject:
+        content = self._content(strict=strict_content)
         return MinigameProject(
             project_uuid=self.project_uuid,
-            topic=self.topic.text(),
+            topic=content.topic,
             background_video=self.video_path.text(),
             theme_id=str(self.theme_id.currentData()),
             output_format=str(self.aspect.currentData()),
@@ -420,7 +463,7 @@ class MinigamePage(QWidget):
                 "16:9": [self.crop_16_x.value() / 100, self.crop_16_y.value() / 100],
                 "9:16": [self.crop_9_x.value() / 100, self.crop_9_y.value() / 100],
             },
-            vocabulary=vocabulary,
+            vocabulary=list(content.words),
         )
 
     def set_project(self, project: MinigameProject) -> None:
@@ -432,7 +475,6 @@ class MinigamePage(QWidget):
             self.theme_id.setCurrentIndex(max(0, theme_index))
             format_index = self.aspect.findData(project.output_format)
             self.aspect.setCurrentIndex(format_index if format_index >= 0 else 1)
-            self.topic.setText(project.topic)
             self.video_path.setText(project.background_video)
             self.output_folder.setText(project.output_folder)
             self.output_name.setText(project.output_name)
@@ -449,12 +491,9 @@ class MinigamePage(QWidget):
             self.crop_16_y.setValue(round(project.crop_focus.get("16:9", [0.5, 0.5])[1] * 100))
             self.crop_9_x.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[0] * 100))
             self.crop_9_y.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[1] * 100))
-            self.word_count.setValue(len(project.vocabulary) or 5)
-            for row, item in enumerate(project.vocabulary):
-                for column, value in enumerate(
-                    (item.vietnamese, item.english, item.ipa, item.example)
-                ):
-                    self.table.item(row, column).setText(value)
+            content = MinigameContent(project.topic, list(project.vocabulary or MinigameContent.blank().words))
+            self._last_valid_content = content
+            self.content_editor.setPlainText(content.to_json())
             self._update_voice_summary()
             self._update_preview()
         finally:
@@ -463,8 +502,8 @@ class MinigamePage(QWidget):
     def _start_render(self) -> None:
         if self.thread is not None:
             return
-        project = self._collect_project()
         try:
+            project = self._collect_project(strict_content=True)
             project.validate()
         except ValueError as exc:
             QMessageBox.warning(self, "Thiếu dữ liệu", str(exc))
@@ -581,7 +620,7 @@ class MinigamePage(QWidget):
         self.preview_timer.start()
         if not self._loading_project:
             self.dirty_changed.emit(True)
-        total = self.word_count.value() if hasattr(self, "word_count") else 5
+        total = len(self._last_valid_content.words)
         ratio = "9:16"
         seconds = 3 + total * 8 + total * 4 + 8
         outputs = 2 if ratio == MinigameFormat.BOTH.value else 1
@@ -597,8 +636,8 @@ class MinigamePage(QWidget):
         if self.preview_thread is not None:
             self._preview_pending = True
             return
-        topic = self.topic.text().strip() or "YOUR TOPIC"
-        total = self.word_count.value()
+        topic = self._last_valid_content.topic or "YOUR TOPIC"
+        total = len(self._last_valid_content.words)
         theme_id = str(self.theme_id.currentData())
         self.preview_thread = QThread(self)
         self.preview_worker = MinigamePreviewWorker(theme_id, topic, total, self.preview_cache)

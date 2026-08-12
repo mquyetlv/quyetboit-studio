@@ -373,6 +373,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "Hero", item.english, y=positions["hero"], animation="pop")
                 add(scene, "IPA", item.ipa, y=positions["ipa"])
                 add(scene, "Pill", item.vietnamese, y=positions["translation"])
+                if item.word_type:
+                    add(scene, "Small", f"WORD TYPE  •  {item.word_type}", y=positions["phase"])
                 add(scene, "Small", "Listen first, then repeat aloud", y=positions["footer"])
             elif scene.kind == "voice":
                 labels = {
@@ -391,7 +393,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             elif scene.kind == "review":
                 item = project.vocabulary[scene.item_index]
                 max_chars = 58 if horizontal else 34
-                wrapped_example = "\n".join(textwrap.wrap(item.example, width=max_chars))
+                example = item.example
+                if item.example_vietnamese:
+                    example += f"\n{item.example_vietnamese}"
+                wrapped_example = "\n".join(textwrap.wrap(example, width=max_chars))
                 add(
                     scene,
                     "Eyebrow",
@@ -401,6 +406,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "Hero", item.english, y=positions["hero"], animation="pop")
                 add(scene, "IPA", item.ipa, y=positions["ipa"])
                 add(scene, "Pill", item.vietnamese, y=positions["translation"])
+                if item.word_type:
+                    add(scene, "Small", item.word_type.upper(), y=positions["phase"])
                 add(scene, "Eyebrow", "EXAMPLE", y=positions["example_label"])
                 add(scene, "Body", wrapped_example, y=positions["example"])
             elif scene.kind == "score":
@@ -512,6 +519,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     add(scene, "english_label", "ENGLISH WORD")
                     add(scene, "english_word", item.english)
                     add(scene, "ipa", item.ipa)
+                    if item.word_type:
+                        add(scene, "answer_word_type", f"WORD TYPE • {item.word_type.upper()}")
             elif scene.kind == "voice":
                 labels = {"listen": "1 • LISTEN", "slow": "2 • SLOW", "repeat": "3 • YOUR TURN"}
                 helpers = {
@@ -526,7 +535,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "review_meaning", item.vietnamese)
                 add(scene, "review_word", item.english)
                 add(scene, "review_ipa", item.ipa)
-                add(scene, "review_example", item.example)
+                if item.word_type:
+                    add(scene, "review_word_type", item.word_type.upper())
+                example = item.example
+                if item.example_vietnamese:
+                    example += f"\n{item.example_vietnamese}"
+                add(scene, "review_example", example)
             elif scene.kind == "score":
                 beginner, good, perfect = score_ranges(total)
                 add(scene, "ending_header", "CHALLENGE COMPLETE")

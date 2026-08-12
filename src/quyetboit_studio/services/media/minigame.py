@@ -521,12 +521,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "voice_helper", helpers[scene.phase])
             elif scene.kind == "review":
                 item = project.vocabulary[scene.item_index]
-                add(scene, "word_header", f"REVIEW {scene.item_index + 1} / {total}")
-                add(scene, "english_label", "ENGLISH WORD")
-                add(scene, "english_word", item.english)
-                add(scene, "ipa", item.ipa)
-                add(scene, "review_label", "MEANING & EXAMPLE")
                 add(scene, "review_meaning", item.vietnamese)
+                add(scene, "review_word", item.english)
+                add(scene, "review_ipa", item.ipa)
                 add(scene, "review_example", item.example)
             elif scene.kind == "score":
                 beginner, good, perfect = score_ranges(total)

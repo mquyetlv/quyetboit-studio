@@ -53,6 +53,10 @@ class MinigameThemeService:
             "footer": TextSlot("footer", (278, 1797, 802, 1868), 2),
             "start_title": TextSlot("start_title", (166, 459, 913, 873), 1),
             "start_topic": TextSlot("start_topic", (235, 1116, 845, 1229), 2),
+            "review_meaning": TextSlot("review_meaning", (202, 304, 878, 423), 2),
+            "review_word": TextSlot("review_word", (147, 529, 932, 952), 2),
+            "review_ipa": TextSlot("review_ipa", (193, 1049, 887, 1104), 1),
+            "review_example": TextSlot("review_example", (148, 1395, 933, 1676), 3),
         }
 
     @staticmethod
@@ -80,6 +84,22 @@ class MinigameThemeService:
             "ipa": TextStyle(
                 "IPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 46, italic=True,
             ),
+            "review_meaning": TextStyle(
+                "ReviewMeaning", "Montserrat", "Montserrat-Variable.ttf", 30, 68,
+                "#073A82", bold=True,
+            ),
+            "review_word": TextStyle(
+                "ReviewWord", "Montserrat", "Montserrat-Variable.ttf", 44, 126,
+                "#073A82", bold=True,
+            ),
+            "review_ipa": TextStyle(
+                "ReviewIPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 42,
+                "#073A82", italic=True,
+            ),
+            "review_example": TextStyle(
+                "ReviewExample", "Montserrat", "Montserrat-Variable.ttf", 18, 38,
+                "#073A82",
+            ),
             "start": TextStyle(
                 "Start", "Bebas Neue", "BebasNeue-Regular.ttf", 52, 104,
                 bold=True, spacing=1, margin=90,
@@ -100,9 +120,10 @@ class MinigameThemeService:
             "ipa": TextPlacement("ipa", "ipa", 1305),
             "voice_header": TextPlacement("header", "phase", 1605, 2),
             "voice_helper": TextPlacement("body", "phase", 1655, 2),
-            "review_label": TextPlacement("label", "phase", 1515),
-            "review_meaning": TextPlacement("body", "phase", 1580),
-            "review_example": TextPlacement("body", "phase", 1640),
+            "review_meaning": TextPlacement("review_meaning", "review_meaning"),
+            "review_word": TextPlacement("review_word", "review_word"),
+            "review_ipa": TextPlacement("review_ipa", "review_ipa"),
+            "review_example": TextPlacement("review_example", "review_example"),
             "score_title": TextPlacement("start", "meaning", 520),
             "score_beginner": TextPlacement("body", "word", 1040),
             "score_good": TextPlacement("body", "word", 1130),
@@ -125,11 +146,19 @@ class MinigameThemeService:
         if not background.is_file():
             background = root / "backgound-videos.png"
         text = root / "background-text.png"
+        review_start = root / "review-start-screen.png"
+        if not review_start.is_file():
+            review_start = root / "start-review-screen.png"
+        review = root / "review.png"
+        if not review.is_file():
+            review = root / "rewview.png"
         self._validate_image(start, (941, 1672), "start screen")
         self._validate_image(background, (941, 1672), "background video")
         self._validate_image(text, (971, 1619), "background text")
+        self._validate_image(review_start, (941, 1672), "review start screen")
+        self._validate_image(review, (941, 1672), "review screen")
         self._validate_fonts(self._styles())
-        checksum = self._checksum((start, background, text))
+        checksum = self._checksum((start, background, text, review_start, review))
         return MinigameThemeManifest(
             theme_id,
             theme_id.replace("-", " ").title(),
@@ -139,6 +168,8 @@ class MinigameThemeService:
             start,
             background,
             text,
+            review_start,
+            review,
             self._PROFILES[theme_id],
             self._slots(),
             self._styles(),

@@ -89,6 +89,8 @@ def test_theme_discovery_and_mask_are_complete_for_all_five_themes(tmp_path: Pat
     for manifest in manifests.values():
         assert manifest.start_screen.is_file()
         assert manifest.background_video.is_file()
+        assert manifest.review_start_screen.is_file()
+        assert manifest.review_screen.is_file()
         result = MinigameAlphaMaskService().build(manifest, tmp_path)
         from PIL import Image
 
@@ -97,6 +99,18 @@ def test_theme_discovery_and_mask_are_complete_for_all_five_themes(tmp_path: Pat
             assert image.size == (1080, 1920)
             assert image.getextrema()[3][0] == 0
             assert image.getextrema()[3][1] == 255
+
+
+def test_review_asset_aliases_resolve_for_all_five_themes() -> None:
+    manifests = MinigameThemeService().discover()
+
+    assert manifests["theme-2"].review_start_screen.name == "start-review-screen.png"
+    assert all(manifest.review_screen.name == "rewview.png" for manifest in manifests.values())
+    for manifest in manifests.values():
+        with Image.open(manifest.review_start_screen) as review_start:
+            assert review_start.size == (941, 1672)
+        with Image.open(manifest.review_screen) as review:
+            assert review.size == (941, 1672)
 
 
 def test_theme_preflight_reports_missing_bundled_font_with_action(tmp_path: Path) -> None:
@@ -337,6 +351,35 @@ def test_review_example_wraps_by_bundled_font_pixel_width(tmp_path: Path) -> Non
     assert r"\N" in example_line
 
 
+def test_review_content_uses_new_full_screen_design_slots(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-1")
+    item = VocabularyItem("bác sĩ", "Doctor", "/ˈdɒk.tər/", "The doctor checks the patient.")
+    project = MinigameProject(topic="Hospital", vocabulary=[item])
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("review_start", 0, 1_000),
+            MinigameScene("review", 1_000, 3_000, 0),
+        ],
+        [],
+        3_000,
+    )
+
+    content = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "new-review.ass", "9:16", manifest
+    ).read_text(encoding="utf-8-sig")
+
+    assert "bác sĩ" in content
+    assert "Doctor" in content
+    assert "/ˈdɒk.tər/" in content
+    assert "The doctor checks the patient." in content
+    assert "WORD TYPE" not in content
+    assert "Dialogue: 0,0:00:00.00,0:00:01.00" not in content
+    for placement_name in ("review_meaning", "review_word", "review_ipa", "review_example"):
+        placement = manifest.placements[placement_name]
+        x1, y1, x2, y2 = manifest.slots[placement.slot].bounds
+        assert rf"\pos({(x1 + x2) // 2},{(y1 + y2) // 2})" in content
+
+
 def test_theme_review_score_and_cta_have_dedicated_content(tmp_path: Path) -> None:
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
     timeline = MinigameTimeline(
@@ -352,7 +395,11 @@ def test_theme_review_score_and_cta_have_dedicated_content(tmp_path: Path) -> No
         project, timeline, tmp_path / "ending.ass", "9:16", MinigameThemeService().get("theme-1")
     ).read_text(encoding="utf-8-sig")
 
-    assert "MEANING & EXAMPLE" in content
+    assert "nghĩa 1" in content
+    assert "word1" in content
+    assert "/wɜːd 1/" in content
+    assert "This is example 1." in content
+    assert "WORD TYPE" not in content
     assert "CHALLENGE COMPLETE" in content
     assert "PERFECT SCORE" in content
     assert "Save this video" in content
@@ -550,6 +597,13 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
 
     assert [scene.kind for scene in timeline.scenes].count("word") == 4
     assert [scene.kind for scene in timeline.scenes].count("review") == 2
+    assert [scene.kind for scene in timeline.scenes].count("review_start") == 1
+    review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
+    last_word = max(scene.end_ms for scene in timeline.scenes if scene.kind == "word")
+    first_review = min(scene.start_ms for scene in timeline.scenes if scene.kind == "review")
+    assert review_start.start_ms == last_word
+    assert review_start.end_ms == first_review
+    assert review_start.end_ms - review_start.start_ms == MinigameTimelineBuilder.REVIEW_START_MS
     assert sum(path == normal[0] for _, path in timeline.audio_events) == 3
     assert sum(path == slow[0] for _, path in timeline.audio_events) == 1
     assert sum(path == examples[0] for _, path in timeline.audio_events) == 1
@@ -562,6 +616,27 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
         "repeat",
     ]
     assert timeline.duration_ms > 0
+
+
+def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path) -> None:
+    normal = [tmp_path / "normal.wav"]
+    slow = [tmp_path / "slow.wav"]
+    example = [tmp_path / "example.wav"]
+    durations = {normal[0]: 500, slow[0]: 800, example[0]: 900}
+    timeline = MinigameTimelineBuilder().build([_item()], normal, slow, example, durations)
+    paths = [tmp_path / name for name in ("hook.png", "body.png", "review-start.png", "review.png")]
+
+    scenes = MinigamePipeline._visual_scenes(timeline, *paths)
+
+    assert [scene.background for scene in scenes] == [
+        paths[0],
+        paths[1],
+        paths[2],
+        paths[3],
+        paths[1],
+    ]
+    assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
+    assert scenes[2].duration_ms == MinigameTimelineBuilder.REVIEW_START_MS
 
 
 def test_subtitles_keep_supplied_content_and_dynamic_score(tmp_path: Path) -> None:
@@ -910,7 +985,10 @@ def test_real_question_answer_voice_review_frames_have_expected_pixel_changes(
         [0.5, 0.5],
         theme_background=manifest.background_video,
         theme_overlay=mask,
-        visual_scenes=[MinigameVisualScene(body, 2_000)],
+        visual_scenes=[
+            MinigameVisualScene(body, 1_500),
+            MinigameVisualScene(manifest.review_screen, 500),
+        ],
         progress=lambda event: progress.append(event.fraction),
     )
     samples: list[np.ndarray] = []
@@ -926,6 +1004,7 @@ def test_real_question_answer_voice_review_frames_have_expected_pixel_changes(
     phase_diff = np.abs(samples[3].astype(np.int16) - samples[2].astype(np.int16))
     assert np.count_nonzero(word_diff[word[1] : word[3], word[0] : word[2]]) > 500
     assert np.count_nonzero(phase_diff[phase[1] : phase[3], phase[0] : phase[2]]) > 500
+    assert np.mean(phase_diff) > 5
     assert progress[-1] == 1.0
 
 

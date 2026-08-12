@@ -111,6 +111,18 @@ class MinigamePipeline:
                 self.workspace / "visual-frame",
                 layout_key=frame_layout_key,
             )
+            review_start_frame = self.frames.build(
+                manifest.review_start_screen,
+                (),
+                self.workspace / "visual-frame",
+                layout_key=frame_layout_key,
+            )
+            review_frame = self.frames.build(
+                manifest.review_screen,
+                (),
+                self.workspace / "visual-frame",
+                layout_key=frame_layout_key,
+            )
             speech = self.speech_factory(self.project)
             word_audio: list[Path] = []
             slow_audio: list[Path] = []
@@ -150,6 +162,8 @@ class MinigamePipeline:
                     )
                 if scene.kind == "word" and scene.phase == "answer":
                     timeline.audio_events.append((scene.start_ms, reveal.path))
+                if scene.kind == "review_start":
+                    timeline.audio_events.append((scene.start_ms + 120, opening.path))
                 if scene.kind == "score":
                     timeline.audio_events.append((scene.start_ms + 160, finish.path))
                 if scene.kind == "cta":
@@ -210,16 +224,13 @@ class MinigamePipeline:
                     start_background=manifest.start_screen,
                     hook_text_overlay=hook_text,
                     hook_duration_ms=self.timeline_builder.HOOK_MS,
-                    visual_scenes=[
-                        MinigameVisualScene(
-                            hook_frame,
-                            self.timeline_builder.HOOK_MS,
-                        ),
-                        MinigameVisualScene(
-                            body_frame,
-                            mixed.duration_ms - self.timeline_builder.HOOK_MS,
-                        ),
-                    ],
+                    visual_scenes=self._visual_scenes(
+                        timeline,
+                        hook_frame,
+                        body_frame,
+                        review_start_frame,
+                        review_frame,
+                    ),
                 )
                 outputs.append(rendered.path)
             self._emit(progress, 1.0, "Đã hoàn thành video minigame")
@@ -232,6 +243,41 @@ class MinigamePipeline:
                 "Không thể tạo video minigame.",
                 debug_detail=str(exc),
             ) from exc
+
+    @staticmethod
+    def _visual_scenes(
+        timeline,
+        hook_frame: Path,
+        body_frame: Path,
+        review_start_frame: Path,
+        review_frame: Path,
+    ) -> list[MinigameVisualScene]:
+        hook = next(scene for scene in timeline.scenes if scene.kind == "hook")
+        review_start = next(
+            scene for scene in timeline.scenes if scene.kind == "review_start"
+        )
+        reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
+        scenes = [MinigameVisualScene(hook_frame, hook.end_ms - hook.start_ms)]
+        before_review = review_start.start_ms - hook.end_ms
+        if before_review > 0:
+            scenes.append(MinigameVisualScene(body_frame, before_review))
+        scenes.append(
+            MinigameVisualScene(
+                review_start_frame, review_start.end_ms - review_start.start_ms
+            )
+        )
+        if reviews:
+            scenes.append(
+                MinigameVisualScene(
+                    review_frame, reviews[-1].end_ms - reviews[0].start_ms
+                )
+            )
+            after_review = timeline.duration_ms - reviews[-1].end_ms
+        else:
+            after_review = timeline.duration_ms - review_start.end_ms
+        if after_review > 0:
+            scenes.append(MinigameVisualScene(body_frame, after_review))
+        return scenes
 
     def _speech_clip(
         self, speech: MinigameSpeechService, text: str, item_id: str

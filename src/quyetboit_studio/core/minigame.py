@@ -94,6 +94,8 @@ class MinigameThemeManifest:
     start_screen: Path
     background_video: Path
     background_text: Path
+    review_start_screen: Path
+    review_screen: Path
     mask_profile: AlphaMaskProfile
     slots: dict[str, TextSlot]
     styles: dict[str, TextStyle]
@@ -217,6 +219,7 @@ class MinigameTimelineBuilder:
     BETWEEN_VOICE_MS = (320, 480)
     AFTER_WORD_MS = 550
     REVIEW_LEAD_MS = 320
+    REVIEW_START_MS = 2_800
     REVIEW_GAP_MS = 280
     REVIEW_AFTER_MS = 500
     SCORE_MS = 3_000
@@ -274,6 +277,8 @@ class MinigameTimelineBuilder:
             audio_events.extend(
                 [(normal_start, normal), (slow_start, slow), (final_start, normal)]
             )
+        scenes.append(MinigameScene("review_start", cursor, cursor + self.REVIEW_START_MS))
+        cursor += self.REVIEW_START_MS
         for index in range(len(items)):
             normal = word_audio[index]
             example = example_audio[index]

@@ -2,10 +2,10 @@
 
 ### Tiến độ cập nhật ngày 2026-08-12
 
-- Hoàn thành: **57/57 task (100%)**.
-- Đang làm một phần: **0/57 task (0%)**.
-- Chưa triển khai: **0/57 task (0%)**.
-- Đã kiểm chứng: **120 test pass**, Ruff/compileall/diff check pass.
+- Hoàn thành: **64/64 task (100%)**.
+- Đang làm một phần: **0/64 task (0%)**.
+- Chưa triển khai: **0/64 task (0%)**.
+- Đã kiểm chứng: **123 test pass**, Ruff/compileall/diff check pass; wheel chứa đủ 10 asset review.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -19,8 +19,10 @@ Luồng hình ảnh đề xuất:
 1. `start-screen.png`: cảnh hook, thêm tiêu đề thử thách và tên topic.
 2. `background-video.png`: nền chính của video theo theme đã chọn.
 3. `background-text.png`: nguồn RGB để service tự tạo và lưu cache RGBA alpha mask, sau đó overlay lên
-   `background-video.png` trong cảnh câu hỏi, đáp án, phát âm và review.
-4. `example-start-screen.png` và `example.png`: chỉ dùng làm visual reference/pixel-regression, không
+   `background-video.png` trong cảnh câu hỏi, đáp án và phát âm.
+4. `review-start-screen.png` (Theme 2 dùng alias `start-review-screen.png`): cảnh mở đầu phần review.
+5. `rewview.png`: nền nội dung review cho từng từ; giữ tên asset hiện có để không sửa/xóa file nguồn.
+6. `example-start-screen.png`, `example.png` và `review-example.png`: chỉ dùng làm visual reference/pixel-regression, không
    đưa nguyên chữ mẫu vào output.
 
 Phạm vi đầu tiên là video dọc 9:16. Luồng 16:9 hiện tại chỉ được giữ nếu có quy tắc thiết kế được duyệt;
@@ -314,3 +316,19 @@ git diff --check
 1. Title nằm trên một dòng, viết `CAN YOU GET {N}/{N}?`.
 2. Theme 1–5 chỉ xuất 9:16 trong giai đoạn này; 16:9/Both sẽ được triển khai sau với asset/layout riêng.
 3. Duyệt baseline Bebas Neue cho title và Montserrat cho nội dung.
+
+## 8. Cập nhật thiết kế Review
+
+- [x] Discovery và validate đủ hai asset review 941×1672 cho Theme 1–5; resolve alias
+  `start-review-screen.png`/`review-start-screen.png` và tên nguồn `rewview.png` mà không sửa asset.
+- [x] Thêm scene `review_start` một lần sau toàn bộ vòng đoán từ và trước danh sách review; duration
+  2,8 giây được tính vào timeline/progress tổng.
+- [x] Render `review-start-screen.png`/alias thành full-frame riêng, cache theo checksum theme và ghép đúng
+  boundary với audio/timeline.
+- [x] Render `rewview.png` làm full-frame nền cho mọi item review; score/CTA quay lại nền chính như cũ.
+- [x] Đặt đúng bốn dữ liệu người dùng cung cấp vào các vùng Vietnamese, English Word, IPA và Example
+  Sentence; để trống WORD TYPE vì model chưa có field và không tự suy đoán.
+- [x] Thêm regression cho alias asset, vị trí text, scene không có text động ở màn mở đầu, chuỗi visual
+  scene và pixel difference khi chuyển sang nền review thật.
+- [x] Render integration toàn timeline 5 từ, ffprobe/progress/cancel vẫn hợp lệ; 49 test Minigame và 123
+  test toàn repo pass, Ruff/compileall/diff check pass, wheel chứa đủ 10/10 asset review.

@@ -61,6 +61,11 @@ phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
 Title hook dùng định dạng một dòng `CAN YOU GET {N}/{N}?`; hỗ trợ 16:9/Both sẽ được bổ sung sau khi có
 asset và layout ngang riêng.
 
+Sau vòng đoán từ, video hiển thị một lần màn mở đầu review theo theme rồi dùng nền review riêng cho
+từng từ. Nội dung review lấy nguyên bốn trường Vietnamese, English Word, IPA và Example Sentence;
+ô WORD TYPE được để trống vì project chưa có trường dữ liệu tương ứng. Registry tương thích cả tên
+`review-start-screen.png`, alias `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
+
 Catalog Google lấy từ `TextToSpeechClient.list_voices()` và giữ language codes, SSML gender, sample
 rate cùng nhóm Chirp 3 HD/Chirp HD/Studio/Neural2/WaveNet/Standard và các loại mới provider trả về.
 Catalog CapCut gọi toàn bộ category cấu hình trong `services/capcut/config.py`, merge voice trùng

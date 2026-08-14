@@ -21,8 +21,8 @@ test, log hay tài liệu handoff.
 
 ## 2. Trạng thái hiện tại
 
-- Checklist Minigame: **82/82 task hoàn thành**.
-- Baseline tự động: **134 test pass**; 61 test nằm trong `tests/test_minigame.py`.
+- Checklist Minigame: **90/90 task hoàn thành**.
+- Baseline tự động: **142 test pass**; 68 test nằm trong `tests/test_minigame.py`.
 - Ruff, `compileall` và `git diff --check` pass.
 - Đã render integration thật bằng FFmpeg: video 1080×1920, có audio/video, progress 100%, output
   ffprobe hợp lệ và không còn file `.partial`/scene tạm.
@@ -136,7 +136,7 @@ Model liên quan:
 
 Timeline chuẩn:
 
-1. `hook`: `start-screen.png`, title động `CAN YOU GET {N}/{N}?`, Topic.
+1. `hook`: `start.png`, artwork challenge cố định và Topic động tự co/wrap/căn giữa.
 2. Mỗi word:
    - `question`: Vietnamese + countdown 3→2→1.
    - `answer`: Vietnamese, English, IPA và Word Type nếu có.
@@ -157,7 +157,7 @@ Assets nằm trong `src/quyetboit_studio/assets/theme/`.
 
 Mỗi theme dùng:
 
-- `start-screen.png` — hook.
+- `start.png` — hook và ảnh bìa; Topic động nằm trong panel riêng của từng theme.
 - `background-video.png` — nền body; registry còn fallback alias legacy.
 - `background-text.png` — nguồn RGB tạo RGBA mask.
 - `review-start-screen.png` — màn mở đầu review.
@@ -186,7 +186,8 @@ Font bundle:
 - `Montserrat-Variable.ttf` và `Montserrat-Italic-Variable.ttf` cho content/IPA.
 - License OFL được đóng gói; renderer truyền `fontsdir` cho libass, không phụ thuộc font hệ thống.
 
-`layout_version` hiện là **5**. Mọi thay đổi slot/style/palette phải tăng version hoặc thay manifest
+`layout_version` hiện là **8**. Score dùng bounds/màu riêng cho từng theme; answer/review dùng các vùng độc lập
+cho English Word, IPA, Word Type, voice và bilingual example. Mọi thay đổi slot/style/palette phải tăng version hoặc thay manifest
 fingerprint để cache visual cũ bị invalidate đúng cách.
 
 ## 7. Kiến trúc và file quan trọng

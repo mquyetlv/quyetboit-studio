@@ -2,10 +2,10 @@
 
 ### Tiến độ cập nhật ngày 2026-08-12
 
-- Hoàn thành: **82/82 task (100%)**.
-- Đang làm một phần: **0/82 task (0%)**.
-- Chưa triển khai: **0/82 task (0%)**.
-- Đã kiểm chứng: **134 test pass**, Ruff/compileall/diff check pass; package-data chứa đủ asset review và score.
+- Hoàn thành: **90/90 task (100%)**.
+- Đang làm một phần: **0/90 task (0%)**.
+- Chưa triển khai: **0/90 task (0%)**.
+- Đã kiểm chứng: **142 test pass**, Ruff/compileall/diff check pass; package-data chứa đủ asset start, review và score.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -16,7 +16,7 @@ thread.
 
 Luồng hình ảnh đề xuất:
 
-1. `start-screen.png`: cảnh hook, thêm tiêu đề thử thách và tên topic.
+1. `start.png`: cảnh hook mới, giữ challenge artwork và thêm tên Topic động.
 2. `background-video.png`: nền chính của video theo theme đã chọn.
 3. `background-text.png`: nguồn RGB để service tự tạo và lưu cache RGBA alpha mask, sau đó overlay lên
    `background-video.png` trong cảnh câu hỏi, đáp án và phát âm.
@@ -34,7 +34,7 @@ không crop ngang tự động từ asset dọc vì sẽ cắt khung và phá t�
 
 | Asset | Kích thước gốc | Tỷ lệ gần đúng | Alpha | Vai trò |
 | --- | ---: | ---: | --- | --- |
-| `theme-1` đến `theme-5` — `start-screen.png` | 941×1672 | 9:16 | Không, RGB | Hook/start theo theme |
+| `theme-1` đến `theme-5` — `start.png` | 941×1672 | 9:16 | Không, RGB | Hook/cover theo theme |
 | `theme-1` đến `theme-5` — `background-video.png` | 941×1672 | 9:16 | Không, RGB | Nền chính theo theme |
 | `theme-1` đến `theme-5` — `background-text.png` | 971×1619 | 3:5 | Không, RGB | Nguồn tạo RGBA overlay |
 | `example-start-screen.png` | 941×1672 | 9:16 | Không, RGB | Mẫu vị trí title |
@@ -57,7 +57,7 @@ Lưu ý bắt buộc khi implement:
 
 - Tọa độ trong bảng dùng `(x1, y1)–(x2, y2)`, gốc `(0,0)` ở góc trái trên, đơn vị pixel và bao gồm
   pixel cuối.
-- `start-screen`/`example`: quy đổi lên 1080×1920 bằng `sx = 1080/941 = 1,147715`,
+- `start.png`/`example`: quy đổi lên 1080×1920 bằng `sx = 1080/941 = 1,147715`,
   `sy = 1920/1672 = 1,148325`.
 - `background-text`: quy đổi độc lập lên 1080×1920 bằng `sx = 1080/971 = 1,112255`,
   `sy = 1920/1619 = 1,185917`. Đây là phép stretch có chủ đích để chuẩn hóa canvas; phải render một
@@ -112,8 +112,7 @@ Thông số placement cần khóa cho nội dung động:
 
 - Title safe box native: `(145,400)–(796,760)`, tâm `(471,580)`; tương ứng 1080×1920 là
   `(166,459)–(913,873)`, tâm `(540,666)`.
-- Title trình bày trên một dòng theo yêu cầu đã duyệt: `CAN YOU GET {N}/{N}?`; căn giữa cả hai trục
-  và dùng auto-fit nhỏ hơn thay vì kéo giãn ngang font khi gần chạm safe box.
+- Challenge title nằm sẵn trong `start.png`; renderer chỉ vẽ Topic động vào panel trống.
 - Topic box native đo theo khung: xấp xỉ `(171,944)–(756,1099)`; vùng chữ an toàn được **định nghĩa**
   là `(205,972)–(736,1070)`, tâm `(471,1021)`. Trên 1080×1920 vùng an toàn là
   `(235,1116)–(845,1229)`, tâm `(540,1172)`.
@@ -190,19 +189,19 @@ Màu baseline lấy từ ảnh mẫu:
 ### 3.2. UI menu Minigame
 
 - [x] Thêm card **Chọn giao diện (Theme)** với năm option `Theme 1`…`Theme 5`; mỗi option có thumbnail
-  lấy từ `start-screen.png`, tên, bảng màu và trạng thái hỗ trợ 9:16.
+  lấy từ `start.png`, tên, bảng màu và trạng thái hỗ trợ 9:16.
 - [x] Chọn theme phải cập nhật ngay preview, `theme_id` trong project và asset manifest; không làm mất
   Topic, vocabulary, voice hoặc output setting đang nhập.
 - [x] Thay preview text mô phỏng bằng preview frame thật của start screen; render debounced ở worker
   riêng để nhập Topic/số từ không block Qt main thread.
-- [x] Preview có safe-box debug bật trong development/test, lấy đúng `start_title`/`start_topic` từ manifest.
+- [x] Preview có safe-box debug bật trong development/test, lấy đúng `start_topic` từ manifest.
 - [x] Nếu bộ theme chỉ hỗ trợ 9:16, disable 16:9/Both kèm giải thích; không cho chạy rồi mới báo lỗi.
 - [x] Không còn bắt buộc chọn `background_video` khi dùng image theme; giữ field cũ để migration hoặc
   chế độ legacy, không xóa dữ liệu project cũ.
 
 ### 3.3. Scene/timeline
 
-- [x] Hook dùng `start-screen.png` trong `HOOK_MS`, title động `CAN YOU GET {N}/{N}?` và Topic.
+- [x] Hook dùng `start.png` trong `HOOK_MS`, challenge artwork cố định và Topic động.
 - [x] Question composite `background-video.png` + RGBA mask sinh từ `background-text.png`: pill
   `QUESTION i/N`, khung A hiện nghĩa Việt, separator hiện countdown 3→2→1; không lộ English/IPA.
 - [x] Answer dùng cùng composite: pill `ANSWER i/N`, khung A giữ nghĩa Việt, khung B hiện English + IPA,
@@ -312,7 +311,7 @@ git diff --check
 
 ## 7. Quyết định thiết kế đã xác nhận
 
-1. Title nằm trên một dòng, viết `CAN YOU GET {N}/{N}?`.
+1. Challenge title nằm sẵn trong `start.png`; chỉ Topic là nội dung hook động.
 2. Theme 1–5 chỉ xuất 9:16 trong giai đoạn này; 16:9/Both sẽ được triển khai sau với asset/layout riêng.
 3. Duyệt baseline Bebas Neue cho title và Montserrat cho nội dung.
 
@@ -360,7 +359,7 @@ git diff --check
   schema v2 và migration cũ không bị phá.
 - [x] Render Word Type trong answer/review và bản dịch dưới Example Sentence; tăng layout version để
   invalidate cache visual cũ. Đã render QA thật Theme 2 xác nhận chữ nằm đúng panel.
-- [x] Thêm JSON Schema máy đọc, unit/UI/persistence/subtitle regression; 61 test Minigame và 134 test
+- [x] Thêm JSON Schema máy đọc, unit/UI/persistence/subtitle regression; 65 test Minigame và 139 test
   toàn repo pass, Ruff/compileall/diff check pass.
 
 ## 11. Score theo Level trước Review
@@ -377,3 +376,24 @@ git diff --check
   làm full-frame riêng cho scene score.
 - [x] Đặt ba text động vào đúng ba ô Beginner, Good, Perfect; tăng `layout_version` để invalidate cache
   visual cũ.
+
+## 12. Start frame và ảnh bìa theo Topic
+
+- [x] Discovery/validate/cache checksum dùng `start.png` 941×1672 của Theme 1–5 làm hook mới.
+- [x] Khai báo safe-box Topic riêng theo từng theme; Montserrat SemiBold dùng màu/outline hài hòa với
+  panel sáng hoặc tối tương ứng.
+- [x] Đo glyph theo pixel, tự co cỡ và wrap tối đa ba dòng; căn giữa ngang/dọc trong safe-box và báo lỗi
+  có hướng xử lý nếu Topic vẫn không thể vừa ở cỡ tối thiểu.
+- [x] Preview, frame đầu video và ảnh bìa dùng cùng start frame đã composite, không có ba đường render
+  typography khác nhau.
+- [x] Xuất atomically `<tên-video>_cover.png` 1080×1920 cạnh mỗi video; chọn suffix output xét cả video
+  và cover để không ghi đè output cũ.
+
+## 13. Hiệu chỉnh typography theo asset Theme 1–5
+
+- [x] Đo riêng ba score pill trên từng `score.png`; registry lưu bounds/màu score theo theme, căn giữa ngang/dọc
+  và tăng cỡ chữ thay vì dùng một bộ tọa độ chung.
+- [x] Tách panel cuối answer thành ba vùng không giao nhau cho Word Type, voice heading và helper; tăng cỡ English
+  word, căn IPA/Word Type review đúng tâm pill và chia English/Vietnamese example thành hai vùng dễ đọc.
+- [x] Tăng `layout_version` lên 8; thêm regression geometry/tách vùng/bilingual example và render FFmpeg QA thật
+  Theme 1–5 ở 1080×1920, đủ audio, đúng 6 giây, không còn file partial/process mồ côi.

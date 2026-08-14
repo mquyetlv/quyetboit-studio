@@ -537,7 +537,10 @@ class MinigamePage(QWidget):
         self.last_outputs = result.outputs
         self.progress.setValue(100)
         names = ", ".join(path.name for path in result.outputs)
-        self.status.setText(f"Hoàn thành {len(result.outputs)} video: {names}")
+        cover_names = ", ".join(path.name for path in result.covers)
+        self.status.setText(
+            f"Hoàn thành {len(result.outputs)} video: {names} · Ảnh bìa: {cover_names}"
+        )
         self.open_button.setEnabled(True)
 
     @Slot(object)
@@ -666,7 +669,7 @@ class MinigamePage(QWidget):
         self._preview_base = start
         self._preview_manifest = manifest
         self._display_preview()
-        self.preview_caption.setText("Preview dùng đúng start-screen và typography như output.")
+        self.preview_caption.setText("Preview dùng đúng start.png và typography như video/ảnh bìa.")
 
     @Slot(object)
     def _preview_failed(self, error: object) -> None:
@@ -691,7 +694,7 @@ class MinigamePage(QWidget):
         if self.safe_box_debug.isChecked() and self._preview_manifest is not None:
             painter = QPainter(image)
             painter.setPen(QPen(QColor("#ff4fd8"), 4, Qt.PenStyle.DashLine))
-            for name in ("start_title", "start_topic"):
+            for name in ("start_topic",):
                 x1, y1, x2, y2 = self._preview_manifest.slots[name].bounds
                 painter.drawRect(x1, y1, x2 - x1, y2 - y1)
             painter.end()

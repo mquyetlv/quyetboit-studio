@@ -36,6 +36,58 @@ class MinigameThemeService:
         "theme-4": ("#F8F7FF", "#72DDF7", "#DCCFFF"),
         "theme-5": ("#173E29", "#17652F", "#315C3B"),
     }
+    _START_TOPIC_BOUNDS: ClassVar[dict[str, tuple[int, int, int, int]]] = {
+        "theme-1": (145, 1005, 935, 1270),
+        "theme-2": (120, 1010, 960, 1305),
+        "theme-3": (160, 1000, 920, 1335),
+        "theme-4": (160, 1035, 920, 1365),
+        "theme-5": (145, 1050, 935, 1320),
+    }
+    _START_TOPIC_COLORS: ClassVar[dict[str, tuple[str, str]]] = {
+        "theme-1": ("#073A82", "#FFFFFF"),
+        "theme-2": ("#073A82", "#FFFFFF"),
+        "theme-3": ("#263247", "#FFF7E2"),
+        "theme-4": ("#F8F7FF", "#160F31"),
+        "theme-5": ("#173E29", "#FFFFFF"),
+    }
+    # Score pills are drawn at different heights in every theme asset. These are
+    # measured on the canonical 1080x1920 canvas and intentionally stay per-theme.
+    _SCORE_BOUNDS: ClassVar[dict[str, dict[str, tuple[int, int, int, int]]]] = {
+        "theme-1": {"score_beginner": (390, 522, 728, 612), "score_good": (390, 934, 735, 1023), "score_perfect": (390, 1318, 735, 1406)},
+        "theme-2": {"score_beginner": (400, 527, 735, 624), "score_good": (405, 972, 740, 1068), "score_perfect": (415, 1372, 740, 1462)},
+        "theme-3": {"score_beginner": (430, 570, 800, 680), "score_good": (430, 980, 800, 1085), "score_perfect": (430, 1350, 800, 1460)},
+        "theme-4": {"score_beginner": (390, 532, 735, 642), "score_good": (390, 950, 740, 1060), "score_perfect": (410, 1350, 735, 1460)},
+        "theme-5": {"score_beginner": (385, 552, 745, 656), "score_good": (390, 975, 740, 1075), "score_perfect": (390, 1365, 745, 1465)},
+    }
+    _SCORE_COLORS: ClassVar[dict[str, tuple[str, str]]] = {
+        "theme-1": ("#073A82", "#FFFFFF"),
+        "theme-2": ("#073A82", "#FFFFFF"),
+        "theme-3": ("#4A2C10", "#FFF5D9"),
+        "theme-4": ("#FFFFFF", "#10265E"),
+        "theme-5": ("#234F18", "#FFFFFF"),
+    }
+    _REVIEW_PILL_BOUNDS: ClassVar[dict[str, dict[str, tuple[int, int, int, int]]]] = {
+        "theme-1": {
+            "review_ipa": (193, 1048, 887, 1105),
+            "review_word_type": (413, 1216, 667, 1287),
+        },
+        "theme-2": {
+            "review_ipa": (193, 1047, 887, 1104),
+            "review_word_type": (413, 1214, 667, 1285),
+        },
+        "theme-3": {
+            "review_ipa": (193, 1075, 887, 1130),
+            "review_word_type": (413, 1245, 667, 1317),
+        },
+        "theme-4": {
+            "review_ipa": (193, 1052, 887, 1107),
+            "review_word_type": (413, 1218, 667, 1292),
+        },
+        "theme-5": {
+            "review_ipa": (193, 1054, 887, 1111),
+            "review_word_type": (413, 1227, 667, 1297),
+        },
+    }
     # Body themes 1/4 are dark; 2/3/5 are light. Review follows the same split except
     # Theme 1, whose review card is light. These semantic palettes are deliberately
     # explicit so no scene inherits an unreadable global white foreground.
@@ -71,32 +123,47 @@ class MinigameThemeService:
         self.assets_root = assets_root or Path(__file__).resolve().parents[2] / "assets" / "theme"
         self.fonts_root = fonts_root or Path(__file__).resolve().parents[2] / "assets" / "fonts"
 
-    @staticmethod
-    def _slots() -> dict[str, TextSlot]:
+    @classmethod
+    def _slots(cls, theme_id: str) -> dict[str, TextSlot]:
         # Coordinates are on the canonical 1080×1920 canvas.
-        return {
+        slots = {
             "header": TextSlot("header", (420, 103, 660, 184), 1),
             "header_wide": TextSlot("header_wide", (250, 103, 830, 184), 1),
             "meaning": TextSlot("meaning", (130, 340, 950, 770), 2),
-            "word": TextSlot("word", (130, 990, 950, 1185), 2),
-            "ipa": TextSlot("ipa", (130, 1180, 950, 1255), 1),
-            "phase": TextSlot("phase", (130, 1480, 950, 1740), 2),
+            "word": TextSlot("word", (130, 990, 950, 1225), 2),
+            "english_label": TextSlot("english_label", (160, 995, 920, 1070), 1),
+            "english_word": TextSlot("english_word", (135, 1070, 945, 1225), 2),
+            "ipa": TextSlot("ipa", (150, 1265, 930, 1350), 1),
+            "phase": TextSlot("phase", (130, 1480, 950, 1780), 4),
+            "answer_word_type": TextSlot("answer_word_type", (170, 1500, 910, 1585), 1),
+            "voice_header": TextSlot("voice_header", (170, 1590, 910, 1680), 1),
+            "voice_helper": TextSlot("voice_helper", (170, 1690, 910, 1780), 2),
             "footer": TextSlot("footer", (278, 1797, 802, 1868), 2),
-            "start_title": TextSlot("start_title", (166, 459, 913, 873), 1),
-            "start_topic": TextSlot("start_topic", (235, 1116, 845, 1229), 2),
+            "start_topic": TextSlot(
+                "start_topic", cls._START_TOPIC_BOUNDS[theme_id], 3
+            ),
             "review_meaning": TextSlot("review_meaning", (202, 304, 878, 423), 2),
-            "review_word": TextSlot("review_word", (147, 529, 932, 952), 2),
-            "review_ipa": TextSlot("review_ipa", (193, 1049, 887, 1104), 1),
-            "review_word_type": TextSlot("review_word_type", (316, 1189, 764, 1274), 1),
-            "review_example": TextSlot("review_example", (148, 1395, 933, 1676), 4),
-            "score_beginner": TextSlot("score_beginner", (390, 510, 730, 620), 1),
-            "score_good": TextSlot("score_good", (390, 925, 730, 1035), 1),
-            "score_perfect": TextSlot("score_perfect", (390, 1320, 730, 1430), 1),
+            "review_word": TextSlot("review_word", (147, 540, 932, 970), 2),
+            "review_example": TextSlot("review_example", (175, 1430, 905, 1670), 4),
+            "review_example_en": TextSlot("review_example_en", (175, 1430, 905, 1545), 3),
+            "review_example_vi": TextSlot("review_example_vi", (175, 1555, 905, 1670), 3),
         }
+        slots.update(
+            {name: TextSlot(name, bounds, 1) for name, bounds in cls._SCORE_BOUNDS[theme_id].items()}
+        )
+        slots.update(
+            {
+                name: TextSlot(name, bounds, 1)
+                for name, bounds in cls._REVIEW_PILL_BOUNDS[theme_id].items()
+            }
+        )
+        return slots
 
     @classmethod
     def _styles(cls, theme_id: str) -> dict[str, TextStyle]:
         colors = cls._COLORS[theme_id]
+        topic_color, topic_outline = cls._START_TOPIC_COLORS[theme_id]
+        score_color, score_outline = cls._SCORE_COLORS[theme_id]
 
         def style(*args, surface: str = "body", role: str = "primary", **kwargs) -> TextStyle:
             prefix = "review_" if surface == "review" else ""
@@ -116,8 +183,9 @@ class MinigameThemeService:
                 colors.hook_primary, colors.hook_outline, colors.shadow, 3, 1,
             ),
             "topic": TextStyle(
-                "Topic", "Montserrat", "Montserrat-Variable.ttf", 25, 44,
-                colors.hook_primary, colors.hook_outline, colors.shadow, 1, 1, bold=True,
+                "Topic", "Montserrat", "Montserrat-Variable.ttf", 34, 88,
+                topic_color, topic_outline, colors.shadow, 2, 1, bold=True,
+                line_spacing=10,
             ),
             "header": style(
                 "Header", "Montserrat", "Montserrat-Variable.ttf", 18, 30,
@@ -131,7 +199,7 @@ class MinigameThemeService:
                 "Hero", "Montserrat", "Montserrat-Variable.ttf", 36, 88, bold=True,
             ),
             "word": style(
-                "Word", "Montserrat", "Montserrat-Variable.ttf", 40, 126, bold=True,
+                "Word", "Montserrat", "Montserrat-Variable.ttf", 48, 144, bold=True,
             ),
             "body": style(
                 "Body", "Montserrat", "Montserrat-Variable.ttf", 18, 34,
@@ -150,24 +218,28 @@ class MinigameThemeService:
                 surface="review", bold=True,
             ),
             "review_ipa": style(
-                "ReviewIPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 42,
+                "ReviewIPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 24, 46,
                 surface="review", role="secondary", italic=True,
             ),
             "review_word_type": style(
-                "ReviewWordType", "Montserrat", "Montserrat-Variable.ttf", 18, 34,
+                "ReviewWordType", "Montserrat", "Montserrat-Variable.ttf", 22, 38,
                 surface="review", role="accent", bold=True,
             ),
             "review_example": style(
-                "ReviewExample", "Montserrat", "Montserrat-Variable.ttf", 18, 38,
+                "ReviewExample", "Montserrat", "Montserrat-Variable.ttf", 24, 44,
                 surface="review", role="secondary",
+            ),
+            "review_example_vi": style(
+                "ReviewExampleVi", "Montserrat", "Montserrat-Italic-Variable.ttf", 22, 34,
+                surface="review", role="secondary", italic=True,
             ),
             "start": style(
                 "Start", "Bebas Neue", "BebasNeue-Regular.ttf", 52, 104,
                 bold=True, spacing=1, margin=90,
             ),
             "score": TextStyle(
-                "Score", "Montserrat", "Montserrat-Variable.ttf", 24, 44,
-                "#FFFFFF", "#173A70", "#173A70", 3, 1, bold=True,
+                "Score", "Montserrat", "Montserrat-Variable.ttf", 32, 54,
+                score_color, score_outline, score_outline, 2, 1, bold=True,
             ),
         }
 
@@ -180,17 +252,19 @@ class MinigameThemeService:
             "meaning_value": TextPlacement("hero", "meaning"),
             "reveal_label": TextPlacement("label", "word", 895),
             "countdown": TextPlacement("body", "word", 942, 2),
-            "english_label": TextPlacement("label", "word", 1045),
-            "english_word": TextPlacement("word", "word", 1170),
-            "ipa": TextPlacement("ipa", "ipa", 1305),
-            "voice_header": TextPlacement("header", "phase", 1605, 2),
-            "voice_helper": TextPlacement("body", "phase", 1655, 2),
-            "answer_word_type": TextPlacement("header", "phase", 1585, 2),
+            "english_label": TextPlacement("label", "english_label"),
+            "english_word": TextPlacement("word", "english_word"),
+            "ipa": TextPlacement("ipa", "ipa"),
+            "voice_header": TextPlacement("header", "voice_header", layer=2),
+            "voice_helper": TextPlacement("body", "voice_helper", layer=2),
+            "answer_word_type": TextPlacement("header", "answer_word_type", layer=2),
             "review_meaning": TextPlacement("review_meaning", "review_meaning"),
             "review_word": TextPlacement("review_word", "review_word"),
             "review_ipa": TextPlacement("review_ipa", "review_ipa"),
             "review_word_type": TextPlacement("review_word_type", "review_word_type"),
             "review_example": TextPlacement("review_example", "review_example"),
+            "review_example_en": TextPlacement("review_example", "review_example_en"),
+            "review_example_vi": TextPlacement("review_example_vi", "review_example_vi"),
             "score_beginner": TextPlacement("score", "score_beginner"),
             "score_good": TextPlacement("score", "score_good"),
             "score_perfect": TextPlacement("score", "score_perfect"),
@@ -203,7 +277,7 @@ class MinigameThemeService:
         if theme_id not in self._PROFILES:
             raise PipelineError("theme_unknown", "Theme minigame không được hỗ trợ.")
         root = self.assets_root / theme_id
-        start = root / "start-screen.png"
+        start = root / "start.png"
         background = root / "background-video.png"
         # One release migration alias: old projects/assets can still be opened once.
         if not background.is_file():
@@ -239,10 +313,10 @@ class MinigameThemeService:
             review_start,
             review,
             self._PROFILES[theme_id],
-            self._slots(),
+            self._slots(theme_id),
             styles,
             self._placements(),
-            6,
+            8,
             checksum,
         )
 

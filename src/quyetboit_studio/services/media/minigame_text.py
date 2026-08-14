@@ -10,14 +10,13 @@ from ...core.models import PipelineError, sha256_file, stable_hash
 
 
 class MinigameTextLayerService:
-    """Renders hook typography with Pillow so its layout does not depend on libass fonts."""
+    """Renders the centered topic layer for the start frame and exported cover."""
 
     def __init__(self) -> None:
         self.font_dir = Path(__file__).resolve().parents[2] / "assets" / "fonts"
 
     def build_hook(self, project: MinigameProject, manifest: MinigameThemeManifest, cache_dir: Path) -> Path:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        total = len(project.vocabulary)
         key = stable_hash(
             {
                 "theme": manifest.checksum,
@@ -28,7 +27,6 @@ class MinigameTextLayerService:
                     "placements": manifest.placements,
                 },
                 "fonts": self.font_fingerprint(),
-                "title": total,
                 "topic": project.topic,
             }
         )[:20]
@@ -36,21 +34,6 @@ class MinigameTextLayerService:
         if output.is_file():
             return output
         image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
-        title = self.hook_title(total)
-        title_slot = manifest.slots["start_title"]
-        title_style = manifest.styles["title"]
-        self._draw_gradient_centered(
-            image,
-            title,
-            title_slot.bounds,
-            self.font_dir / title_style.font_file,
-            title_style.max_size,
-            title_style.min_size,
-            self._rgba(manifest.colors.hook_primary),
-            self._rgba(manifest.colors.hook_secondary),
-            self._rgba(manifest.colors.hook_outline),
-            title_style.outline_width,
-        )
         topic_slot = manifest.slots["start_topic"]
         topic_style = manifest.styles["topic"]
         self._draw_centered(
@@ -65,6 +48,7 @@ class MinigameTextLayerService:
             stroke_width=topic_style.outline_width,
             bold=topic_style.bold,
             max_lines=topic_slot.max_lines,
+            line_spacing=topic_style.line_spacing,
         )
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         try:
@@ -213,28 +197,35 @@ class MinigameTextLayerService:
         self, image: Image.Image, text: str, bounds: tuple[int, int, int, int], font_path: Path,
         maximum: int, minimum: int, *, fill: tuple[int, int, int, int],
         stroke_fill: tuple[int, int, int, int], stroke_width: int, bold: bool,
-        max_lines: int,
+        max_lines: int, line_spacing: int = 4,
     ) -> None:
         draw = ImageDraw.Draw(image)
-        words = text.split()
         for size in range(maximum, minimum - 1, -1):
             font = self._font(font_path, size)
             if bold and hasattr(font, "set_variation_by_name"):
                 font.set_variation_by_name("SemiBold")
-            lines: list[str] = [""]
-            for word in words:
-                proposal = f"{lines[-1]} {word}".strip()
-                if draw.textbbox((0, 0), proposal, font=font)[2] <= bounds[2] - bounds[0]:
-                    lines[-1] = proposal
-                else:
-                    lines.append(word)
+            lines = self._wrap_lines(draw, text, font, bounds[2] - bounds[0])
             value = "\n".join(lines)
-            box = draw.multiline_textbbox((0, 0), value, font=font, align="center", spacing=4)
-            if len(lines) <= max_lines and box[3] - box[1] <= bounds[3] - bounds[1]:
-                x = (bounds[0] + bounds[2] - (box[2] - box[0])) // 2
-                y = (bounds[1] + bounds[3] - (box[3] - box[1])) // 2 - box[1]
+            box = draw.multiline_textbbox(
+                (0, 0), value, font=font, align="center", spacing=line_spacing,
+                stroke_width=stroke_width,
+            )
+            widest = max(draw.textbbox((0, 0), line, font=font)[2] for line in lines)
+            if (
+                len(lines) <= max_lines
+                and widest + stroke_width * 2 <= bounds[2] - bounds[0]
+                and box[3] - box[1] <= bounds[3] - bounds[1]
+            ):
+                center_x = (bounds[0] + bounds[2]) / 2
+                center_y = (bounds[1] + bounds[3]) / 2
+                x = round(center_x - (box[0] + box[2]) / 2)
+                y = round(center_y - (box[1] + box[3]) / 2)
                 draw.multiline_text(
-                    (x, y), value, font=font, fill=fill, align="center", spacing=4,
+                    (x, y), value, font=font, fill=fill, align="center", spacing=line_spacing,
                     stroke_fill=stroke_fill, stroke_width=stroke_width,
                 )
                 return
+        raise PipelineError(
+            "theme_topic_overflow",
+            "Tên Topic quá dài để hiển thị rõ trên ảnh bìa. Hãy rút ngắn Topic.",
+        )

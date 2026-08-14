@@ -60,8 +60,10 @@ tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
 Mini game theme hiện xuất 9:16 và dùng asset đóng gói trong ứng dụng. Montserrat và Bebas Neue cùng
 license OFL được kèm trong `assets/fonts/`; renderer theme truyền thư mục này cho FFmpeg/libass nên không
 phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
-Title hook dùng định dạng một dòng `CAN YOU GET {N}/{N}?`; hỗ trợ 16:9/Both sẽ được bổ sung sau khi có
-asset và layout ngang riêng.
+Hook dùng `start.png` của theme. Tên Topic được tự co chữ, xuống tối đa ba dòng và căn giữa theo cả hai
+chiều trong panel Topic riêng của từng theme. Khi render xong, ứng dụng xuất thêm ảnh bìa 1080×1920
+`<tên-video>_cover.png` cạnh video; ảnh này chính là frame mở đầu đã điền Topic. Hỗ trợ 16:9/Both sẽ
+được bổ sung sau khi có asset và layout ngang riêng.
 
 JSON nội dung dùng `schemaVersion: 1`, chứa `topic` và từ 1–50 phần tử trong `words`:
 
@@ -91,7 +93,8 @@ tại `minigame-content.schema.json`.
 
 Sau vòng đoán từ, video hiển thị màn score theo theme, tiếp theo là màn mở đầu review rồi dùng nền
 review riêng cho từng từ. Review hiển thị Vietnamese, English Word, IPA, Word Type, Example Sentence và bản dịch ví dụ
-nếu được cung cấp. Registry tương thích cả tên `review-start-screen.png`, alias
+nếu được cung cấp; câu English và bản dịch dùng hai vùng riêng để giữ cỡ chữ dễ đọc. Tọa độ score được đo
+riêng theo từng theme, còn Word Type/voice ở answer dùng các hàng độc lập để không chồng chữ. Registry tương thích cả tên `review-start-screen.png`, alias
 `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
 
 Màu chữ được định nghĩa riêng cho từng theme và từng surface. Theme 1/4 dùng foreground sáng trên nền

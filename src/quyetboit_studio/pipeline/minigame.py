@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 from ..core.minigame import (
     MinigameFormat,
     MinigameProject,
@@ -40,6 +42,7 @@ from ..services.minigame_tts import (
 @dataclass(slots=True)
 class MinigameResult:
     outputs: list[Path]
+    covers: list[Path]
     duration_ms: int
     word_count: int
 
@@ -183,6 +186,7 @@ class MinigamePipeline:
             if formats != ("9:16",):
                 raise ValueError("Theme hiện chỉ hỗ trợ xuất video dọc 9:16.")
             outputs: list[Path] = []
+            covers: list[Path] = []
             for format_index, aspect in enumerate(formats):
                 self.cancel.raise_if_cancelled()
                 ass = self.subtitles.build(
@@ -232,8 +236,11 @@ class MinigamePipeline:
                     ),
                 )
                 outputs.append(rendered.path)
+                covers.append(self._write_cover(hook_frame, rendered.path))
             self._emit(progress, 1.0, "Đã hoàn thành video minigame")
-            return MinigameResult(outputs, timeline.duration_ms, len(self.project.vocabulary))
+            return MinigameResult(
+                outputs, covers, timeline.duration_ms, len(self.project.vocabulary)
+            )
         except (PipelineError, ValueError):
             raise
         except Exception as exc:
@@ -321,10 +328,32 @@ class MinigamePipeline:
         suffix = f"_{aspect.replace(':', 'x')}" if include_suffix else ""
         candidate = folder / f"{safe}{suffix}.mp4"
         index = 2
-        while candidate.exists():
+        while candidate.exists() or candidate.with_name(f"{candidate.stem}_cover.png").exists():
             candidate = folder / f"{safe}{suffix}_{index}.mp4"
             index += 1
         return candidate
+
+    @staticmethod
+    def _write_cover(source: Path, video_output: Path) -> Path:
+        """Atomically export the exact rendered start frame next to its video."""
+        cover = video_output.with_name(f"{video_output.stem}_cover.png")
+        if cover.exists():
+            raise PipelineError(
+                "minigame_cover_exists", "Ảnh bìa đã tồn tại; không ghi đè output cũ."
+            )
+        partial = cover.with_name(f".{cover.stem}.partial{cover.suffix}")
+        try:
+            data = source.read_bytes()
+            partial.write_bytes(data)
+            with Image.open(partial) as image:
+                if image.size != (1080, 1920) or image.mode not in {"RGB", "RGBA"}:
+                    raise PipelineError(
+                        "minigame_cover_invalid", "Ảnh bìa minigame không hợp lệ."
+                    )
+            os.replace(partial, cover)
+            return cover
+        finally:
+            partial.unlink(missing_ok=True)
 
     @staticmethod
     def _emit(progress: ProgressCallback | None, fraction: float, message: str) -> None:

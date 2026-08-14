@@ -527,10 +527,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "review_ipa", item.ipa)
                 if item.word_type:
                     add(scene, "review_word_type", item.word_type.upper())
-                example = item.example
                 if item.example_vietnamese:
-                    example += f"\n{item.example_vietnamese}"
-                add(scene, "review_example", example)
+                    add(scene, "review_example_en", item.example)
+                    add(scene, "review_example_vi", item.example_vietnamese)
+                else:
+                    add(scene, "review_example", item.example)
             elif scene.kind == "score":
                 beginner, good, perfect = score_ranges(project.vocabulary)
                 add(scene, "score_beginner", format_score_range(beginner, total))

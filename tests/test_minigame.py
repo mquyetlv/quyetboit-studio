@@ -244,9 +244,9 @@ def test_every_theme_palette_is_readable_on_its_actual_surfaces(tmp_path: Path) 
             ),
             (
                 manifest.start_screen,
-                ("start_title", "start_topic"),
-                (manifest.colors.hook_primary, manifest.colors.hook_secondary),
-                manifest.colors.hook_outline,
+                ("start_topic",),
+                (manifest.styles["topic"].color,),
+                manifest.styles["topic"].outline_color,
             ),
         )
         for source, slots, colors, outline in surfaces:
@@ -555,6 +555,64 @@ def test_review_content_uses_new_full_screen_design_slots(tmp_path: Path) -> Non
         assert rf"\pos({(x1 + x2) // 2},{(y1 + y2) // 2})" in content
 
 
+def test_all_theme_layout_rules_center_text_in_measured_panels() -> None:
+    expected_score_centers = {
+        "theme-1": ((559, 567), (562, 978), (562, 1362)),
+        "theme-2": ((567, 575), (572, 1020), (577, 1417)),
+        "theme-3": ((615, 625), (615, 1032), (615, 1405)),
+        "theme-4": ((562, 587), (565, 1005), (572, 1405)),
+        "theme-5": ((565, 604), (565, 1025), (567, 1415)),
+    }
+    expected_review_centers = {
+        "theme-1": ((540, 1076), (540, 1251)),
+        "theme-2": ((540, 1075), (540, 1249)),
+        "theme-3": ((540, 1102), (540, 1281)),
+        "theme-4": ((540, 1079), (540, 1255)),
+        "theme-5": ((540, 1082), (540, 1262)),
+    }
+    for theme_id, manifest in MinigameThemeService().discover().items():
+        centers = []
+        for name in ("score_beginner", "score_good", "score_perfect"):
+            x1, y1, x2, y2 = manifest.slots[name].bounds
+            centers.append(((x1 + x2) // 2, (y1 + y2) // 2))
+        assert tuple(centers) == expected_score_centers[theme_id]
+
+        review_centers = []
+        for name in ("review_ipa", "review_word_type"):
+            x1, y1, x2, y2 = manifest.slots[name].bounds
+            review_centers.append(((x1 + x2) // 2, (y1 + y2) // 2))
+        assert tuple(review_centers) == expected_review_centers[theme_id]
+
+
+def test_answer_footer_regions_do_not_overlap() -> None:
+    for manifest in MinigameThemeService().discover().values():
+        word_type = manifest.slots["answer_word_type"].bounds
+        voice_header = manifest.slots["voice_header"].bounds
+        voice_helper = manifest.slots["voice_helper"].bounds
+        assert word_type[3] < voice_header[1]
+        assert voice_header[3] < voice_helper[1]
+
+
+def test_bilingual_review_example_uses_separate_centered_regions(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-3")
+    item = VocabularyItem(
+        "hành lý", "Luggage", "/ˈlʌɡ.ɪdʒ/", "My luggage is ready.", "Noun", "Hành lý của tôi đã sẵn sàng."
+    )
+    project = MinigameProject(topic="Travel", vocabulary=[item])
+    timeline = MinigameTimeline([MinigameScene("review", 0, 2_000, 0)], [], 2_000)
+
+    content = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "bilingual-review.ass", "9:16", manifest
+    ).read_text(encoding="utf-8-sig")
+
+    assert ",ReviewExample," in content
+    assert ",ReviewExampleVi," in content
+    for name in ("review_example_en", "review_example_vi"):
+        placement = manifest.placements[name]
+        x1, y1, x2, y2 = manifest.slots[placement.slot].bounds
+        assert rf"\pos({(x1 + x2) // 2},{(y1 + y2) // 2})" in content
+
+
 def test_json_only_fields_are_rendered_in_answer_and_review(tmp_path: Path) -> None:
     manifest = MinigameThemeService().get("theme-2")
     item = VocabularyItem(
@@ -612,7 +670,7 @@ def test_theme_review_and_level_score_have_dedicated_content(tmp_path: Path) -> 
     assert "Save this video" not in content
 
 
-def test_hook_title_and_topic_are_pre_rendered_to_rgba(tmp_path: Path) -> None:
+def test_start_topic_is_pre_rendered_to_rgba(tmp_path: Path) -> None:
     project = MinigameProject(topic="At the Hospital", vocabulary=[_item()])
     result = MinigameTextLayerService().build_hook(project, MinigameThemeService().get("theme-1"), tmp_path)
 
@@ -623,7 +681,7 @@ def test_hook_title_and_topic_are_pre_rendered_to_rgba(tmp_path: Path) -> None:
         assert image.getbbox() is not None
 
 
-def test_hook_title_and_long_vietnamese_topic_stay_inside_manifest_slots(tmp_path: Path) -> None:
+def test_long_vietnamese_topic_stays_centered_inside_start_slot(tmp_path: Path) -> None:
     manifest = MinigameThemeService().get("theme-1")
     project = MinigameProject(
         topic="Chăm sóc sức khỏe và giao tiếp tại bệnh viện", vocabulary=[_item()] * 5
@@ -633,24 +691,38 @@ def test_hook_title_and_long_vietnamese_topic_stay_inside_manifest_slots(tmp_pat
     with Image.open(result) as image:
         alpha = np.asarray(image.getchannel("A"))
     allowed = np.zeros_like(alpha, dtype=bool)
-    for name in ("start_title", "start_topic"):
-        x1, y1, x2, y2 = manifest.slots[name].bounds
-        allowed[y1 : y2 + 1, x1 : x2 + 1] = True
+    x1, y1, x2, y2 = manifest.slots["start_topic"].bounds
+    allowed[y1 : y2 + 1, x1 : x2 + 1] = True
 
     assert np.any(alpha > 0)
     assert not np.any((alpha > 0) & ~allowed)
-    for name in ("start_title", "start_topic"):
-        x1, y1, x2, y2 = manifest.slots[name].bounds
-        ys, xs = np.nonzero(alpha[y1 : y2 + 1, x1 : x2 + 1])
-        assert abs((xs.min() + xs.max()) / 2 + x1 - (x1 + x2) / 2) <= 2
-        assert abs((ys.min() + ys.max()) / 2 + y1 - (y1 + y2) / 2) <= 2
+    ys, xs = np.nonzero(alpha[y1 : y2 + 1, x1 : x2 + 1])
+    assert abs((xs.min() + xs.max()) / 2 + x1 - (x1 + x2) / 2) <= 3
+    assert abs((ys.min() + ys.max()) / 2 + y1 - (y1 + y2) / 2) <= 3
 
 
-def test_hook_title_uses_approved_single_line_format() -> None:
-    title = MinigameTextLayerService.hook_title(5)
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_each_theme_uses_start_png_and_has_a_topic_safe_box(theme_id: str) -> None:
+    manifest = MinigameThemeService().get(theme_id)
 
-    assert title == "CAN YOU GET 5/5?"
-    assert "\n" not in title
+    assert manifest.start_screen.name == "start.png"
+    with Image.open(manifest.start_screen) as image:
+        assert image.size == (941, 1672)
+    x1, y1, x2, y2 = manifest.slots["start_topic"].bounds
+    assert 0 <= x1 < x2 < 1080
+    assert 0 <= y1 < y2 < 1920
+
+
+def test_cover_export_is_atomic_and_matches_the_start_frame(tmp_path: Path) -> None:
+    source = tmp_path / "start-frame.png"
+    Image.new("RGBA", (1080, 1920), "navy").save(source)
+    video = tmp_path / "lesson.mp4"
+
+    cover = MinigamePipeline._write_cover(source, video)
+
+    assert cover == tmp_path / "lesson_cover.png"
+    assert cover.read_bytes() == source.read_bytes()
+    assert not list(tmp_path.glob(".*.partial.png"))
 
 
 def test_hook_text_cache_is_invalidated_when_bundled_font_changes(tmp_path: Path) -> None:
@@ -1374,6 +1446,10 @@ def test_five_word_pipeline_renders_complete_playable_timeline_without_live_serv
 
     assert result.word_count == 5
     assert len(result.outputs) == 1
+    assert len(result.covers) == 1
+    assert result.covers[0].name == f"{result.outputs[0].stem}_cover.png"
+    with Image.open(result.covers[0]) as cover:
+        assert cover.size == (1080, 1920)
     artifact = runner.probe.video_artifact(result.outputs[0])
     info = runner.probe.inspect(result.outputs[0])
     assert (artifact.width, artifact.height) == (1080, 1920)

@@ -116,8 +116,8 @@ class MinigameTextLayerService:
         return self._build_dynamic_layer(
             "review-start", manifest, cache_dir, {"total": total},
             (
-                ("review_sentence", f"Let's review the {total} words you just learned", "review_dynamic"),
-                ("review_badge", f"{total}/{total} completed", "review_dynamic"),
+                ("review_sentence", f"LET'S REVISIT THE {total} WORDS\nYOU JUST LEARNED", "review_dynamic"),
+                ("review_badge", f"{total}/{total}", "review_dynamic"),
             ),
         )
 
@@ -162,6 +162,9 @@ class MinigameTextLayerService:
         for slot_name, value, style_name in lines:
             slot = manifest.slots[slot_name]
             style = manifest.styles[style_name]
+            if slot_name == "review_badge":
+                self._draw_review_badge(image, value, slot.bounds, manifest)
+                continue
             self._draw_centered(
                 image, value, slot.bounds, self.font_dir / style.font_file,
                 style.max_size, style.min_size,
@@ -170,6 +173,50 @@ class MinigameTextLayerService:
                 max_lines=slot.max_lines, line_spacing=style.line_spacing,
             )
         return self._save_atomic(image, output)
+
+    def _draw_review_badge(
+        self,
+        image: Image.Image,
+        value: str,
+        bounds: tuple[int, int, int, int],
+        manifest: MinigameThemeManifest,
+    ) -> None:
+        """Draw a compact score-and-status lockup inside the review pill.
+
+        The check mark is baked into the left side of every theme's pill.  A
+        single centred sentence competed with that icon, particularly at small
+        preview sizes.  This lockup intentionally uses the remaining visual
+        space: a condensed score as the focal point and a quiet status label.
+        """
+        draw = ImageDraw.Draw(image)
+        number_font = self._font(self.font_dir / "BebasNeue-Regular.ttf", 62)
+        label_font = self._font(self.font_dir / "Montserrat-Variable.ttf", 16)
+        try:
+            label_font.set_variation_by_name("SemiBold")
+        except OSError:
+            pass
+
+        number_box = draw.textbbox((0, 0), value, font=number_font, stroke_width=1)
+        label = "COMPLETE"
+        label_width = draw.textbbox((0, 0), label, font=label_font)[2]
+        number_width = number_box[2] - number_box[0]
+        gap = 12
+        lockup_width = number_width + gap + label_width
+        x = round((bounds[0] + bounds[2] - lockup_width) / 2)
+        center_y = (bounds[1] + bounds[3]) / 2
+        number_y = round(center_y - (number_box[1] + number_box[3]) / 2) - 1
+        label_box = draw.textbbox((0, 0), label, font=label_font)
+        label_y = round(center_y - (label_box[1] + label_box[3]) / 2) + 1
+        style = manifest.styles["review_dynamic"]
+
+        draw.text(
+            (x, number_y), value, font=number_font,
+            fill=self._rgba(style.color), stroke_fill=self._rgba(style.outline_color), stroke_width=1,
+        )
+        draw.text(
+            (x + number_width + gap, label_y), label, font=label_font,
+            fill=self._rgba(manifest.colors.review_secondary),
+        )
 
     @staticmethod
     def _save_atomic(image: Image.Image, output: Path) -> Path:

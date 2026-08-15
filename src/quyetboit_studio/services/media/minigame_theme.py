@@ -60,8 +60,11 @@ class MinigameThemeService:
         theme_id: {
             "hook_first": (430, 470, 650, 690),
             "hook_second": (475, 685, 695, 905),
-            "review_sentence": (170, 690, 910, 780),
-            "review_badge": (425, 790, 805, 875),
+            # The headline is deliberately wider than the pill.  The badge text
+            # begins after the baked-in check mark, rather than being centred in
+            # the whole pill (which made it look visibly right-heavy).
+            "review_sentence": (145, 678, 935, 785),
+            "review_badge": (448, 798, 715, 870),
             "cta_eyebrow": (170, 350, 910, 440),
             "cta_headline": (130, 430, 950, 760),
         }
@@ -188,7 +191,7 @@ class MinigameThemeService:
             "review_example_vi": TextSlot("review_example_vi", (175, 1555, 905, 1670), 3),
         }
         slots.update(
-            {name: TextSlot(name, bounds, 2 if name == "cta_headline" else 1)
+            {name: TextSlot(name, bounds, 2 if name in {"cta_headline", "review_sentence"} else 1)
             for name, bounds in cls._DYNAMIC_BOUNDS[theme_id].items()}
         )
         slots.update(
@@ -302,8 +305,8 @@ class MinigameThemeService:
                 bold=True,
             ),
             "review_dynamic": style(
-                "ReviewDynamic", "Montserrat", "Montserrat-Variable.ttf", 24, 48,
-                surface="review", bold=True,
+                "ReviewDynamic", "Bebas Neue", "BebasNeue-Regular.ttf", 32, 54,
+                surface="review", bold=True, spacing=1,
             ),
             "cta_eyebrow": style(
                 "CtaEyebrow", "Montserrat", "Montserrat-Variable.ttf", 28, 48,
@@ -417,7 +420,7 @@ class MinigameThemeService:
             slots=self._slots(theme_id),
             styles=styles,
             placements=self._placements(),
-            layout_version=10,
+            layout_version=11,
             checksum=checksum,
         )
 

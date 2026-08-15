@@ -17,6 +17,7 @@ from ...core.minigame import (
     MinigameScene,
     MinigameThemeManifest,
     MinigameTimeline,
+    answer_placeholder,
     format_score_range,
     score_ranges,
 )
@@ -642,6 +643,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "meaning_label", "VIETNAMESE MEANING")
                 add(scene, "meaning_value", item.vietnamese)
                 if scene.phase == "question":
+                    add(scene, "question_english_label", "ENGLISH WORD")
+                    add(
+                        scene,
+                        "question_english_placeholder",
+                        answer_placeholder(item.english),
+                    )
                     add(scene, "reveal_label", "REVEALING ANSWER IN")
                     countdown_start = next(
                         (

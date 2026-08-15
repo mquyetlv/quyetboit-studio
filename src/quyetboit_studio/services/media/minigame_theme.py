@@ -9,6 +9,7 @@ from PIL import Image, ImageFont
 from ...core.minigame import (
     AlphaMaskProfile,
     CanvasSpec,
+    DigitAtlasSpec,
     MinigameThemeManifest,
     TextPlacement,
     TextSlot,
@@ -49,6 +50,44 @@ class MinigameThemeService:
         "theme-3": ("#263247", "#FFF7E2"),
         "theme-4": ("#F8F7FF", "#160F31"),
         "theme-5": ("#173E29", "#FFFFFF"),
+    }
+    # These were reviewed per theme on annotated 1080×1920 composites. The current
+    # artwork shares geometry, but keeping an explicit record per theme prevents a
+    # later asset refresh from silently moving every theme at once.
+    _DYNAMIC_BOUNDS: ClassVar[
+        dict[str, dict[str, tuple[int, int, int, int]]]
+    ] = {
+        theme_id: {
+            "hook_first": (430, 470, 650, 690),
+            "hook_second": (475, 685, 695, 905),
+            "review_sentence": (170, 690, 910, 780),
+            "review_badge": (425, 790, 805, 875),
+            "cta_eyebrow": (170, 350, 910, 440),
+            "cta_headline": (130, 430, 950, 760),
+        }
+        for theme_id in ("theme-1", "theme-2", "theme-3", "theme-4", "theme-5")
+    }
+    _CTA_BOUNDS: ClassVar[dict[str, dict[str, tuple[int, int, int, int]]]] = {
+        "theme-1": {
+            "cta_primary": (145, 1330, 935, 1470),
+            "cta_secondary": (145, 1510, 935, 1640),
+        },
+        "theme-2": {
+            "cta_primary": (180, 1060, 900, 1195),
+            "cta_secondary": (145, 1510, 935, 1650),
+        },
+        "theme-3": {
+            "cta_primary": (220, 1060, 860, 1285),
+            "cta_secondary": (165, 1435, 915, 1605),
+        },
+        "theme-4": {
+            "cta_primary": (230, 1240, 850, 1410),
+            "cta_secondary": (150, 1570, 930, 1745),
+        },
+        "theme-5": {
+            "cta_primary": (210, 1185, 870, 1310),
+            "cta_secondary": (160, 1440, 920, 1605),
+        },
     }
     # Score pills are drawn at different heights in every theme asset. These are
     # measured on the canonical 1080x1920 canvas and intentionally stay per-theme.
@@ -149,6 +188,14 @@ class MinigameThemeService:
             "review_example_vi": TextSlot("review_example_vi", (175, 1555, 905, 1670), 3),
         }
         slots.update(
+            {name: TextSlot(name, bounds, 2 if name == "cta_headline" else 1)
+            for name, bounds in cls._DYNAMIC_BOUNDS[theme_id].items()}
+        )
+        slots.update(
+            {name: TextSlot(name, bounds, 2 if name == "cta_primary" else 1)
+             for name, bounds in cls._CTA_BOUNDS[theme_id].items()}
+        )
+        slots.update(
             {name: TextSlot(name, bounds, 1) for name, bounds in cls._SCORE_BOUNDS[theme_id].items()}
         )
         slots.update(
@@ -198,6 +245,14 @@ class MinigameThemeService:
             "hero": style(
                 "Hero", "Montserrat", "Montserrat-Variable.ttf", 36, 88, bold=True,
             ),
+            "question_meaning": style(
+                "QuestionMeaning", "Montserrat", "Montserrat-Variable.ttf", 44, 104,
+                bold=True,
+            ),
+            "question_placeholder": style(
+                "QuestionPlaceholder", "Montserrat", "Montserrat-Variable.ttf", 40, 112,
+                bold=True, spacing=8,
+            ),
             "word": style(
                 "Word", "Montserrat", "Montserrat-Variable.ttf", 48, 144, bold=True,
             ),
@@ -241,6 +296,31 @@ class MinigameThemeService:
                 "Score", "Montserrat", "Montserrat-Variable.ttf", 32, 54,
                 score_color, score_outline, score_outline, 2, 1, bold=True,
             ),
+            "dynamic_title": TextStyle(
+                "DynamicTitle", "Bebas Neue", "BebasNeue-Regular.ttf", 48, 150,
+                colors.hook_primary, colors.hook_outline, colors.shadow, 4, 2,
+                bold=True,
+            ),
+            "review_dynamic": style(
+                "ReviewDynamic", "Montserrat", "Montserrat-Variable.ttf", 24, 48,
+                surface="review", bold=True,
+            ),
+            "cta_eyebrow": style(
+                "CtaEyebrow", "Montserrat", "Montserrat-Variable.ttf", 28, 48,
+                surface="review", role="accent", bold=True, spacing=4,
+            ),
+            "cta_headline": style(
+                "CtaHeadline", "Bebas Neue", "BebasNeue-Regular.ttf", 54, 112,
+                surface="review", bold=True, spacing=1,
+            ),
+            "cta_primary": style(
+                "CtaPrimary", "Montserrat", "Montserrat-Variable.ttf", 28, 52,
+                surface="review", bold=True,
+            ),
+            "cta_secondary": style(
+                "CtaSecondary", "Montserrat", "Montserrat-Variable.ttf", 24, 40,
+                surface="review", role="secondary", bold=True, spacing=2,
+            ),
         }
 
     @staticmethod
@@ -249,11 +329,15 @@ class MinigameThemeService:
             "word_header": TextPlacement("header", "header"),
             "ending_header": TextPlacement("header", "header_wide"),
             "meaning_label": TextPlacement("label", "meaning", 360),
-            "meaning_value": TextPlacement("hero", "meaning"),
+            "meaning_value": TextPlacement("question_meaning", "meaning"),
             "reveal_label": TextPlacement("label", "word", 895),
             "countdown": TextPlacement("body", "word", 942, 2),
             "english_label": TextPlacement("label", "english_label"),
             "english_word": TextPlacement("word", "english_word"),
+            "question_english_label": TextPlacement("label", "english_label"),
+            "question_english_placeholder": TextPlacement(
+                "question_placeholder", "english_word"
+            ),
             "ipa": TextPlacement("ipa", "ipa"),
             "voice_header": TextPlacement("header", "voice_header", layer=2),
             "voice_helper": TextPlacement("body", "voice_helper", layer=2),
@@ -278,6 +362,7 @@ class MinigameThemeService:
             raise PipelineError("theme_unknown", "Theme minigame không được hỗ trợ.")
         root = self.assets_root / theme_id
         start = root / "start.png"
+        start_base = root / "start-base.png"
         background = root / "background-video.png"
         # One release migration alias: old projects/assets can still be opened once.
         if not background.is_file():
@@ -287,37 +372,53 @@ class MinigameThemeService:
         review_start = root / "review-start-screen.png"
         if not review_start.is_file():
             review_start = root / "start-review-screen.png"
+        review_start_base = root / "review-start-base.png"
         review = root / "review.png"
         if not review.is_file():
             review = root / "rewview.png"
+        cta_base = root / "cta-base.png"
+        digit_atlas = root / "digit-atlas.png"
         self._validate_image(start, (941, 1672), "start screen")
+        self._validate_image(start_base, (941, 1672), "start clean base")
         self._validate_image(background, (941, 1672), "background video")
         self._validate_image(text, (971, 1619), "background text")
         self._validate_image(score, (941, 1672), "score screen")
         self._validate_image(review_start, (941, 1672), "review start screen")
+        self._validate_image(review_start_base, (941, 1672), "review start clean base")
         self._validate_image(review, (941, 1672), "review screen")
+        self._validate_image(cta_base, (941, 1672), "CTA base")
+        digit_atlas_spec = DigitAtlasSpec()
+        self._validate_digit_atlas(digit_atlas, digit_atlas_spec)
         styles = self._styles(theme_id)
         self._validate_fonts(styles)
-        checksum = self._checksum((start, background, text, score, review_start, review))
+        checksum = self._checksum(
+            (start, start_base, background, text, score, review_start, review_start_base, review,
+            cta_base, digit_atlas)
+        )
         return MinigameThemeManifest(
-            theme_id,
-            theme_id.replace("-", " ").title(),
-            self._PALETTES[theme_id],
-            self._COLORS[theme_id],
-            ("9:16",),
-            self.CANVAS,
-            start,
-            background,
-            text,
-            score,
-            review_start,
-            review,
-            self._PROFILES[theme_id],
-            self._slots(theme_id),
-            styles,
-            self._placements(),
-            8,
-            checksum,
+            theme_id=theme_id,
+            display_name=theme_id.replace("-", " ").title(),
+            palette=self._PALETTES[theme_id],
+            colors=self._COLORS[theme_id],
+            supported_formats=("9:16",),
+            canvas=self.CANVAS,
+            start_screen=start,
+            start_base=start_base,
+            background_video=background,
+            background_text=text,
+            score_screen=score,
+            review_start_screen=review_start,
+            review_start_base=review_start_base,
+            review_screen=review,
+            cta_base=cta_base,
+            digit_atlas=digit_atlas,
+            digit_atlas_spec=digit_atlas_spec,
+            mask_profile=self._PROFILES[theme_id],
+            slots=self._slots(theme_id),
+            styles=styles,
+            placements=self._placements(),
+            layout_version=10,
+            checksum=checksum,
         )
 
     @staticmethod
@@ -329,6 +430,36 @@ class MinigameThemeService:
                 raise PipelineError(
                     "theme_asset_invalid", f"Asset {label} có kích thước hoặc màu không hợp lệ."
                 )
+
+    @staticmethod
+    def _validate_digit_atlas(path: Path, spec: DigitAtlasSpec) -> None:
+        if not path.is_file():
+            raise PipelineError("theme_asset_missing", "Thiếu digit atlas của theme.")
+        with Image.open(path) as image:
+            if image.mode != "RGBA" or image.width < spec.columns or image.height < spec.rows:
+                raise PipelineError(
+                    "theme_asset_invalid", "Digit atlas phải là PNG RGBA 5×2 hợp lệ."
+                )
+            alpha = image.getchannel("A")
+            if alpha.getextrema()[0] != 0:
+                raise PipelineError(
+                    "theme_asset_invalid", "Digit atlas không có nền alpha trong suốt."
+                )
+            for digit in range(spec.glyph_count):
+                column, row = digit % spec.columns, digit // spec.columns
+                bounds = (
+                    round(column * image.width / spec.columns),
+                    round(row * image.height / spec.rows),
+                    round((column + 1) * image.width / spec.columns),
+                    round((row + 1) * image.height / spec.rows),
+                )
+                cell = alpha.crop(bounds).point(
+                    lambda value: 255 if value >= spec.alpha_threshold else 0
+                )
+                if cell.getbbox() is None:
+                    raise PipelineError(
+                        "theme_asset_invalid", f"Digit atlas thiếu glyph số {digit}."
+                    )
 
     def _validate_fonts(self, styles: dict[str, TextStyle]) -> None:
         expected = {style.font_file: style.font for style in styles.values()}

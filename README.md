@@ -10,7 +10,7 @@ và fallback encoder GPU sang `libx264`. Project dùng schema v2 và tự migrat
 Menu **Tiếng Anh → Mini game** tạo video đoán từ từ dữ liệu người dùng nhập. Tính năng hỗ trợ
 YouTube 16:9, TikTok/Shorts 9:16 hoặc xuất đồng thời cả hai; video nền được crop theo điểm focus và
 luôn tắt audio gốc. Mỗi từ bắt buộc có nghĩa tiếng Việt, từ tiếng Anh, IPA và câu ví dụ. Timeline
-gồm hook, countdown có sound cue, ba lượt phát âm được trim khoảng lặng và đồng bộ nhãn
+gồm Hook có tổng số câu động, countdown có sound cue và placeholder theo độ dài đáp án, ba lượt phát âm được trim khoảng lặng và đồng bộ nhãn
 `LISTEN → SLOW → YOUR TURN`, chấm điểm theo level rồi ôn tập có câu ví dụ. Màn score dùng
 `score.png` của theme và đã chứa lời kêu gọi comment. Layout dùng
 card tối, typography Unicode rõ ràng và tách riêng English, IPA, nghĩa tiếng Việt cùng example;
@@ -60,10 +60,12 @@ tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
 Mini game theme hiện xuất 9:16 và dùng asset đóng gói trong ứng dụng. Montserrat và Bebas Neue cùng
 license OFL được kèm trong `assets/fonts/`; renderer theme truyền thư mục này cho FFmpeg/libass nên không
 phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
-Hook dùng `start.png` của theme. Tên Topic được tự co chữ, xuống tối đa ba dòng và căn giữa theo cả hai
+Hook composite `start-base.png` với hai số `N = tổng số từ` và Topic động. Tên Topic được tự co chữ, xuống tối đa ba dòng và căn giữa theo cả hai
 chiều trong panel Topic riêng của từng theme. Khi render xong, ứng dụng xuất thêm ảnh bìa 1080×1920
-`<tên-video>_cover.png` cạnh video; ảnh này chính là frame mở đầu đã điền Topic. Hỗ trợ 16:9/Both sẽ
+`<tên-video>_cover.png` cạnh video; ảnh này byte-for-byte chính là frame mở đầu đã điền Topic và N. Hỗ trợ 16:9/Both sẽ
 được bổ sung sau khi có asset và layout ngang riêng.
+Hai số Hook được dựng từ `digit-atlas.png` 0–9 riêng của từng theme, crop theo alpha và scale đồng đều
+theo metric trong manifest; N=1–50 không dùng font hệ thống và thay atlas sẽ invalidate cache visual.
 
 JSON nội dung dùng `schemaVersion: 1`, chứa `topic` và từ 1–50 phần tử trong `words`:
 
@@ -91,11 +93,16 @@ dải điểm Beginner, Good và Perfect; dải chỉ có một mốc được g
 Không đặt credential, API key hoặc đường dẫn service-account trong JSON nội dung. Schema máy đọc nằm
 tại `minigame-content.schema.json`.
 
-Sau vòng đoán từ, video hiển thị màn score theo theme, tiếp theo là màn mở đầu review rồi dùng nền
+Sau vòng đoán từ, video hiển thị màn score theo theme, tiếp theo là màn mở đầu review có câu/badge
+động theo tổng số từ rồi dùng nền
 review riêng cho từng từ. Review hiển thị Vietnamese, English Word, IPA, Word Type, Example Sentence và bản dịch ví dụ
 nếu được cung cấp; câu English và bản dịch dùng hai vùng riêng để giữ cỡ chữ dễ đọc. Tọa độ score được đo
 riêng theo từng theme, còn Word Type/voice ở answer dùng các hàng độc lập để không chồng chữ. Registry tương thích cả tên `review-start-screen.png`, alias
 `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
+
+Sau Review cuối, video hiển thị CTA riêng theo từng theme trong 4,5 giây với headline
+`YOU LEARNED N NEW WORDS`, lời mời follow và `SAVE • REVIEW • SHARE`. CTA không gọi thêm TTS và
+không làm mất cache voice khi chỉ thay visual/theme.
 
 Màu chữ được định nghĩa riêng cho từng theme và từng surface. Theme 1/4 dùng foreground sáng trên nền
 tối; Theme 2/3/5 dùng foreground đậm trên nền sáng. Review có palette riêng vì Theme 4 là nền tối còn

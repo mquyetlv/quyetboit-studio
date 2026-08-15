@@ -52,7 +52,7 @@ class MinigameResult:
 
 
 class MinigamePipeline:
-    TIMELINE_CACHE_VERSION = 3
+    TIMELINE_CACHE_VERSION = 4
 
     def __init__(
         self,
@@ -105,6 +105,12 @@ class MinigamePipeline:
             hook_text = self.text_layers.build_hook(
                 self.project, manifest, self.workspace / "theme-text"
             )
+            review_start_text = self.text_layers.build_review_start(
+                self.project, manifest, self.workspace / "theme-text"
+            )
+            cta_text = self.text_layers.build_cta(
+                self.project, manifest, self.workspace / "theme-text"
+            )
             frame_layout_key = {
                 "version": manifest.layout_version,
                 "slots": manifest.slots,
@@ -112,7 +118,7 @@ class MinigamePipeline:
                 "placements": manifest.placements,
             }
             hook_frame = self.frames.build(
-                manifest.start_screen,
+                manifest.start_base,
                 (hook_text,),
                 self.workspace / "visual-frame",
                 layout_key=frame_layout_key,
@@ -124,14 +130,20 @@ class MinigamePipeline:
                 layout_key=frame_layout_key,
             )
             review_start_frame = self.frames.build(
-                manifest.review_start_screen,
-                (),
+                manifest.review_start_base,
+                (review_start_text,),
                 self.workspace / "visual-frame",
                 layout_key=frame_layout_key,
             )
             review_frame = self.frames.build(
                 manifest.review_screen,
                 (),
+                self.workspace / "visual-frame",
+                layout_key=frame_layout_key,
+            )
+            cta_frame = self.frames.build(
+                manifest.cta_base,
+                (cta_text,),
                 self.workspace / "visual-frame",
                 layout_key=frame_layout_key,
             )
@@ -237,7 +249,7 @@ class MinigamePipeline:
                     cancel=self.cancel,
                     theme_background=manifest.background_video,
                     theme_overlay=mask,
-                    start_background=manifest.start_screen,
+                    start_background=manifest.start_base,
                     hook_text_overlay=hook_text,
                     hook_duration_ms=self.timeline_builder.HOOK_MS,
                     visual_scenes=self._visual_scenes(
@@ -247,6 +259,7 @@ class MinigamePipeline:
                         manifest.score_screen,
                         review_start_frame,
                         review_frame,
+                        cta_frame,
                     ),
                 )
                 outputs.append(rendered.path)
@@ -272,11 +285,13 @@ class MinigamePipeline:
         score_frame: Path,
         review_start_frame: Path,
         review_frame: Path,
+        cta_frame: Path | None = None,
     ) -> list[MinigameVisualScene]:
         hook = next(scene for scene in timeline.scenes if scene.kind == "hook")
         review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
         score = next(scene for scene in timeline.scenes if scene.kind == "score")
         reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
+        cta = next((scene for scene in timeline.scenes if scene.kind == "cta"), None)
         scenes = [MinigameVisualScene(hook_frame, hook.end_ms - hook.start_ms)]
         before_score = score.start_ms - hook.end_ms
         if before_score > 0:
@@ -293,6 +308,12 @@ class MinigamePipeline:
             )
             for index, review in enumerate(reviews)
         )
+        if cta is not None:
+            if cta_frame is None:
+                raise PipelineError("theme_scene_invalid", "Thiếu frame CTA của minigame.")
+            scenes.append(
+                MinigameVisualScene(cta_frame, cta.end_ms - cta.start_ms, fade_in_ms=220)
+            )
         return scenes
 
     def _speech_clip(self, speech: MinigameSpeechService, text: str, item_id: str):

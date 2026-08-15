@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import shutil
 import threading
 import time
@@ -22,6 +24,7 @@ from quyetboit_studio.core.minigame import (
     MinigameTimingProfile,
     VocabularyItem,
     VocabularyLevel,
+    answer_placeholder,
     format_score_range,
     score_ranges,
 )
@@ -392,10 +395,15 @@ def test_theme_discovery_and_mask_are_complete_for_all_five_themes(tmp_path: Pat
     assert set(manifests) == {f"theme-{index}" for index in range(1, 6)}
     for manifest in manifests.values():
         assert manifest.start_screen.is_file()
+        assert manifest.start_base.is_file()
         assert manifest.background_video.is_file()
         assert manifest.score_screen.is_file()
         assert manifest.review_start_screen.is_file()
+        assert manifest.review_start_base.is_file()
         assert manifest.review_screen.is_file()
+        assert manifest.cta_base.is_file()
+        assert manifest.digit_atlas.is_file()
+        assert manifest.digit_atlas_spec.glyph_count == 10
         result = MinigameAlphaMaskService().build(manifest, tmp_path)
         from PIL import Image
 
@@ -714,6 +722,8 @@ def test_question_scene_never_contains_english_or_ipa_before_reveal(tmp_path: Pa
     assert "nghĩa 1" in content
     assert "word1" not in content
     assert "/wɜːd 1/" not in content
+    assert "ENGLISH WORD" in content
+    assert "_____" in content
     assert "REVEALING ANSWER IN" in content
 
 
@@ -939,6 +949,125 @@ def test_start_topic_is_pre_rendered_to_rgba(tmp_path: Path) -> None:
         assert image.getbbox() is not None
 
 
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_digit_atlas_has_ten_isolated_rgba_cells(theme_id: str) -> None:
+    manifest = MinigameThemeService().get(theme_id)
+    spec = manifest.digit_atlas_spec
+
+    with Image.open(manifest.digit_atlas) as atlas:
+        assert atlas.mode == "RGBA"
+        assert atlas.getchannel("A").getextrema()[0] == 0
+        hashes = []
+        for digit in range(10):
+            column, row = digit % spec.columns, digit // spec.columns
+            cell = atlas.crop((
+                round(column * atlas.width / spec.columns),
+                round(row * atlas.height / spec.rows),
+                round((column + 1) * atlas.width / spec.columns),
+                round((row + 1) * atlas.height / spec.rows),
+            ))
+            alpha = cell.getchannel("A").point(
+                lambda value: 255 if value >= spec.alpha_threshold else 0
+            )
+            assert alpha.getbbox() is not None, (theme_id, digit)
+            hashes.append(hashlib.sha256(alpha.tobytes()).hexdigest())
+    assert len(set(hashes)) == 10
+
+
+@pytest.mark.parametrize("count", [1, 5, 10, 50])
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_dynamic_hook_review_and_cta_layers_stay_inside_declared_slots(
+    tmp_path: Path, theme_id: str, count: int
+) -> None:
+    manifest = MinigameThemeService().get(theme_id)
+    project = MinigameProject(topic="Hospital", vocabulary=[_item()] * count)
+    service = MinigameTextLayerService()
+    outputs = (
+        (service.build_hook(project, manifest, tmp_path / theme_id / "hook"),
+         ("start_topic", "hook_first", "hook_second")),
+        (service.build_review_start(project, manifest, tmp_path / theme_id / "review"),
+         ("review_sentence", "review_badge")),
+        (service.build_cta(project, manifest, tmp_path / theme_id / "cta"),
+         ("cta_eyebrow", "cta_headline", "cta_primary", "cta_secondary")),
+    )
+    for output, slot_names in outputs:
+        with Image.open(output) as image:
+            alpha = np.asarray(image.getchannel("A"))
+        allowed = np.zeros_like(alpha, dtype=bool)
+        for slot_name in slot_names:
+            x1, y1, x2, y2 = manifest.slots[slot_name].bounds
+            allowed[y1 : y2 + 1, x1 : x2 + 1] = True
+        assert np.any(alpha > 0)
+        assert not np.any((alpha > 0) & ~allowed)
+        for slot_name in slot_names:
+            x1, y1, x2, y2 = manifest.slots[slot_name].bounds
+            assert np.any(alpha[y1 : y2 + 1, x1 : x2 + 1] > 0), (theme_id, count, slot_name)
+
+
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_question_meaning_and_placeholder_short_long_matrix_fits(theme_id: str) -> None:
+    manifest = MinigameThemeService().get(theme_id)
+    service = MinigameTextLayerService()
+    meaning = manifest.slots["meaning"]
+    meaning_style = manifest.styles["question_meaning"]
+    placeholder = manifest.slots["english_word"]
+    placeholder_style = manifest.styles["question_placeholder"]
+
+    short_meaning = service.fit_size(
+        "Bác sĩ", meaning.bounds, meaning_style.max_size, meaning_style.min_size,
+        max_lines=meaning.max_lines, font_file=meaning_style.font_file,
+    )
+    long_meaning = service.fit_size(
+        "Chăm sóc sức khỏe và giao tiếp chuyên nghiệp tại bệnh viện",
+        meaning.bounds, meaning_style.max_size, meaning_style.min_size,
+        max_lines=meaning.max_lines, font_file=meaning_style.font_file,
+    )
+    short_placeholder = service.fit_size(
+        "___", placeholder.bounds, placeholder_style.max_size, placeholder_style.min_size,
+        max_lines=placeholder.max_lines, font_file=placeholder_style.font_file,
+        tracking=placeholder_style.spacing,
+    )
+    long_placeholder = service.fit_size(
+        "____________-__________-____________", placeholder.bounds,
+        placeholder_style.max_size, placeholder_style.min_size,
+        max_lines=placeholder.max_lines, font_file=placeholder_style.font_file,
+        tracking=placeholder_style.spacing,
+    )
+
+    assert short_meaning == 104
+    assert 44 <= long_meaning <= short_meaning
+    assert short_placeholder == 112
+    assert 40 <= long_placeholder <= short_placeholder
+
+
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_clean_hook_base_replaces_both_baked_number_regions(theme_id: str) -> None:
+    manifest = MinigameThemeService().get(theme_id)
+    with Image.open(manifest.start_screen) as original_image:
+        original = np.asarray(original_image.convert("RGB").resize((1080, 1920)))
+    with Image.open(manifest.start_base) as clean_image:
+        clean = np.asarray(clean_image.convert("RGB").resize((1080, 1920)))
+
+    for slot_name in ("hook_first", "hook_second"):
+        x1, y1, x2, y2 = manifest.slots[slot_name].bounds
+        changed = np.any(original[y1 : y2 + 1, x1 : x2 + 1] != clean[y1 : y2 + 1, x1 : x2 + 1], axis=2)
+        assert changed.mean() >= 0.20, (theme_id, slot_name, changed.mean())
+
+
+def test_hook_and_review_cache_change_with_vocabulary_count(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-1")
+    service = MinigameTextLayerService()
+    five = MinigameProject(topic="Hospital", vocabulary=[_item()] * 5)
+    ten = MinigameProject(topic="Hospital", vocabulary=[_item()] * 10)
+
+    assert service.build_hook(five, manifest, tmp_path) != service.build_hook(
+        ten, manifest, tmp_path
+    )
+    assert service.build_review_start(five, manifest, tmp_path) != service.build_review_start(
+        ten, manifest, tmp_path
+    )
+
+
 def test_long_vietnamese_topic_stays_centered_inside_start_slot(tmp_path: Path) -> None:
     manifest = MinigameThemeService().get("theme-1")
     project = MinigameProject(
@@ -950,7 +1079,9 @@ def test_long_vietnamese_topic_stays_centered_inside_start_slot(tmp_path: Path) 
         alpha = np.asarray(image.getchannel("A"))
     allowed = np.zeros_like(alpha, dtype=bool)
     x1, y1, x2, y2 = manifest.slots["start_topic"].bounds
-    allowed[y1 : y2 + 1, x1 : x2 + 1] = True
+    for slot_name in ("start_topic", "hook_first", "hook_second"):
+        ax1, ay1, ax2, ay2 = manifest.slots[slot_name].bounds
+        allowed[ay1 : ay2 + 1, ax1 : ax2 + 1] = True
 
     assert np.any(alpha > 0)
     assert not np.any((alpha > 0) & ~allowed)
@@ -1160,6 +1291,7 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
     assert [scene.kind for scene in timeline.scenes].count("word") == 4
     assert [scene.kind for scene in timeline.scenes].count("review") == 2
     assert [scene.kind for scene in timeline.scenes].count("review_start") == 1
+    assert [scene.kind for scene in timeline.scenes].count("cta") == 1
     review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
     last_word = max(scene.end_ms for scene in timeline.scenes if scene.kind == "word")
     first_review = min(scene.start_ms for scene in timeline.scenes if scene.kind == "review")
@@ -1180,6 +1312,9 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
         "repeat",
     ]
     assert timeline.duration_ms > 0
+    cta = next(scene for scene in timeline.scenes if scene.kind == "cta")
+    assert cta.start_ms == max(scene.end_ms for scene in timeline.scenes if scene.kind == "review")
+    assert cta.end_ms - cta.start_ms == MinigameTimelineBuilder.CTA_MS
 
 
 def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path) -> None:
@@ -1190,7 +1325,9 @@ def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path
     timeline = MinigameTimelineBuilder().build([_item()], normal, slow, example, durations)
     paths = [
         tmp_path / name
-        for name in ("hook.png", "body.png", "score.png", "review-start.png", "review.png")
+        for name in (
+            "hook.png", "body.png", "score.png", "review-start.png", "review.png", "cta.png"
+        )
     ]
 
     scenes = MinigamePipeline._visual_scenes(timeline, *paths)
@@ -1201,10 +1338,30 @@ def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path
         paths[2],
         paths[3],
         paths[4],
+        paths[5],
     ]
     assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
     assert scenes[2].duration_ms == MinigameTimelineBuilder.SCORE_MS
     assert scenes[3].duration_ms == MinigameTimelineBuilder.REVIEW_START_MS
+    assert scenes[-1].duration_ms == MinigameTimelineBuilder.CTA_MS
+    assert scenes[-1].fade_in_ms == 220
+
+
+@pytest.mark.parametrize(
+    ("english", "expected"),
+    [
+        ("Doctor", "______"),
+        ("ice cream", "___ _____"),
+        ("mother-in-law", "______-__-___"),
+        ("teacher's", "_______'_"),
+        ("e\u0301lan", "____"),
+        ("👩‍⚕️", "_"),
+    ],
+)
+def test_answer_placeholder_preserves_separators_and_unicode_graphemes(
+    english: str, expected: str
+) -> None:
+    assert answer_placeholder(english) == expected
 
 
 def test_subtitles_keep_supplied_content_and_dynamic_score(tmp_path: Path) -> None:
@@ -1670,10 +1827,18 @@ def test_cancel_real_theme_render_preserves_output_and_cleans_process_files(tmp_
     not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
     reason="FFmpeg/ffprobe không có trong PATH",
 )
-@pytest.mark.parametrize("theme_id", ["theme-1", "theme-5"])
-def test_five_word_pipeline_renders_complete_playable_timeline_without_live_service(
+@pytest.mark.parametrize(
+    ("theme_id", "word_count"),
+    (
+        [(f"theme-{theme}", count) for theme in range(1, 6) for count in (5, 10)]
+        if os.environ.get("QB_MINIGAME_FULL_VISUAL") == "1"
+        else [("theme-1", 5), ("theme-5", 5)]
+    ),
+)
+def test_pipeline_renders_complete_playable_timeline_without_live_service(
     tmp_path: Path,
     theme_id: str,
+    word_count: int,
 ) -> None:
     runner = FFmpegRunner()
     fixture = tmp_path / "speech-fixture.wav"
@@ -1701,10 +1866,10 @@ def test_five_word_pipeline_renders_complete_playable_timeline_without_live_serv
         topic="Hospital",
         theme_id=theme_id,
         output_folder=str(output_dir),
-        output_name=f"five-word-{theme_id}",
+        output_name=f"{word_count}-word-{theme_id}",
         tts_provider="capcut",
         voice="fixture-voice",
-        vocabulary=[_item(index) for index in range(1, 6)],
+        vocabulary=[_item(index) for index in range(1, word_count + 1)],
     )
     progress = []
     result = MinigamePipeline(
@@ -1714,7 +1879,7 @@ def test_five_word_pipeline_renders_complete_playable_timeline_without_live_serv
         runner=runner,
     ).run(progress.append)
 
-    assert result.word_count == 5
+    assert result.word_count == word_count
     assert len(result.outputs) == 1
     assert len(result.covers) == 1
     assert result.covers[0].name == f"{result.outputs[0].stem}_cover.png"

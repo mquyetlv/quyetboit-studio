@@ -1,6 +1,7 @@
 # Đặc tả luồng video English Mini game
 
-> Trạng thái: **Baseline vNext đã triển khai, chưa khóa nghiệm thu** — cập nhật ngày 2026-08-14.
+> Trạng thái: **Baseline vNext + dynamic challenge/CTA đã triển khai và nghiệm thu visual**
+> — cập nhật ngày 2026-08-15.
 >
 > File này là nguồn tra cứu cho mọi thay đổi về flow, timing, visual scene và sound effect của
 > menu `Tiếng Anh → Mini game`. Khi code và tài liệu khác nhau, phải cập nhật file này cùng thay đổi
@@ -27,6 +28,7 @@ nguyên từ JSON; renderer không tự dịch hoặc sửa nội dung.
 | Tọa độ/style theme | `src/quyetboit_studio/services/media/minigame_theme.py` | Thêm track/fill slot cho progress bar trong safe box từng theme |
 | Ghép visual scene | `src/quyetboit_studio/pipeline/minigame.py` — `_visual_scenes()` và `services/media/minigame.py` — `_render_theme()` | Giữ tổng duration visual bằng audio; thêm transition/motion được cache |
 | Preview và thời lượng dự kiến | `src/quyetboit_studio/minigame.py` | Dùng cùng timing profile, không tự tính một bộ số khác |
+| Hook/Review Start/CTA động | `services/media/minigame_text.py`, `services/media/minigame_theme.py` | `N = len(vocabulary)`; Hook dùng digit atlas 0–9 riêng từng theme; RGBA layer cache theo asset/font/layout/N |
 | Regression/integration | `tests/test_minigame.py` | Kiểm tra timestamp, asset mapping, mix, frame animation và render thật |
 | Đóng gói asset | `pyproject.toml` — `[tool.setuptools.package-data]` | Bổ sung `assets/audio/**/*`; hiện mới đóng gói theme và font |
 
@@ -64,6 +66,7 @@ Các mốc dưới đây là baseline để tạo bản render A/B đầu tiên,
 | `REVIEW_WORD_TO_EXAMPLE_MS` | 900 ms | Tách voice từ khỏi voice câu ví dụ |
 | `REVIEW_AFTER_EXAMPLE_MIN_MS` | 1.600 ms | Giữ chữ sau khi voice example kết thúc |
 | `REVIEW_AFTER_EXAMPLE_MAX_MS` | 3.500 ms | Tránh review quá dài với câu rất dài |
+| `CTA_MS` | 4.500 ms | Kết video bằng CTA rõ ràng sau Review cuối |
 
 `REVIEW_AFTER_EXAMPLE_MS` nên tính động theo độ dài phần chữ còn cần đọc, clamp trong khoảng
 1.600–3.500 ms. Công thức phải deterministic và có unit test; baseline: `max(1.600 ms,
@@ -73,14 +76,22 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 ### 4.1. Hook
 
-1. Hiện `start.png` và Topic trong 3,2 giây.
+1. Composite `start-base.png` với hai số động `N`, Topic và artwork tĩnh trong 3,2 giây. Nội dung
+   tương đương `CAN YOU GET N OUT OF N?`, với `N = len(project.vocabulary)` trong miền 1–50.
 2. Giữ cue mở đầu hiện có nếu không xung đột; không dùng một trong bốn asset semantic phía trên sai
    vai trò.
-3. Topic dài vẫn auto-fit theo manifest; cover tiếp tục là đúng frame hook.
+3. Topic dài và số hai chữ số vẫn auto-fit theo manifest; cover là byte-for-byte cùng frame Hook,
+   không có nhánh render riêng. Đổi N, asset, font hoặc layout phải invalid cache frame.
+4. Mỗi theme có `digit-atlas.png` RGBA gồm lưới 5×2 cho số 0–9. Manifest lưu typed grid metrics,
+   alpha threshold, tracking, padding và algorithm version. Renderer crop theo alpha bbox, ghép glyph
+   trên baseline chung rồi scale đồng đều cả hai chiều; không dùng font phẳng hoặc kéo méo chữ số.
+5. Preflight từ chối atlas thiếu alpha hoặc thiếu bất kỳ cell nào. Checksum atlas tham gia checksum
+   theme; thay atlas phải tạo lại Hook/cover nhưng không làm mất cache TTS.
 
 ### 4.2. Mỗi từ — Question và countdown
 
-1. Bắt đầu `question_start`; header đổi sang `QUESTION i/N`, nghĩa Việt transition/fade vào.
+1. Bắt đầu `question_start`; header đổi sang `QUESTION i/N`, nghĩa Việt dùng style semantic
+   `question_meaning` (baseline 44–104 px) rồi transition/fade vào.
 2. Phát `check-mark.mp3` với gain đã chuẩn hóa. Đây là cue chuyển câu, không phải nhạc nền.
 3. Sau 700 ms, bắt đầu `countdown_bed` và countdown 3,75 giây.
 4. Countdown là **remaining-time progress bar**, không phải ba slide số. Tại `t=0`, fill đầy 100% từ
@@ -92,6 +103,9 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 6. `clock-tick.mp3` phát một lần liên tục, không lặp ba bản và không dùng tone tick tổng hợp khi asset
    hợp lệ.
 7. Khi fill chạm 0%, chuyển thẳng sang Answer; không có dead frame và không để bar âm/nhảy ngược.
+8. Trong toàn phase Question, slot English hiển thị label `ENGLISH WORD` và placeholder. Mỗi Unicode
+   grapheme cần đoán thành `_`; khoảng trắng, hyphen và apostrophe được giữ. English/IPA thật chỉ
+   xuất hiện tại boundary `answer_reveal`.
 
 ### 4.3. Answer và ba phase voice
 
@@ -114,11 +128,23 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 ### 4.5. Review
 
-1. Hiện `review-start-screen` trong 3,2 giây.
+1. Composite `review-start-base.png` với hai chuỗi động trong 3,2 giây:
+   `Let's review the N words you just learned` và `N/N completed`. Cả hai cùng lấy N từ project;
+   badge auto-fit cả cụm, chừa vùng icon check.
 2. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
 3. Phát voice của từ, chờ 900 ms, rồi phát voice example.
 4. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
 5. Chuyển card bằng fade/slide nhẹ 180–240 ms; không thêm sound effect ở mọi card để tránh mệt tai.
+
+### 4.6. CTA kết thúc
+
+1. Sau Review cuối, thêm scene `cta` đúng 4,5 giây; visual/audio timeline cùng kết thúc tại cuối CTA.
+2. Composite `cta-base.png` riêng từng theme với bốn vùng động: `GREAT WORK!`,
+   `YOU LEARNED N NEW WORDS`, `FOLLOW FOR MORE ENGLISH MINI GAMES` và
+   `SAVE • REVIEW • SHARE`.
+3. Scene fade-in 220 ms, không tạo FFmpeg process hoặc audio cue riêng; CTA giữ im lặng nếu audio
+   trước đó đã kết thúc.
+4. Nội dung nằm trong safe margin của canvas dọc và không phụ thuộc tên tài khoản.
 
 ## 5. Quy tắc mix audio
 
@@ -181,6 +207,10 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 - Không sound effect nào bị cắt đuôi hoặc che voice; không clipping/click ở điểm nối.
 - Cache cũ bị invalidate khi timing/audio processing/asset checksum thay đổi, nhưng không synthesize
   lại TTS nếu text/provider/voice không đổi.
+- Hook, Review Start và CTA phải cùng dùng `len(project.vocabulary)`; production không chứa literal
+  `5` cho tổng số câu.
+- Atlas số của đúng theme phải có đủ 10 cell alpha, hai cụm số nằm trọn safe box với N=1/5/10/50;
+  clean base không còn giữ nguyên pixel của hai vùng số `5` nguồn.
 - Preview và output dùng cùng timing profile.
 - Output ghi `.partial`, ffprobe hợp lệ rồi rename atomically; cancel không để FFmpeg/file tạm mồ côi.
 - Test mặc định không gọi Google/CapCut thật. Integration FFmpeg phải xác nhận video/audio stream,

@@ -10,7 +10,7 @@ from ...core.models import PipelineError, sha256_file, stable_hash
 
 
 class MinigameTextLayerService:
-    """Renders the centered topic layer for the start frame and exported cover."""
+    """Renders cache-safe dynamic Hook, Review Start and CTA RGBA layers."""
 
     def __init__(self) -> None:
         self.font_dir = Path(__file__).resolve().parents[2] / "assets" / "fonts"
@@ -28,12 +28,16 @@ class MinigameTextLayerService:
                 },
                 "fonts": self.font_fingerprint(),
                 "topic": project.topic,
+                "total": len(project.vocabulary),
             }
         )[:20]
         output = cache_dir / f"hook-text-{key}.png"
         if output.is_file():
             return output
         image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        total = str(len(project.vocabulary))
+        for slot_name in ("hook_first", "hook_second"):
+            self._draw_atlas_number(image, total, manifest, manifest.slots[slot_name].bounds)
         topic_slot = manifest.slots["start_topic"]
         topic_style = manifest.styles["topic"]
         self._draw_centered(
@@ -50,6 +54,125 @@ class MinigameTextLayerService:
             max_lines=topic_slot.max_lines,
             line_spacing=topic_style.line_spacing,
         )
+        return self._save_atomic(image, output)
+
+    @staticmethod
+    def _draw_atlas_number(
+        image: Image.Image,
+        value: str,
+        manifest: MinigameThemeManifest,
+        bounds: tuple[int, int, int, int],
+    ) -> None:
+        if not value.isdecimal():
+            raise PipelineError("theme_digit_invalid", "Hook chỉ chấp nhận chữ số thập phân.")
+        spec = manifest.digit_atlas_spec
+        glyphs: list[Image.Image] = []
+        with Image.open(manifest.digit_atlas) as source:
+            atlas = source.convert("RGBA")
+            for character in value:
+                digit = int(character)
+                column, row = digit % spec.columns, digit // spec.columns
+                cell_bounds = (
+                    round(column * atlas.width / spec.columns),
+                    round(row * atlas.height / spec.rows),
+                    round((column + 1) * atlas.width / spec.columns),
+                    round((row + 1) * atlas.height / spec.rows),
+                )
+                cell = atlas.crop(cell_bounds)
+                alpha = cell.getchannel("A").point(
+                    lambda item: 255 if item >= spec.alpha_threshold else 0
+                )
+                optical_bounds = alpha.getbbox()
+                if optical_bounds is None:
+                    raise PipelineError(
+                        "theme_digit_invalid", f"Digit atlas thiếu glyph số {digit}."
+                    )
+                glyphs.append(cell.crop(optical_bounds))
+
+        source_height = max(glyph.height for glyph in glyphs)
+        gap = round(source_height * spec.spacing_ratio)
+        source_width = sum(glyph.width for glyph in glyphs) + gap * (len(glyphs) - 1)
+        strip = Image.new("RGBA", (source_width, source_height), (0, 0, 0, 0))
+        cursor = 0
+        for glyph in glyphs:
+            strip.alpha_composite(glyph, (cursor, source_height - glyph.height))
+            cursor += glyph.width + gap
+
+        target_width = bounds[2] - bounds[0] - spec.padding_px * 2
+        target_height = bounds[3] - bounds[1] - spec.padding_px * 2
+        scale = min(target_width / strip.width, target_height / strip.height)
+        if scale <= 0:
+            raise PipelineError("theme_digit_invalid", "Safe box của digit atlas không hợp lệ.")
+        size = (max(1, round(strip.width * scale)), max(1, round(strip.height * scale)))
+        rendered = strip.resize(size, Image.Resampling.LANCZOS)
+        x = round((bounds[0] + bounds[2] - rendered.width) / 2)
+        y = round((bounds[1] + bounds[3] - rendered.height) / 2)
+        image.alpha_composite(rendered, (x, y))
+
+    def build_review_start(
+        self, project: MinigameProject, manifest: MinigameThemeManifest, cache_dir: Path
+    ) -> Path:
+        total = len(project.vocabulary)
+        return self._build_dynamic_layer(
+            "review-start", manifest, cache_dir, {"total": total},
+            (
+                ("review_sentence", f"Let's review the {total} words you just learned", "review_dynamic"),
+                ("review_badge", f"{total}/{total} completed", "review_dynamic"),
+            ),
+        )
+
+    def build_cta(
+        self, project: MinigameProject, manifest: MinigameThemeManifest, cache_dir: Path
+    ) -> Path:
+        total = len(project.vocabulary)
+        return self._build_dynamic_layer(
+            "cta", manifest, cache_dir, {"total": total},
+            (
+                ("cta_eyebrow", "GREAT WORK!", "cta_eyebrow"),
+                ("cta_headline", f"YOU LEARNED {total} NEW WORDS", "cta_headline"),
+                ("cta_primary", "FOLLOW FOR MORE ENGLISH MINI GAMES", "cta_primary"),
+                ("cta_secondary", "SAVE • REVIEW • SHARE", "cta_secondary"),
+            ),
+        )
+
+    def _build_dynamic_layer(
+        self,
+        prefix: str,
+        manifest: MinigameThemeManifest,
+        cache_dir: Path,
+        content_key: dict[str, object],
+        lines: tuple[tuple[str, str, str], ...],
+    ) -> Path:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        key = stable_hash({
+            "theme": manifest.checksum,
+            "layout": {
+                "version": manifest.layout_version,
+                "slots": manifest.slots,
+                "styles": manifest.styles,
+            },
+            "fonts": self.font_fingerprint(),
+            "content": content_key,
+            "lines": lines,
+        })[:20]
+        output = cache_dir / f"{prefix}-text-{key}.png"
+        if output.is_file():
+            return output
+        image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        for slot_name, value, style_name in lines:
+            slot = manifest.slots[slot_name]
+            style = manifest.styles[style_name]
+            self._draw_centered(
+                image, value, slot.bounds, self.font_dir / style.font_file,
+                style.max_size, style.min_size,
+                fill=self._rgba(style.color), stroke_fill=self._rgba(style.outline_color),
+                stroke_width=style.outline_width, bold=style.bold,
+                max_lines=slot.max_lines, line_spacing=style.line_spacing,
+            )
+        return self._save_atomic(image, output)
+
+    @staticmethod
+    def _save_atomic(image: Image.Image, output: Path) -> Path:
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         try:
             image.save(partial, "PNG")
@@ -64,7 +187,7 @@ class MinigameTextLayerService:
     @staticmethod
     def hook_title(total: int) -> str:
         """Return the approved single-line challenge title."""
-        return f"CAN YOU GET {total}/{total}?"
+        return f"CAN YOU GET {total} OUT OF {total}?"
 
     @staticmethod
     def _rgba(color: str) -> tuple[int, int, int, int]:
@@ -203,7 +326,11 @@ class MinigameTextLayerService:
         for size in range(maximum, minimum - 1, -1):
             font = self._font(font_path, size)
             if bold and hasattr(font, "set_variation_by_name"):
-                font.set_variation_by_name("SemiBold")
+                try:
+                    font.set_variation_by_name("SemiBold")
+                except OSError:
+                    # Static fonts expose the Pillow method but have no variation axis.
+                    pass
             lines = self._wrap_lines(draw, text, font, bounds[2] - bounds[0])
             value = "\n".join(lines)
             box = draw.multiline_textbbox(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -124,6 +125,19 @@ class AlphaMaskProfile:
 
 
 @dataclass(slots=True, frozen=True)
+class DigitAtlasSpec:
+    """Grid and optical-layout contract for a theme's 0-9 sprite atlas."""
+
+    columns: int = 5
+    rows: int = 2
+    glyph_count: int = 10
+    alpha_threshold: int = 16
+    spacing_ratio: float = 0.06
+    padding_px: int = 4
+    algorithm_version: int = 1
+
+
+@dataclass(slots=True, frozen=True)
 class MinigameThemeManifest:
     theme_id: str
     display_name: str
@@ -132,11 +146,16 @@ class MinigameThemeManifest:
     supported_formats: tuple[str, ...]
     canvas: CanvasSpec
     start_screen: Path
+    start_base: Path
     background_video: Path
     background_text: Path
     score_screen: Path
     review_start_screen: Path
+    review_start_base: Path
     review_screen: Path
+    cta_base: Path
+    digit_atlas: Path
+    digit_atlas_spec: DigitAtlasSpec
     mask_profile: AlphaMaskProfile
     slots: dict[str, TextSlot]
     styles: dict[str, TextStyle]
@@ -461,8 +480,9 @@ class MinigameTimingProfile:
     review_word_to_example_ms: int = 900
     review_after_example_min_ms: int = 1_600
     review_after_example_max_ms: int = 3_500
+    cta_ms: int = 4_500
     reading_chars_per_second: float = 15.0
-    version: int = 3
+    version: int = 4
 
     def __post_init__(self) -> None:
         numeric = (
@@ -479,6 +499,7 @@ class MinigameTimingProfile:
             self.review_word_to_example_ms,
             self.review_after_example_min_ms,
             self.review_after_example_max_ms,
+            self.cta_ms,
         )
         if any(value <= 0 for value in numeric) or self.reading_chars_per_second <= 0:
             raise ValueError("Các giá trị timing minigame phải lớn hơn 0.")
@@ -509,6 +530,7 @@ class MinigameTimelineBuilder:
     QUESTION_MS = MinigameTimingProfile().question_intro_ms + MinigameTimingProfile().countdown_ms
     SCORE_MS = MinigameTimingProfile().score_ms
     REVIEW_START_MS = MinigameTimingProfile().review_start_ms
+    CTA_MS = MinigameTimingProfile().cta_ms
 
     def __init__(self, timing: MinigameTimingProfile | None = None) -> None:
         self.timing = timing or MinigameTimingProfile()
@@ -605,7 +627,39 @@ class MinigameTimelineBuilder:
                     MinigameAudioEvent(example_start, example, "review_example"),
                 ]
             )
+        scenes.append(MinigameScene("cta", cursor, cursor + timing.cta_ms))
+        cursor += timing.cta_ms
         return MinigameTimeline(scenes, audio_events, cursor)
+
+
+def answer_placeholder(english: str) -> str:
+    """Hide each Unicode grapheme while preserving word-boundary separators."""
+    clusters: list[str] = []
+    join_next = False
+    regional_count = 0
+    for char in unicodedata.normalize("NFC", english):
+        codepoint = ord(char)
+        is_modifier = (
+            unicodedata.combining(char) != 0
+            or 0xFE00 <= codepoint <= 0xFE0F
+            or 0x1F3FB <= codepoint <= 0x1F3FF
+        )
+        is_regional = 0x1F1E6 <= codepoint <= 0x1F1FF
+        if char == "\u200d":
+            if clusters:
+                clusters[-1] += char
+            join_next = True
+        elif clusters and (is_modifier or join_next):
+            clusters[-1] += char
+            join_next = False
+        elif is_regional and regional_count % 2 == 1 and clusters:
+            clusters[-1] += char
+            regional_count += 1
+        else:
+            clusters.append(char)
+            regional_count = regional_count + 1 if is_regional else 0
+    separators = {"-", "'", "’"}
+    return "".join(cluster if cluster.isspace() or cluster in separators else "_" for cluster in clusters)
 
 
 def score_ranges(

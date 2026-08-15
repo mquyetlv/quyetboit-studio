@@ -20,13 +20,13 @@ Douyin URL
 
 Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[!]` bị chặn.
 
-### Tiến độ cập nhật ngày 2026-08-10
+### Tiến độ cập nhật ngày 2026-08-15
 
-- Hoàn thành: **150/203 task (73,89%)**.
-- Đang làm/đã có một phần: **40 task (19,70%)**.
-- Chưa triển khai: **8 task (3,94%)**.
-- Chờ credential/live test hoặc nghiệm thu: **5 task (2,46%)**.
-- Unit/lint hiện tại: **85 test pass**, Ruff pass.
+- Hoàn thành: **151/204 task (74,02%)**.
+- Đang làm/đã có một phần: **40 task (19,61%)**.
+- Chưa triển khai: **8 task (3,92%)**.
+- Chờ credential/live test hoặc nghiệm thu: **5 task (2,45%)**.
+- Unit/lint hiện tại: **193 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -315,6 +315,10 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Nâng cấp layout bằng typography Unicode, phân cấp English/IPA/nghĩa Việt/example và nhãn voice
   đồng bộ `LISTEN → SLOW → YOUR TURN`; trim khoảng lặng TTS, thêm cue hook/countdown/reveal/end,
   chuẩn hóa loudness và render kiểm chứng video dọc thật 1080×1920 có đủ video/audio stream.
+- [x] Hook/cover, Review Start và CTA dùng tổng số từ động từ project; Question có nghĩa Việt lớn hơn
+  cùng placeholder grapheme-aware, CTA 4,5 giây nằm sau Review cuối. Asset gốc được giữ lại, clean
+  base/CTA base nằm riêng theo theme; Hook dùng atlas số RGBA 0–9 đúng từng theme với metric typed,
+  scale đồng đều và cache visual invalidate theo asset/font/layout/N.
 - [x] Thay field voice nhập tay bằng nút **Cấu hình Voice…** mở dialog tải catalog ngoài Qt main
   thread, hỗ trợ lọc ngôn ngữ, loại voice, danh mục, giới tính, tìm kiếm và nghe thử.
 - [x] Google TTS dùng API chính thức `list_voices()` và giữ voice ID, language codes, SSML gender,

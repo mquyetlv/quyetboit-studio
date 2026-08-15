@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import threading
 import time
+import wave
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,11 +13,13 @@ import pytest
 from PIL import Image
 
 from quyetboit_studio.core.minigame import (
+    MinigameAudioEvent,
     MinigameContent,
     MinigameProject,
     MinigameScene,
     MinigameTimeline,
     MinigameTimelineBuilder,
+    MinigameTimingProfile,
     VocabularyItem,
     VocabularyLevel,
     format_score_range,
@@ -28,6 +31,7 @@ from quyetboit_studio.minigame_voice import MinigameVoiceDialog
 from quyetboit_studio.pipeline.minigame import MinigamePipeline
 from quyetboit_studio.services.media import FFmpegRunner
 from quyetboit_studio.services.media.minigame import (
+    MinigameAudioCueManifest,
     MinigameAudioService,
     MinigameSubtitleBuilder,
     MinigameVideoRenderer,
@@ -43,9 +47,38 @@ from quyetboit_studio.services.minigame_tts import CatalogVoice, google_voice_fa
 def _item(index: int = 1) -> VocabularyItem:
     level = tuple(VocabularyLevel)[(index - 1) % 3].value
     return VocabularyItem(
-        f"nghĩa {index}", f"word{index}", f"/wɜːd {index}/", f"This is example {index}.",
+        f"nghĩa {index}",
+        f"word{index}",
+        f"/wɜːd {index}/",
+        f"This is example {index}.",
         level=level,
     )
+
+
+# Fixed A/B content spans compact labels, long vocabulary and a multi-clause
+# bilingual example; no provider call is needed to exercise timing/layout.
+VNEXT_AB_FIXTURES = (
+    VocabularyItem("mèo", "cat", "/kæt/", "The cat sleeps.", "Noun", "Con mèo ngủ.", "Dễ"),
+    VocabularyItem(
+        "trách nhiệm", "responsibility", "/rɪˌspɒn.səˈbɪl.ə.ti/",
+        "Responsibility helps us make careful choices every day.", "Noun",
+        "Trách nhiệm giúp chúng ta đưa ra lựa chọn cẩn thận mỗi ngày.", "Trung bình",
+    ),
+    VocabularyItem(
+        "kiên trì", "perseverance", "/ˌpɜː.səˈvɪə.rəns/",
+        "With perseverance, she continued practicing even when the assignment became difficult.",
+        "Noun", "Nhờ sự kiên trì, cô ấy vẫn tiếp tục luyện tập dù bài tập trở nên khó khăn.", "Khó",
+    ),
+)
+
+
+def test_vnext_ab_fixtures_cover_short_long_and_bilingual_example() -> None:
+    assert len(VNEXT_AB_FIXTURES) == 3
+    assert len(VNEXT_AB_FIXTURES[0].english) < len(VNEXT_AB_FIXTURES[1].english)
+    assert len(VNEXT_AB_FIXTURES[2].example) > 70
+    assert all(item.example_vietnamese for item in VNEXT_AB_FIXTURES)
+    for index, item in enumerate(VNEXT_AB_FIXTURES, 1):
+        item.validate(index)
 
 
 def _content_json(count: int = 1, topic: str = "Hospital") -> str:
@@ -66,6 +99,197 @@ def _content_json(count: int = 1, topic: str = "Hospital") -> str:
     ).to_json()
 
 
+def test_vnext_timing_profile_builds_semantic_boundaries_and_full_reveal_gap(
+    tmp_path: Path,
+) -> None:
+    normal = tmp_path / "normal.wav"
+    slow = tmp_path / "slow.wav"
+    example = tmp_path / "example.wav"
+    profile = MinigameTimingProfile()
+    timeline = MinigameTimelineBuilder(profile).build(
+        [_item()],
+        [normal],
+        [slow],
+        [example],
+        {normal: 800, slow: 1_100, example: 900},
+        answer_reveal_duration_ms=1_858,
+    )
+
+    boundaries = {
+        scene.phase: scene.start_ms for scene in timeline.scenes if scene.kind == "boundary"
+    }
+    assert boundaries["countdown_bed"] - boundaries["question_start"] == profile.question_intro_ms
+    assert boundaries["answer_reveal"] - boundaries["countdown_bed"] == profile.countdown_ms
+    listen = next(event for event in timeline.audio_events if event.semantic == "voice_listen")
+    assert listen.start_ms - boundaries["answer_reveal"] == 1_858 + profile.post_reveal_sfx_gap_ms
+    assert (
+        profile.review_after_example_min_ms
+        <= profile.review_hold_ms(_item(), 900)
+        <= profile.review_after_example_max_ms
+    )
+
+
+def test_audio_cue_manifest_resolves_bundled_assets_and_reports_missing(tmp_path: Path) -> None:
+    manifest = MinigameAudioCueManifest()
+    assert all(manifest.source(name).is_file() for name in manifest.CUES)
+    with pytest.raises(PipelineError, match="cài lại"):
+        MinigameAudioCueManifest(tmp_path).source("score_win")
+
+
+def test_timing_changes_invalidate_timeline_cache_but_not_tts_cache(tmp_path: Path) -> None:
+    project = MinigameProject(topic="Cache", vocabulary=[_item()])
+    pipeline = MinigamePipeline(project, workspace=tmp_path)
+    timeline = MinigameTimeline([], [], 1_000)
+    original_timeline_key = pipeline._timeline_cache_key(timeline)
+    original_tts_key = pipeline._speech_cache_key("word")
+    pipeline.timeline_builder = MinigameTimelineBuilder(
+        replace(MinigameTimingProfile(), countdown_ms=4_000)
+    )
+
+    assert pipeline._timeline_cache_key(timeline) != original_timeline_key
+    assert pipeline._speech_cache_key("word") == original_tts_key
+
+
+def test_review_cards_use_a_short_fade_between_items(tmp_path: Path) -> None:
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("hook", 0, 100),
+            MinigameScene("score", 100, 200),
+            MinigameScene("review_start", 200, 300),
+            MinigameScene("review", 300, 600, 0),
+            MinigameScene("review", 600, 900, 1),
+        ],
+        [],
+        900,
+    )
+    frames = [
+        tmp_path / name for name in ("hook.png", "body.png", "score.png", "start.png", "review.png")
+    ]
+    scenes = MinigamePipeline._visual_scenes(timeline, *frames)
+
+    assert [scene.fade_in_ms for scene in scenes[-2:]] == [0, 200]
+    assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
+
+
+def test_timeline_timestamps_cover_multiple_words_and_clamp_long_review_hold(
+    tmp_path: Path,
+) -> None:
+    clips = [tmp_path / f"clip-{index}.wav" for index in range(6)]
+    normal, slow, example = clips[:2], clips[2:4], clips[4:]
+    items = [_item(1), VocabularyItem("dài", "extraordinary", "/ɪkˈstrɔː.dɪ.nər.i/", "x" * 400)]
+    durations = {
+        normal[0]: 250,
+        normal[1]: 1_500,
+        slow[0]: 500,
+        slow[1]: 2_000,
+        example[0]: 300,
+        example[1]: 800,
+    }
+    timing = MinigameTimingProfile()
+    timeline = MinigameTimelineBuilder(timing).build(
+        items, normal, slow, example, durations, answer_reveal_duration_ms=1_858
+    )
+
+    reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
+    voices = [event for event in timeline.audio_events if event.semantic.startswith("voice_")]
+    assert len(voices) == 6
+    assert all(0 <= event.start_ms < timeline.duration_ms for event in timeline.audio_events)
+    assert reviews[1].end_ms - reviews[1].start_ms >= (
+        timing.review_lead_ms
+        + durations[normal[1]]
+        + timing.review_word_to_example_ms
+        + durations[example[1]]
+        + timing.review_after_example_max_ms
+    )
+
+
+def test_audio_bus_limiter_preserves_valid_pcm_peak(tmp_path: Path) -> None:
+    source = tmp_path / "cue.wav"
+    samples = (np.ones(4_800, dtype="<i2") * 30_000).tobytes()
+    with wave.open(str(source), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(48_000)
+        output.writeframes(samples)
+    mixed = MinigameAudioService.assemble(
+        [MinigameAudioEvent(0, source), MinigameAudioEvent(0, source, "effect")],
+        tmp_path / "mixed.wav",
+        100,
+    )
+    with wave.open(str(mixed.path), "rb") as output:
+        peak = (
+            np.abs(np.frombuffer(output.readframes(output.getnframes()), dtype="<i2")).max() / 32768
+        )
+    assert mixed.sample_rate == 48_000
+    assert peak <= 0.961
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_corrupt_normalized_cue_cache_is_rebuilt(tmp_path: Path) -> None:
+    service = MinigameAudioService(FFmpegRunner())
+    manifest = MinigameAudioCueManifest()
+    first = service.normalize_cue(manifest, "question_start", tmp_path)
+    first.path.write_bytes(b"corrupt-cache")
+
+    rebuilt = service.normalize_cue(manifest, "question_start", tmp_path)
+
+    assert rebuilt.path == first.path
+    assert rebuilt.duration_ms > 1_000
+    assert rebuilt.path.read_bytes() != b"corrupt-cache"
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_countdown_progress_bar_frames_shrink_monotonically(tmp_path: Path) -> None:
+    runner = FFmpegRunner()
+    audio_path = tmp_path / "countdown.wav"
+    runner.run(
+        [
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1",
+            "-c:a", "pcm_s16le", str(audio_path),
+        ]
+    )
+    audio = runner.probe.audio_artifact(audio_path)
+    manifest = MinigameThemeService().get("theme-1")
+    mask = MinigameAlphaMaskService().build(manifest, tmp_path / "mask")
+    body = MinigameVisualFrameService().build(
+        manifest.background_video, (mask,), tmp_path / "frames", layout_key=manifest.layout_version
+    )
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("word", 0, 1_000, 0, "question"),
+            MinigameScene("boundary", 0, 0, 0, "countdown_bed"),
+        ],
+        [],
+        1_000,
+    )
+    subtitles = MinigameSubtitleBuilder().build(
+        MinigameProject(topic="Test", vocabulary=[_item()]), timeline, tmp_path / "countdown.ass",
+        "9:16", manifest,
+    )
+    video = MinigameVideoRenderer(runner).render(
+        None, audio, subtitles, tmp_path / "countdown.mp4", "9:16", [0.5, 0.5],
+        theme_background=manifest.background_video, theme_overlay=mask,
+        visual_scenes=[MinigameVisualScene(body, 1_000)],
+    )
+    widths: list[int] = []
+    for index, timestamp in enumerate((0.05, 0.25, 0.50, 0.75, 0.95)):
+        frame_path = tmp_path / f"countdown-{index}.png"
+        runner.run(["-ss", str(timestamp), "-i", str(video.path), "-frames:v", "1", str(frame_path)])
+        with Image.open(frame_path) as frame:
+            pixels = np.asarray(frame.convert("RGB"))[940:960, 170:910]
+        cyan = (pixels[:, :, 0] < 120) & (pixels[:, :, 1] > 170) & (pixels[:, :, 2] > 170)
+        widths.append(int(np.count_nonzero(np.any(cyan, axis=0))))
+
+    assert widths == sorted(widths, reverse=True)
+    assert widths[0] > widths[-1] + 400
+
+
 def test_minigame_content_json_round_trips_every_field_and_normalizes_alias() -> None:
     value = _content_json()
     content = MinigameContent.from_json(value)
@@ -74,9 +298,10 @@ def test_minigame_content_json_round_trips_every_field_and_normalizes_alias() ->
     assert content.words[0].word_type == "Noun"
     assert content.words[0].example_vietnamese == "Đây là ví dụ 1."
     assert content.words[0].level == "Dễ"
-    assert MinigameContent.from_json(value.replace('"wordType"', '"workType"')).words[
-        0
-    ].word_type == "Noun"
+    assert (
+        MinigameContent.from_json(value.replace('"wordType"', '"workType"')).words[0].word_type
+        == "Noun"
+    )
     assert '"wordType": "Noun"' in content.to_json()
     assert '"level": "Dễ"' in content.to_json()
     assert '"workType"' not in content.to_json()
@@ -152,7 +377,9 @@ def test_content_json_rejects_unknown_level_with_word_path() -> None:
 
 def test_image_theme_does_not_require_legacy_background_video() -> None:
     project = MinigameProject(
-        topic="Food", tts_provider="capcut", voice="voice",
+        topic="Food",
+        tts_provider="capcut",
+        voice="voice",
         vocabulary=[_item(1), _item(2), _item(3)],
     )
 
@@ -265,22 +492,20 @@ def test_every_theme_palette_is_readable_on_its_actual_surfaces(tmp_path: Path) 
                 ), (theme_id, slot_name)
         assert manifest.styles["topic"].outline_width >= 1
         assert all(
-            style.outline_width >= 2
-            for name, style in manifest.styles.items()
-            if name != "topic"
+            style.outline_width >= 2 for name, style in manifest.styles.items() if name != "topic"
         )
 
 
 def test_theme_two_ass_uses_dark_palette_and_visible_outline(tmp_path: Path) -> None:
     manifest = MinigameThemeService().get("theme-2")
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
-    timeline = MinigameTimeline(
-        [MinigameScene("word", 0, 1_000, 0, "answer")], [], 1_000
-    )
+    timeline = MinigameTimeline([MinigameScene("word", 0, 1_000, 0, "answer")], [], 1_000)
 
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "theme-2.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "theme-2.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     word_style = next(line for line in content.splitlines() if line.startswith("Style: Word,"))
     assert "&H005A3A12" in word_style  # #123A5A converted to ASS BGR.
@@ -310,7 +535,9 @@ def test_border_flood_fill_keeps_disconnected_dark_panel_pixels() -> None:
     assert not matte[4, 4]
 
 
-def test_alpha_masks_have_expected_coverage_feather_and_detail_for_all_themes(tmp_path: Path) -> None:
+def test_alpha_masks_have_expected_coverage_feather_and_detail_for_all_themes(
+    tmp_path: Path,
+) -> None:
     masks = MinigameAlphaMaskService()
     for theme_id, manifest in MinigameThemeService().discover().items():
         result = masks.build(manifest, tmp_path)
@@ -362,9 +589,9 @@ def test_visual_frame_cache_invalidates_for_layout_without_changing_tts_key(tmp_
     first_project = MinigameProject(theme_id="theme-1", tts_provider="capcut", voice="voice")
     second_project = replace(first_project, theme_id="theme-5")
 
-    first_tts_key = MinigamePipeline(first_project, workspace=tmp_path / "pipeline-1")._speech_cache_key(
-        "healthcare"
-    )
+    first_tts_key = MinigamePipeline(
+        first_project, workspace=tmp_path / "pipeline-1"
+    )._speech_cache_key("healthcare")
     second_tts_key = MinigamePipeline(
         second_project, workspace=tmp_path / "pipeline-2"
     )._speech_cache_key("healthcare")
@@ -398,7 +625,9 @@ def test_real_composite_keeps_background_visible_without_black_matte(
     transparent = alpha == 0
     translucent = (alpha > 0) & (alpha < 255)
     assert np.array_equal(composite[transparent], background[transparent]), theme_id
-    assert np.count_nonzero(np.any(composite[translucent, :3] != background[translucent, :3], axis=1))
+    assert np.count_nonzero(
+        np.any(composite[translucent, :3] != background[translucent, :3], axis=1)
+    )
     assert np.array_equal(composite[0, 0], background[0, 0]), theme_id
 
 
@@ -454,13 +683,13 @@ def test_theme_subtitles_take_style_and_coordinates_from_manifest(tmp_path: Path
     styles["label"] = replace(styles["label"], max_size=19)
     manifest = replace(manifest, placements=placements, styles=styles)
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
-    timeline = MinigameTimeline(
-        [MinigameScene("word", 0, 1_000, 0, "question")], [], 1_000
-    )
+    timeline = MinigameTimeline([MinigameScene("word", 0, 1_000, 0, "question")], [], 1_000)
 
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "manifest-layout.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "manifest-layout.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert "Style: Label,Montserrat,19" in content
     assert r"\pos(540,444)\fs19" in content
@@ -468,17 +697,19 @@ def test_theme_subtitles_take_style_and_coordinates_from_manifest(tmp_path: Path
 
 def test_question_scene_never_contains_english_or_ipa_before_reveal(tmp_path: Path) -> None:
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
-    timeline = MinigameTimeline(
-        [MinigameScene("word", 0, 3_000, 0, "question")], [], 3_000
-    )
+    timeline = MinigameTimeline([MinigameScene("word", 0, 3_000, 0, "question")], [], 3_000)
 
-    content = MinigameSubtitleBuilder().build(
-        project,
-        timeline,
-        tmp_path / "question-only.ass",
-        "9:16",
-        MinigameThemeService().get("theme-1"),
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(
+            project,
+            timeline,
+            tmp_path / "question-only.ass",
+            "9:16",
+            MinigameThemeService().get("theme-1"),
+        )
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert "nghĩa 1" in content
     assert "word1" not in content
@@ -488,17 +719,19 @@ def test_question_scene_never_contains_english_or_ipa_before_reveal(tmp_path: Pa
 
 def test_voice_phase_text_uses_exact_scene_timestamp(tmp_path: Path) -> None:
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
-    timeline = MinigameTimeline(
-        [MinigameScene("voice", 2_100, 2_500, 0, "listen")], [], 2_500
-    )
+    timeline = MinigameTimeline([MinigameScene("voice", 2_100, 2_500, 0, "listen")], [], 2_500)
 
-    content = MinigameSubtitleBuilder().build(
-        project,
-        timeline,
-        tmp_path / "voice-time.ass",
-        "9:16",
-        MinigameThemeService().get("theme-1"),
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(
+            project,
+            timeline,
+            tmp_path / "voice-time.ass",
+            "9:16",
+            MinigameThemeService().get("theme-1"),
+        )
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert "Dialogue: 2,0:00:02.10,0:00:02.50,Header" in content
     assert "1 • LISTEN" in content
@@ -514,13 +747,17 @@ def test_review_example_wraps_by_bundled_font_pixel_width(tmp_path: Path) -> Non
     project = MinigameProject(topic="Hospital", vocabulary=[item])
     timeline = MinigameTimeline([MinigameScene("review", 0, 2_000, 0)], [], 2_000)
 
-    content = MinigameSubtitleBuilder().build(
-        project,
-        timeline,
-        tmp_path / "review-wrap.ass",
-        "9:16",
-        MinigameThemeService().get("theme-1"),
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(
+            project,
+            timeline,
+            tmp_path / "review-wrap.ass",
+            "9:16",
+            MinigameThemeService().get("theme-1"),
+        )
+        .read_text(encoding="utf-8-sig")
+    )
 
     example_line = next(line for line in content.splitlines() if "deliberately" in line)
     assert r"\N" in example_line
@@ -539,9 +776,11 @@ def test_review_content_uses_new_full_screen_design_slots(tmp_path: Path) -> Non
         3_000,
     )
 
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "new-review.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "new-review.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert "bác sĩ" in content
     assert "Doctor" in content
@@ -596,14 +835,21 @@ def test_answer_footer_regions_do_not_overlap() -> None:
 def test_bilingual_review_example_uses_separate_centered_regions(tmp_path: Path) -> None:
     manifest = MinigameThemeService().get("theme-3")
     item = VocabularyItem(
-        "hành lý", "Luggage", "/ˈlʌɡ.ɪdʒ/", "My luggage is ready.", "Noun", "Hành lý của tôi đã sẵn sàng."
+        "hành lý",
+        "Luggage",
+        "/ˈlʌɡ.ɪdʒ/",
+        "My luggage is ready.",
+        "Noun",
+        "Hành lý của tôi đã sẵn sàng.",
     )
     project = MinigameProject(topic="Travel", vocabulary=[item])
     timeline = MinigameTimeline([MinigameScene("review", 0, 2_000, 0)], [], 2_000)
 
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "bilingual-review.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "bilingual-review.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert ",ReviewExample," in content
     assert ",ReviewExampleVi," in content
@@ -633,9 +879,11 @@ def test_json_only_fields_are_rendered_in_answer_and_review(tmp_path: Path) -> N
         2_000,
     )
 
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "json-fields.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "json-fields.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert "WORD TYPE • NOUN" in content
     assert "NOUN" in content
@@ -655,9 +903,17 @@ def test_theme_review_and_level_score_have_dedicated_content(tmp_path: Path) -> 
         [],
         2_000,
     )
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "ending.ass", "9:16", MinigameThemeService().get("theme-1")
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(
+            project,
+            timeline,
+            tmp_path / "ending.ass",
+            "9:16",
+            MinigameThemeService().get("theme-1"),
+        )
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert "nghĩa 1" in content
     assert "word1" in content
@@ -672,7 +928,9 @@ def test_theme_review_and_level_score_have_dedicated_content(tmp_path: Path) -> 
 
 def test_start_topic_is_pre_rendered_to_rgba(tmp_path: Path) -> None:
     project = MinigameProject(topic="At the Hospital", vocabulary=[_item()])
-    result = MinigameTextLayerService().build_hook(project, MinigameThemeService().get("theme-1"), tmp_path)
+    result = MinigameTextLayerService().build_hook(
+        project, MinigameThemeService().get("theme-1"), tmp_path
+    )
 
     from PIL import Image
 
@@ -768,9 +1026,16 @@ def test_theme_render_failure_removes_partial_and_preserves_existing_output(tmp_
     runner = FailingRunner()
     with pytest.raises(PipelineError, match="FFmpeg failed"):
         MinigameVideoRenderer(runner)._render_theme(
-            SimpleNamespace(duration_ms=100, path=audio), subtitles, output, background, overlay,
-            start_background=None, hook_text_overlay=None, hook_duration_ms=0,
-            progress=None, cancel=None,
+            SimpleNamespace(duration_ms=100, path=audio),
+            subtitles,
+            output,
+            background,
+            overlay,
+            start_background=None,
+            hook_text_overlay=None,
+            hook_duration_ms=0,
+            progress=None,
+            cancel=None,
         )
 
     assert output.read_bytes() == b"previous valid output"
@@ -1083,9 +1348,9 @@ def test_minigame_page_round_trips_selected_theme_and_content_safely(qtbot) -> N
     assert result.theme_id == "theme-5"
     assert result.topic == "Hospital"
     assert result.vocabulary[0] == VocabularyItem(*values)
-    assert MinigameContent.from_json(restored.content_editor.toPlainText()).words[0] == VocabularyItem(
-        *values
-    )
+    assert MinigameContent.from_json(restored.content_editor.toPlainText()).words[
+        0
+    ] == VocabularyItem(*values)
     assert payload["service_account_path"] == ""
     assert source.shutdown()
     assert restored.shutdown()
@@ -1231,8 +1496,12 @@ def test_theme_renderer_uses_bundled_fonts_with_libass(tmp_path: Path) -> None:
     audio = runner.probe.audio_artifact(audio_path)
     manifest = MinigameThemeService().get("theme-1")
     project = MinigameProject(topic="Test", vocabulary=[_item()])
-    timeline = MinigameTimeline([MinigameScene("hook", 0, audio.duration_ms)], [], audio.duration_ms)
-    subtitles = MinigameSubtitleBuilder().build(project, timeline, tmp_path / "theme.ass", "9:16", manifest)
+    timeline = MinigameTimeline(
+        [MinigameScene("hook", 0, audio.duration_ms)], [], audio.duration_ms
+    )
+    subtitles = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "theme.ass", "9:16", manifest
+    )
     hook_text = MinigameTextLayerService().build_hook(project, manifest, tmp_path / "hook")
     output = MinigameVideoRenderer(runner).render(
         None,
@@ -1403,7 +1672,8 @@ def test_cancel_real_theme_render_preserves_output_and_cleans_process_files(tmp_
 )
 @pytest.mark.parametrize("theme_id", ["theme-1", "theme-5"])
 def test_five_word_pipeline_renders_complete_playable_timeline_without_live_service(
-    tmp_path: Path, theme_id: str,
+    tmp_path: Path,
+    theme_id: str,
 ) -> None:
     runner = FFmpegRunner()
     fixture = tmp_path / "speech-fixture.wav"

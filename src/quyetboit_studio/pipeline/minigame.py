@@ -9,6 +9,8 @@ from pathlib import Path
 from PIL import Image
 
 from ..core.minigame import (
+    MinigameAudioEvent,
+    MinigameAudioRole,
     MinigameFormat,
     MinigameProject,
     MinigameTimelineBuilder,
@@ -19,10 +21,12 @@ from ..core.models import (
     PipelineError,
     ProgressCallback,
     ProgressEvent,
+    sha256_file,
     stable_hash,
 )
 from ..services.media.ffmpeg import FFmpegRunner
 from ..services.media.minigame import (
+    MinigameAudioCueManifest,
     MinigameAudioService,
     MinigameSubtitleBuilder,
     MinigameVideoRenderer,
@@ -48,6 +52,8 @@ class MinigameResult:
 
 
 class MinigamePipeline:
+    TIMELINE_CACHE_VERSION = 3
+
     def __init__(
         self,
         project: MinigameProject,
@@ -65,6 +71,7 @@ class MinigamePipeline:
         self.cancel = CancellationToken()
         self.runner = runner or FFmpegRunner()
         self.audio = MinigameAudioService(self.runner)
+        self.cue_manifest = MinigameAudioCueManifest()
         self.renderer = MinigameVideoRenderer(self.runner)
         self.subtitles = MinigameSubtitleBuilder()
         self.themes = MinigameThemeService()
@@ -95,7 +102,9 @@ class MinigamePipeline:
             self.runner.preflight()
             manifest = self.themes.get(self.project.theme_id)
             mask = self.masks.build(manifest, self.workspace / "theme-mask")
-            hook_text = self.text_layers.build_hook(self.project, manifest, self.workspace / "theme-text")
+            hook_text = self.text_layers.build_hook(
+                self.project, manifest, self.workspace / "theme-text"
+            )
             frame_layout_key = {
                 "version": manifest.layout_version,
                 "slots": manifest.slots,
@@ -140,7 +149,9 @@ class MinigamePipeline:
                 self._emit(progress, 0.52 * completed_clips / total_clips, "Đang tạo voice từ vựng")
                 example = self._speech_clip(speech, item.example, f"example-{index}")
                 completed_clips += 1
-                self._emit(progress, 0.52 * completed_clips / total_clips, "Đang tạo voice câu ví dụ")
+                self._emit(
+                    progress, 0.52 * completed_clips / total_clips, "Đang tạo voice câu ví dụ"
+                )
                 slow = self._slow_clip(normal, index)
                 word_audio.append(normal.path)
                 slow_audio.append(slow.path)
@@ -148,37 +159,40 @@ class MinigamePipeline:
                 durations[normal.path] = normal.duration_ms
                 durations[slow.path] = slow.duration_ms
                 durations[example.path] = example.duration_ms
+            cue_dir = self.workspace / "audio" / "cues-v3"
+            cues = {
+                semantic: self.audio.normalize_cue(
+                    self.cue_manifest, semantic, cue_dir, cancel=self.cancel
+                )
+                for semantic in self.cue_manifest.CUES
+            }
             timeline = self.timeline_builder.build(
-                self.project.vocabulary, word_audio, slow_audio, example_audio, durations
+                self.project.vocabulary,
+                word_audio,
+                slow_audio,
+                example_audio,
+                durations,
+                answer_reveal_duration_ms=cues["answer_reveal"].duration_ms,
             )
-            cue_dir = self.workspace / "audio" / "cues-v2"
-            tick = self.audio.cue(cue_dir / "tick.wav", "tick", cancel=self.cancel)
-            reveal = self.audio.cue(cue_dir / "reveal.wav", "reveal", cancel=self.cancel)
-            opening = self.audio.cue(cue_dir / "open.wav", "open", cancel=self.cancel)
-            finish = self.audio.cue(cue_dir / "finish.wav", "finish", cancel=self.cancel)
-            timeline.audio_events.append((180, opening.path))
             for scene in timeline.scenes:
-                if scene.kind == "word" and scene.phase == "question":
-                    timeline.audio_events.extend(
-                        (scene.start_ms + offset * 1_000 + 80, tick.path)
-                        for offset in range(3)
+                if scene.kind != "boundary":
+                    continue
+                cue = cues.get(scene.phase)
+                if cue is not None:
+                    timeline.audio_events.append(
+                        MinigameAudioEvent(
+                            scene.start_ms, cue.path, scene.phase, MinigameAudioRole.EFFECT
+                        )
                     )
-                if scene.kind == "word" and scene.phase == "answer":
-                    timeline.audio_events.append((scene.start_ms, reveal.path))
-                if scene.kind == "review_start":
-                    timeline.audio_events.append((scene.start_ms + 120, opening.path))
-                if scene.kind == "score":
-                    timeline.audio_events.append((scene.start_ms + 160, finish.path))
-            raw_mix = self.audio.assemble(
-                timeline.audio_events,
-                self.workspace / "audio" / "timeline-v2-raw.wav",
-                timeline.duration_ms,
-            )
-            mixed = self.audio.master(
-                raw_mix,
-                self.workspace / "audio" / "timeline-v2-master.wav",
-                cancel=self.cancel,
-            )
+            timeline_key = self._timeline_cache_key(timeline)
+            raw_path = self.workspace / "audio" / f"timeline-{timeline_key}-raw.wav"
+            master_path = self.workspace / "audio" / f"timeline-{timeline_key}-master.wav"
+            raw_mix = self._cached_audio(raw_path, timeline.duration_ms)
+            if raw_mix is None:
+                raw_mix = self.audio.assemble(timeline.audio_events, raw_path, timeline.duration_ms)
+            mixed = self._cached_audio(master_path, timeline.duration_ms)
+            if mixed is None:
+                mixed = self.audio.master(raw_mix, master_path, cancel=self.cancel)
             self._emit(progress, 0.62, "Đã tạo timeline audio")
             output_folder = Path(self.project.output_folder).expanduser().resolve()
             output_folder.mkdir(parents=True, exist_ok=True)
@@ -260,9 +274,7 @@ class MinigamePipeline:
         review_frame: Path,
     ) -> list[MinigameVisualScene]:
         hook = next(scene for scene in timeline.scenes if scene.kind == "hook")
-        review_start = next(
-            scene for scene in timeline.scenes if scene.kind == "review_start"
-        )
+        review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
         score = next(scene for scene in timeline.scenes if scene.kind == "score")
         reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
         scenes = [MinigameVisualScene(hook_frame, hook.end_ms - hook.start_ms)]
@@ -271,21 +283,19 @@ class MinigamePipeline:
             scenes.append(MinigameVisualScene(body_frame, before_score))
         scenes.append(MinigameVisualScene(score_frame, score.end_ms - score.start_ms))
         scenes.append(
-            MinigameVisualScene(
-                review_start_frame, review_start.end_ms - review_start.start_ms
-            )
+            MinigameVisualScene(review_start_frame, review_start.end_ms - review_start.start_ms)
         )
-        if reviews:
-            scenes.append(
-                MinigameVisualScene(
-                    review_frame, reviews[-1].end_ms - reviews[0].start_ms
-                )
+        scenes.extend(
+            MinigameVisualScene(
+                review_frame,
+                review.end_ms - review.start_ms,
+                fade_in_ms=200 if index else 0,
             )
+            for index, review in enumerate(reviews)
+        )
         return scenes
 
-    def _speech_clip(
-        self, speech: MinigameSpeechService, text: str, item_id: str
-    ):
+    def _speech_clip(self, speech: MinigameSpeechService, text: str, item_id: str):
         key = self._speech_cache_key(text)
         directory = self.workspace / "audio"
         normalized = directory / f"{item_id}-{key}.wav"
@@ -311,6 +321,29 @@ class MinigamePipeline:
             }
         )[:20]
 
+    def _cached_audio(self, path: Path, duration_ms: int):
+        if not path.is_file():
+            return None
+        try:
+            artifact = self.runner.probe.audio_artifact(path).refresh()
+        except PipelineError:
+            return None
+        return artifact if abs(artifact.duration_ms - duration_ms) <= 40 else None
+
+    def _timeline_cache_key(self, timeline) -> str:
+        """Timing and cue edits invalidate only mix/render, never the TTS cache."""
+        return stable_hash(
+            {
+                "version": self.TIMELINE_CACHE_VERSION,
+                "timing": self.timeline_builder.timing,
+                "duration_ms": timeline.duration_ms,
+                "events": [
+                    (event.start_ms, event.semantic, event.role, sha256_file(event.path))
+                    for event in timeline.audio_events
+                ],
+            }
+        )[:20]
+
     def _slow_clip(self, normal, index: int):
         rate = max(0.5, min(1.0, float(self.project.slow_rate)))
         key = stable_hash({"source": normal.checksum, "rate": rate})[:20]
@@ -323,7 +356,9 @@ class MinigamePipeline:
         return self.audio.slow(normal, target, rate, cancel=self.cancel)
 
     def _available_output(self, folder: Path, aspect: str, include_suffix: bool) -> Path:
-        safe = re.sub(r"[^\w.-]+", "_", self.project.output_name.strip(), flags=re.UNICODE).strip("._")
+        safe = re.sub(r"[^\w.-]+", "_", self.project.output_name.strip(), flags=re.UNICODE).strip(
+            "._"
+        )
         safe = safe or "english_minigame"
         suffix = f"_{aspect.replace(':', 'x')}" if include_suffix else ""
         candidate = folder / f"{safe}{suffix}.mp4"
@@ -347,9 +382,7 @@ class MinigamePipeline:
             partial.write_bytes(data)
             with Image.open(partial) as image:
                 if image.size != (1080, 1920) or image.mode not in {"RGB", "RGBA"}:
-                    raise PipelineError(
-                        "minigame_cover_invalid", "Ảnh bìa minigame không hợp lệ."
-                    )
+                    raise PipelineError("minigame_cover_invalid", "Ảnh bìa minigame không hợp lệ.")
             os.replace(partial, cover)
             return cover
         finally:

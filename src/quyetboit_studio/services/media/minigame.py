@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import textwrap
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
 from ...core.minigame import (
+    MinigameAudioEvent,
+    MinigameAudioRole,
     MinigameProject,
     MinigameScene,
     MinigameThemeManifest,
@@ -32,6 +36,47 @@ class MinigameVisualScene:
     background: Path
     duration_ms: int
     overlays: tuple[Path, ...] = ()
+    fade_in_ms: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class MinigameAudioCue:
+    semantic: str
+    relative_path: str
+    gain_db: float
+    fade_ms: int = 35
+
+
+class MinigameAudioCueManifest:
+    """Bundled production cues. Missing assets are a recoverable preflight error."""
+
+    PROCESSING_VERSION: ClassVar[int] = 1
+    CUES: ClassVar[dict[str, MinigameAudioCue]] = {
+        "question_start": MinigameAudioCue("question_start", "sound-effect/check-mark.mp3", -8.0),
+        "countdown_bed": MinigameAudioCue("countdown_bed", "sound-effect/clock-tick.mp3", -7.0),
+        "answer_reveal": MinigameAudioCue(
+            "answer_reveal", "sound-effect/hoan-thanh/Happy Win Game.mp3", -6.0
+        ),
+        "score_win": MinigameAudioCue(
+            "score_win", "sound-effect/hoan-thanh/Cartoon Big Win.mp3", -6.0
+        ),
+    }
+
+    def __init__(self, assets_root: Path | None = None) -> None:
+        self.assets_root = assets_root or Path(__file__).resolve().parents[2] / "assets" / "audio"
+
+    def source(self, semantic: str) -> Path:
+        try:
+            cue = self.CUES[semantic]
+        except KeyError as exc:
+            raise ValueError(f"Cue minigame không hợp lệ: {semantic}") from exc
+        source = self.assets_root / cue.relative_path
+        if not source.is_file():
+            raise PipelineError(
+                "minigame_audio_asset_missing",
+                f"Thiếu asset âm thanh '{cue.relative_path}'. Hãy cài lại ứng dụng.",
+            )
+        return source
 
 
 def _ass_time(milliseconds: int) -> str:
@@ -53,7 +98,11 @@ def _ass_text(value: str) -> str:
 
 
 def _ass_color(value: str, *, alpha: str = "00") -> str:
-    red, green, blue = value.removeprefix("#")[:2], value.removeprefix("#")[2:4], value.removeprefix("#")[4:6]
+    red, green, blue = (
+        value.removeprefix("#")[:2],
+        value.removeprefix("#")[2:4],
+        value.removeprefix("#")[4:6],
+    )
     return f"&H{alpha}{blue}{green}{red}"
 
 
@@ -76,6 +125,55 @@ class MinigameAudioService:
                     "silenceremove=start_periods=1:start_duration=0.04:"
                     "start_threshold=-45dB:stop_periods=-1:stop_duration=0.10:"
                     "stop_threshold=-45dB,apad=pad_dur=0.08"
+                ),
+                "-ac",
+                "1",
+                "-ar",
+                "48000",
+                "-c:a",
+                "pcm_s16le",
+                str(partial),
+            ],
+            cancel=cancel,
+        )
+        artifact = self.runner.probe.audio_artifact(partial)
+        os.replace(partial, output)
+        artifact.path = output
+        return artifact.refresh()
+
+    def normalize_cue(
+        self,
+        manifest: MinigameAudioCueManifest,
+        semantic: str,
+        cache_dir: Path,
+        *,
+        cancel: CancellationToken | None = None,
+    ) -> AudioArtifact:
+        """Decode a packaged cue once, keyed by bytes/config rather than install path."""
+        source = manifest.source(semantic)
+        cue = manifest.CUES[semantic]
+        checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+        key = hashlib.sha256(
+            f"{checksum}:{manifest.PROCESSING_VERSION}:{cue.gain_db}:{cue.fade_ms}".encode()
+        ).hexdigest()[:20]
+        output = cache_dir / f"{semantic}-{key}.wav"
+        if output.is_file():
+            try:
+                return self.runner.probe.audio_artifact(output).refresh()
+            except PipelineError:
+                output.unlink(missing_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        partial = output.with_name(f".{output.stem}.partial{output.suffix}")
+        fade_seconds = cue.fade_ms / 1000
+        self.runner.run(
+            [
+                "-i",
+                str(source),
+                "-vn",
+                "-filter:a",
+                (
+                    f"aformat=channel_layouts=mono,aresample=48000,volume={cue.gain_db}dB,"
+                    f"afade=t=in:st=0:d={fade_seconds}"
                 ),
                 "-ac",
                 "1",
@@ -180,7 +278,9 @@ class MinigameAudioService:
                 "-i",
                 str(source.path),
                 "-filter:a",
-                "loudnorm=I=-16:TP=-1.5:LRA=7",
+                # AAC encoding may add a few tenths of a dB true peak, so keep
+                # margin below the published -1.5 dBTP delivery ceiling.
+                "loudnorm=I=-16:TP=-2.0:LRA=7",
                 "-ac",
                 "1",
                 "-ar",
@@ -197,12 +297,13 @@ class MinigameAudioService:
         return artifact.refresh()
 
     @staticmethod
-    def assemble(
-        events: list[tuple[int, Path]], output: Path, duration_ms: int
-    ) -> AudioArtifact:
+    def assemble(events: list[MinigameAudioEvent], output: Path, duration_ms: int) -> AudioArtifact:
         rate = 48_000
-        timeline = np.zeros(max(1, round(duration_ms * rate / 1000)), dtype=np.float32)
-        for start_ms, path in events:
+        sample_count = max(1, round(duration_ms * rate / 1000))
+        voice_bus = np.zeros(sample_count, dtype=np.float32)
+        effect_bus = np.zeros(sample_count, dtype=np.float32)
+        for event in events:
+            start_ms, path = event
             with wave.open(str(path), "rb") as source:
                 if (
                     source.getframerate() != rate
@@ -215,16 +316,20 @@ class MinigameAudioService:
                         provider="ffmpeg",
                     )
                 samples = (
-                    np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").astype(np.float32)
+                    np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").astype(
+                        np.float32
+                    )
                     / 32768
                 )
             offset = round(start_ms * rate / 1000)
-            available = min(len(samples), len(timeline) - offset)
+            available = min(len(samples), sample_count - offset)
             if available > 0:
-                timeline[offset : offset + available] += samples[:available]
-        peak = float(np.max(np.abs(timeline), initial=0))
-        if peak > 0.96:
-            timeline *= 0.96 / peak
+                target = effect_bus if event.role is MinigameAudioRole.EFFECT else voice_bus
+                target[offset : offset + available] += samples[:available]
+        # Keep speech at its staged level: constrain only the effect bus first,
+        # then apply a transparent soft limiter instead of peak-scaling everything.
+        effect_bus = np.tanh(effect_bus)
+        timeline = np.tanh(voice_bus + effect_bus * 0.78) * 0.96
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         with wave.open(str(partial), "wb") as destination:
@@ -233,7 +338,9 @@ class MinigameAudioService:
             destination.setframerate(rate)
             destination.writeframes((timeline * 32767).astype("<i2").tobytes())
         os.replace(partial, output)
-        return AudioArtifact(output, duration_ms=duration_ms, sample_rate=rate, channels=1).refresh()
+        return AudioArtifact(
+            output, duration_ms=duration_ms, sample_rate=rate, channels=1
+        ).refresh()
 
 
 class MinigameSubtitleBuilder:
@@ -298,14 +405,14 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Eyebrow,Segoe UI Semibold,{sizes['eyebrow']},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,2,0,1,2,0,5,{margin},{margin},0,1
-Style: Hero,Segoe UI Semibold,{sizes['hero']},&H00C5F074,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,{margin},{margin},0,1
-Style: Title,Segoe UI Semibold,{sizes['title']},&H00FFFFFF,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,{margin},{margin},0,1
-Style: Body,Segoe UI,{sizes['body']},&H00FFFFFF,&H000000FF,&H00201813,&H80000000,0,0,0,0,100,100,0,0,1,2,1,5,{margin},{margin},0,1
-Style: IPA,Segoe UI,{sizes['ipa']},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,0,-1,0,0,100,100,1,0,1,2,0,5,{margin},{margin},0,1
-Style: Small,Segoe UI,{sizes['small']},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,0,0,0,0,100,100,0,0,1,2,0,5,{margin},{margin},0,1
-Style: Pill,Segoe UI Semibold,{sizes['small']},&H00FFFFFF,&H000000FF,&H003D2B16,&H803D2B16,-1,0,0,0,100,100,1,0,3,2,0,5,{margin},{margin},0,1
-Style: Countdown,Bahnschrift,{sizes['countdown']},&H0057C8FF,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,5,{margin},{margin},0,1
+Style: Eyebrow,Segoe UI Semibold,{sizes["eyebrow"]},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,2,0,1,2,0,5,{margin},{margin},0,1
+Style: Hero,Segoe UI Semibold,{sizes["hero"]},&H00C5F074,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,{margin},{margin},0,1
+Style: Title,Segoe UI Semibold,{sizes["title"]},&H00FFFFFF,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,{margin},{margin},0,1
+Style: Body,Segoe UI,{sizes["body"]},&H00FFFFFF,&H000000FF,&H00201813,&H80000000,0,0,0,0,100,100,0,0,1,2,1,5,{margin},{margin},0,1
+Style: IPA,Segoe UI,{sizes["ipa"]},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,0,-1,0,0,100,100,1,0,1,2,0,5,{margin},{margin},0,1
+Style: Small,Segoe UI,{sizes["small"]},&H00D9C4B8,&H000000FF,&H00201813,&H80000000,0,0,0,0,100,100,0,0,1,2,0,5,{margin},{margin},0,1
+Style: Pill,Segoe UI Semibold,{sizes["small"]},&H00FFFFFF,&H000000FF,&H003D2B16,&H803D2B16,-1,0,0,0,100,100,1,0,3,2,0,5,{margin},{margin},0,1
+Style: Countdown,Bahnschrift,{sizes["countdown"]},&H0057C8FF,&H000000FF,&H00201813,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,5,{margin},{margin},0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -340,7 +447,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for scene in timeline.scenes:
             if scene.kind == "hook":
                 add(scene, "Eyebrow", "ENGLISH QUICK CHALLENGE", y=positions["header"])
-                add(scene, "Hero", f"CAN YOU GET\n{total} OUT OF {total}?", y=positions["hero"], animation="pop")
+                add(
+                    scene,
+                    "Hero",
+                    f"CAN YOU GET\n{total} OUT OF {total}?",
+                    y=positions["hero"],
+                    animation="pop",
+                )
                 add(scene, "Pill", f"TOPIC  •  {project.topic}", y=positions["translation"])
                 add(scene, "Small", "Listen  •  Guess  •  Repeat", y=positions["phase"])
             elif scene.kind == "word" and scene.phase == "question":
@@ -432,7 +545,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return output
 
     def _build_theme(
-        self, project: MinigameProject, timeline: MinigameTimeline, output: Path,
+        self,
+        project: MinigameProject,
+        timeline: MinigameTimeline,
+        output: Path,
         manifest: MinigameThemeManifest,
     ) -> Path:
         style_lines = []
@@ -463,7 +579,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         total = len(project.vocabulary)
 
         def add(
-            scene: MinigameScene, placement_name: str, text: str,
+            scene: MinigameScene,
+            placement_name: str,
+            text: str,
         ) -> None:
             placement = manifest.placements[placement_name]
             slot = manifest.slots[placement.slot]
@@ -484,11 +602,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             wrapped = self.text_layers.wrap_text(
                 text, slot.bounds, size, style.font_file, style.spacing
             )
+            motion = ""
+            if placement_name == "word_header":
+                center_x = (x1 + x2) // 2
+                motion = rf"\move({center_x},{center_y - 10},{center_x},{center_y},0,200)"
             events.append(
                 f"Dialogue: {placement.layer},{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},"
-                f"{style.name},,0,0,0,,{{\\an5\\pos({(x1+x2)//2},{center_y})\\fs{size}\\fad(120,100)}}"
+                f"{style.name},,0,0,0,,{{\\an5\\pos({(x1 + x2) // 2},{center_y})\\fs{size}{motion}\\fad(120,100)}}"
                 f"{_ass_text(wrapped)}"
             )
+
+        def add_countdown_bar(scene: MinigameScene) -> None:
+            """Draw a 30fps left-anchored remaining-time fill (right edge moves left)."""
+            x, y, width, height = 170, 940, 740, 20
+            track = rf"{{\an7\pos({x},{y})\p1\c&H50302010&}}m 0 0 l {width} 0 {width} {height} 0 {height}"
+            events.append(
+                f"Dialogue: 1,{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},Body,,0,0,0,,{track}"
+            )
+            frame_ms = 1_000 / 30
+            frame_count = max(1, round((scene.end_ms - scene.start_ms) / frame_ms))
+            for frame in range(frame_count):
+                begin = round(scene.start_ms + frame * frame_ms)
+                end = min(scene.end_ms, round(scene.start_ms + (frame + 1) * frame_ms))
+                fill = max(0, round(width * (1 - frame / frame_count)))
+                if end <= begin or fill <= 0:
+                    continue
+                shape = rf"{{\an7\pos({x},{y})\p1\c&H00F4E643&}}m 0 0 l {fill} 0 {fill} {height} 0 {height}"
+                events.append(
+                    f"Dialogue: 2,{_ass_time(begin)},{_ass_time(end)},Body,,0,0,0,,{shape}"
+                )
 
         for scene in timeline.scenes:
             if scene.kind == "hook":
@@ -501,10 +643,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 add(scene, "meaning_value", item.vietnamese)
                 if scene.phase == "question":
                     add(scene, "reveal_label", "REVEALING ANSWER IN")
-                    for number, offset in zip((3, 2, 1), range(3), strict=True):
-                        countdown = MinigameScene("count", scene.start_ms + offset * 1000,
-                                                 min(scene.end_ms, scene.start_ms + (offset + 1) * 1000))
-                        add(countdown, "countdown", str(number))
+                    countdown_start = next(
+                        (
+                            boundary.start_ms
+                            for boundary in timeline.scenes
+                            if boundary.kind == "boundary"
+                            and boundary.item_index == scene.item_index
+                            and boundary.phase == "countdown_bed"
+                        ),
+                        scene.start_ms,
+                    )
+                    add_countdown_bar(MinigameScene("countdown", countdown_start, scene.end_ms))
                 else:
                     add(scene, "english_label", "ENGLISH WORD")
                     add(scene, "english_word", item.english)
@@ -676,8 +825,14 @@ class MinigameVideoRenderer:
             partial.unlink(missing_ok=True)
 
     def _render_theme(
-        self, audio: AudioArtifact, subtitles: Path, output: Path, background: Path,
-        overlay: Path | None, *, progress: ProgressCallback | None,
+        self,
+        audio: AudioArtifact,
+        subtitles: Path,
+        output: Path,
+        background: Path,
+        overlay: Path | None,
+        *,
+        progress: ProgressCallback | None,
         cancel: CancellationToken | None,
         start_background: Path | None,
         hook_text_overlay: Path | None,
@@ -685,7 +840,9 @@ class MinigameVideoRenderer:
         visual_scenes: list[MinigameVisualScene] | None = None,
     ) -> VideoArtifact:
         if overlay is None or not background.is_file() or not overlay.is_file():
-            raise PipelineError("theme_asset_missing", "Theme chưa có đủ background hoặc alpha mask.")
+            raise PipelineError(
+                "theme_asset_missing", "Theme chưa có đủ background hoặc alpha mask."
+            )
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         filter_path = self._escape_filter_path(subtitles)
@@ -699,7 +856,9 @@ class MinigameVideoRenderer:
             hook_duration_ms,
         )
         if not scenes or sum(scene.duration_ms for scene in scenes) != audio.duration_ms:
-            raise PipelineError("theme_scene_invalid", "Timeline visual scene không khớp timeline audio.")
+            raise PipelineError(
+                "theme_scene_invalid", "Timeline visual scene không khớp timeline audio."
+            )
         encoder = self.runner.preflight()["encoder"] or "libx264"
         scene_paths: list[Path] = []
         try:
@@ -708,12 +867,12 @@ class MinigameVideoRenderer:
                 scene_partial = output.with_name(f".{output.stem}.scene-{index}.partial.mp4")
                 scene_paths.append(scene_path)
                 inputs = ["-loop", "1", "-framerate", "30", "-i", str(scene.background)]
-                graph_parts = ["[0:v]scale=1080:1920,format=rgba[v0]"]
+                fade = min(max(0, scene.fade_in_ms), scene.duration_ms) / 1000
+                fade_filter = f",fade=t=in:st=0:d={fade:.3f}" if fade else ""
+                graph_parts = [f"[0:v]scale=1080:1920,format=rgba{fade_filter}[v0]"]
                 current = "v0"
                 for overlay_index, overlay_path in enumerate(scene.overlays, 1):
-                    inputs.extend(
-                        ["-loop", "1", "-framerate", "30", "-i", str(overlay_path)]
-                    )
+                    inputs.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
                     next_name = f"v{overlay_index}"
                     graph_parts.append(
                         f"[{overlay_index}:v]format=rgba[o{overlay_index}];"
@@ -749,10 +908,9 @@ class MinigameVideoRenderer:
                         scene_args, duration_ms=scene.duration_ms, cancel=cancel, step=0
                     )
                 artifact = self.runner.probe.video_artifact(scene_partial)
-                if (
-                    (artifact.width, artifact.height) != (1080, 1920)
-                    or abs(artifact.duration_ms - scene.duration_ms) > 80
-                ):
+                if (artifact.width, artifact.height) != (1080, 1920) or abs(
+                    artifact.duration_ms - scene.duration_ms
+                ) > 80:
                     raise PipelineError(
                         "theme_scene_invalid",
                         "Visual scene không đúng resolution hoặc duration.",

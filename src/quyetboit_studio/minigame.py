@@ -41,6 +41,7 @@ from .core.minigame import (
     MinigameContent,
     MinigameFormat,
     MinigameProject,
+    MinigameTimingProfile,
     MinigameTtsProvider,
     VocabularyItem,
 )
@@ -129,12 +130,16 @@ class MinigamePage(QWidget):
         self.voice_gender = ""
         self.voice_family = "Neural2"
         self.voice_categories: list[str] = ["Neural2", "en"]
-        self.service_account_path = str(default_account.resolve()) if default_account.is_file() else ""
+        self.service_account_path = (
+            str(default_account.resolve()) if default_account.is_file() else ""
+        )
         self.voice_volume = 100
         self.slow_rate = 0.72
         self.theme_service = MinigameThemeService()
         self.text_layers = MinigameTextLayerService()
-        cache_location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
+        cache_location = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.CacheLocation
+        )
         self.preview_cache = Path(cache_location) / "minigame-preview"
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
@@ -221,9 +226,13 @@ class MinigamePage(QWidget):
             card.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
             palette = " · ".join(manifest.palette)
             card.setText(f"{manifest.display_name}\n9:16\n{palette}")
-            card.setToolTip(f"{manifest.display_name} · hỗ trợ: {', '.join(manifest.supported_formats)}")
+            card.setToolTip(
+                f"{manifest.display_name} · hỗ trợ: {', '.join(manifest.supported_formats)}"
+            )
             index = self.theme_id.count() - 1
-            card.clicked.connect(lambda _checked=False, value=index: self.theme_id.setCurrentIndex(value))
+            card.clicked.connect(
+                lambda _checked=False, value=index: self.theme_id.setCurrentIndex(value)
+            )
             self.theme_group.addButton(card, index)
             self.theme_cards.append(card)
             theme_cards_layout.addWidget(card, index // 3, index % 3)
@@ -373,7 +382,9 @@ class MinigamePage(QWidget):
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setWordWrap(False)
         self.preview.setMinimumHeight(520)
-        self.preview.setStyleSheet("background:#111827;border:2px solid #8b82ff;border-radius:18px;")
+        self.preview.setStyleSheet(
+            "background:#111827;border:2px solid #8b82ff;border-radius:18px;"
+        )
         layout.addWidget(self.preview, 1)
         self.safe_box_debug = QCheckBox("Hiện safe-box (debug)")
         self.safe_box_debug.setObjectName("SafeBoxDebug")
@@ -405,9 +416,7 @@ class MinigamePage(QWidget):
         self._update_preview()
 
     def _load_content_json(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Mở dữ liệu Minigame", "", "JSON (*.json)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Mở dữ liệu Minigame", "", "JSON (*.json)")
         if not path:
             return
         source = Path(path)
@@ -492,7 +501,9 @@ class MinigamePage(QWidget):
             self.crop_16_y.setValue(round(project.crop_focus.get("16:9", [0.5, 0.5])[1] * 100))
             self.crop_9_x.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[0] * 100))
             self.crop_9_y.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[1] * 100))
-            content = MinigameContent(project.topic, list(project.vocabulary or MinigameContent.blank().words))
+            content = MinigameContent(
+                project.topic, list(project.vocabulary or MinigameContent.blank().words)
+            )
             self._last_valid_content = content
             self.content_editor.setPlainText(content.to_json())
             self._update_voice_summary()
@@ -626,7 +637,37 @@ class MinigamePage(QWidget):
             self.dirty_changed.emit(True)
         total = len(self._last_valid_content.words)
         ratio = "9:16"
-        seconds = 3 + total * 8 + total * 4 + 8
+        timing = MinigameTimingProfile()
+        # TTS varies by text, so the preview uses conservative clip estimates but
+        # all fixed boundaries come from the production timing profile.
+        per_word_ms = (
+            timing.question_intro_ms
+            + timing.countdown_ms
+            + 1_858
+            + timing.post_reveal_sfx_gap_ms
+            + 1_200
+            + timing.between_listen_slow_ms
+            + 1_600
+            + timing.between_slow_repeat_ms
+            + 1_200
+            + timing.after_repeat_ms
+        )
+        per_review_ms = (
+            timing.review_lead_ms
+            + 1_200
+            + timing.review_word_to_example_ms
+            + 2_000
+            + timing.review_after_example_min_ms
+        )
+        seconds = round(
+            (
+                timing.hook_ms
+                + total * (per_word_ms + per_review_ms)
+                + timing.score_ms
+                + timing.review_start_ms
+            )
+            / 1_000
+        )
         outputs = 2 if ratio == MinigameFormat.BOTH.value else 1
         self.estimate.setText(
             f"{total} từ · khoảng {seconds // 60}:{seconds % 60:02d} · {outputs} video đầu ra · "
@@ -719,5 +760,7 @@ class MinigamePage(QWidget):
             self.output_folder.setText(path)
 
     def _open_output(self) -> None:
-        folder = self.last_outputs[0].parent if self.last_outputs else Path(self.output_folder.text())
+        folder = (
+            self.last_outputs[0].parent if self.last_outputs else Path(self.output_folder.text())
+        )
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))

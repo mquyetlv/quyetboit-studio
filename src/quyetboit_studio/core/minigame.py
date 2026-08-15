@@ -204,8 +204,14 @@ class MinigameContent:
     _ROOT_KEYS = frozenset({"schemaVersion", "topic", "words"})
     _WORD_KEYS = frozenset(
         {
-            "vietnamese", "english", "ipa", "wordType", "workType", "example",
-            "exampleVietnamese", "level",
+            "vietnamese",
+            "english",
+            "ipa",
+            "wordType",
+            "workType",
+            "example",
+            "exampleVietnamese",
+            "level",
         }
     )
     _REQUIRED_WORD_KEYS = frozenset(
@@ -239,12 +245,22 @@ class MinigameContent:
                     "Dễ",
                 ),
                 VocabularyItem(
-                    "Y tá", "Nurse", "/nɜːrs/", "The nurse helps the doctor.",
-                    "Noun", "Y tá hỗ trợ bác sĩ.", "Trung bình",
+                    "Y tá",
+                    "Nurse",
+                    "/nɜːrs/",
+                    "The nurse helps the doctor.",
+                    "Noun",
+                    "Y tá hỗ trợ bác sĩ.",
+                    "Trung bình",
                 ),
                 VocabularyItem(
-                    "Bệnh nhân", "Patient", "/ˈpeɪ.ʃənt/", "The patient is waiting.",
-                    "Noun", "Bệnh nhân đang chờ.", "Khó",
+                    "Bệnh nhân",
+                    "Patient",
+                    "/ˈpeɪ.ʃənt/",
+                    "The patient is waiting.",
+                    "Noun",
+                    "Bệnh nhân đang chờ.",
+                    "Khó",
                 ),
             ],
         )
@@ -405,24 +421,97 @@ class MinigameScene:
     phase: str = ""
 
 
+class MinigameAudioRole(StrEnum):
+    VOICE = "voice"
+    EFFECT = "effect"
+
+
+@dataclass(slots=True, frozen=True)
+class MinigameAudioEvent:
+    """A timeline event with an explicit semantic cue and mix role.
+
+    Iteration intentionally preserves the former ``(start_ms, path)`` shape for
+    integrations that only need a placed PCM file.
+    """
+
+    start_ms: int
+    path: Path
+    semantic: str = ""
+    role: MinigameAudioRole = MinigameAudioRole.VOICE
+
+    def __iter__(self):
+        yield self.start_ms
+        yield self.path
+
+
+@dataclass(slots=True, frozen=True)
+class MinigameTimingProfile:
+    """Single source of truth for mini-game pacing (all values are milliseconds)."""
+
+    hook_ms: int = 3_200
+    question_intro_ms: int = 700
+    countdown_ms: int = 3_750
+    post_reveal_sfx_gap_ms: int = 450
+    between_listen_slow_ms: int = 700
+    between_slow_repeat_ms: int = 900
+    after_repeat_ms: int = 1_200
+    score_ms: int = 6_000
+    review_start_ms: int = 3_200
+    review_lead_ms: int = 650
+    review_word_to_example_ms: int = 900
+    review_after_example_min_ms: int = 1_600
+    review_after_example_max_ms: int = 3_500
+    reading_chars_per_second: float = 15.0
+    version: int = 3
+
+    def __post_init__(self) -> None:
+        numeric = (
+            self.hook_ms,
+            self.question_intro_ms,
+            self.countdown_ms,
+            self.post_reveal_sfx_gap_ms,
+            self.between_listen_slow_ms,
+            self.between_slow_repeat_ms,
+            self.after_repeat_ms,
+            self.score_ms,
+            self.review_start_ms,
+            self.review_lead_ms,
+            self.review_word_to_example_ms,
+            self.review_after_example_min_ms,
+            self.review_after_example_max_ms,
+        )
+        if any(value <= 0 for value in numeric) or self.reading_chars_per_second <= 0:
+            raise ValueError("Các giá trị timing minigame phải lớn hơn 0.")
+        if self.review_after_example_min_ms > self.review_after_example_max_ms:
+            raise ValueError("Review hold tối thiểu không được lớn hơn tối đa.")
+
+    def review_hold_ms(self, item: VocabularyItem, example_audio_ms: int) -> int:
+        text = f"{item.example} {item.example_vietnamese}".strip()
+        reading_ms = round(len(text) / self.reading_chars_per_second * 1_000)
+        return max(
+            self.review_after_example_min_ms,
+            min(self.review_after_example_max_ms, reading_ms - example_audio_ms),
+        )
+
+
 @dataclass(slots=True)
 class MinigameTimeline:
     scenes: list[MinigameScene]
-    audio_events: list[tuple[int, Path]]
+    audio_events: list[MinigameAudioEvent]
     duration_ms: int
 
 
 class MinigameTimelineBuilder:
-    HOOK_MS = 2_800
-    QUESTION_MS = 3_000
-    REVEAL_LEAD_MS = 320
-    BETWEEN_VOICE_MS = (320, 480)
-    AFTER_WORD_MS = 550
-    REVIEW_LEAD_MS = 320
-    REVIEW_START_MS = 2_800
-    REVIEW_GAP_MS = 280
-    REVIEW_AFTER_MS = 500
-    SCORE_MS = 3_000
+    """Build visual/audio boundaries from :class:`MinigameTimingProfile`."""
+
+    # Compatibility aliases for consumers of the original public constants.
+    HOOK_MS = MinigameTimingProfile().hook_ms
+    QUESTION_MS = MinigameTimingProfile().question_intro_ms + MinigameTimingProfile().countdown_ms
+    SCORE_MS = MinigameTimingProfile().score_ms
+    REVIEW_START_MS = MinigameTimingProfile().review_start_ms
+
+    def __init__(self, timing: MinigameTimingProfile | None = None) -> None:
+        self.timing = timing or MinigameTimingProfile()
 
     def build(
         self,
@@ -431,22 +520,35 @@ class MinigameTimelineBuilder:
         slow_audio: list[Path],
         example_audio: list[Path],
         durations: dict[Path, int],
+        *,
+        answer_reveal_duration_ms: int = 0,
     ) -> MinigameTimeline:
         if not (len(items) == len(word_audio) == len(slow_audio) == len(example_audio)):
             raise ValueError("Số từ và số audio minigame không khớp.")
-        scenes = [MinigameScene("hook", 0, self.HOOK_MS)]
-        audio_events: list[tuple[int, Path]] = []
-        cursor = self.HOOK_MS
+        timing = self.timing
+        scenes = [MinigameScene("hook", 0, timing.hook_ms)]
+        audio_events: list[MinigameAudioEvent] = []
+        cursor = timing.hook_ms
         for index in range(len(items)):
             question_start = cursor
-            reveal = question_start + self.QUESTION_MS
+            countdown_start = question_start + timing.question_intro_ms
+            reveal = countdown_start + timing.countdown_ms
             scenes.append(MinigameScene("word", question_start, reveal, index, "question"))
+            scenes.append(
+                MinigameScene("boundary", question_start, question_start, index, "question_start")
+            )
+            scenes.append(
+                MinigameScene("boundary", countdown_start, countdown_start, index, "countdown_bed")
+            )
+            scenes.append(MinigameScene("boundary", reveal, reveal, index, "answer_reveal"))
             normal = word_audio[index]
             slow = slow_audio[index]
-            normal_start = reveal + self.REVEAL_LEAD_MS
-            slow_start = normal_start + durations[normal] + self.BETWEEN_VOICE_MS[0]
-            final_start = slow_start + durations[slow] + self.BETWEEN_VOICE_MS[1]
-            cursor = final_start + durations[normal] + self.AFTER_WORD_MS
+            # The effect duration is inserted by the pipeline; this named gap is
+            # retained here so there are no magic voice offsets in the pipeline.
+            normal_start = reveal + answer_reveal_duration_ms + timing.post_reveal_sfx_gap_ms
+            slow_start = normal_start + durations[normal] + timing.between_listen_slow_ms
+            final_start = slow_start + durations[slow] + timing.between_slow_repeat_ms
+            cursor = final_start + durations[normal] + timing.after_repeat_ms
             scenes.append(MinigameScene("word", reveal, cursor, index, "answer"))
             scenes.extend(
                 [
@@ -474,21 +576,35 @@ class MinigameTimelineBuilder:
                 ]
             )
             audio_events.extend(
-                [(normal_start, normal), (slow_start, slow), (final_start, normal)]
+                [
+                    MinigameAudioEvent(normal_start, normal, "voice_listen"),
+                    MinigameAudioEvent(slow_start, slow, "voice_slow"),
+                    MinigameAudioEvent(final_start, normal, "voice_repeat"),
+                ]
             )
-        scenes.append(MinigameScene("score", cursor, cursor + self.SCORE_MS))
-        cursor += self.SCORE_MS
-        scenes.append(MinigameScene("review_start", cursor, cursor + self.REVIEW_START_MS))
-        cursor += self.REVIEW_START_MS
+        scenes.append(MinigameScene("score", cursor, cursor + timing.score_ms))
+        scenes.append(MinigameScene("boundary", cursor + 150, cursor + 150, -1, "score_win"))
+        cursor += timing.score_ms
+        scenes.append(MinigameScene("review_start", cursor, cursor + timing.review_start_ms))
+        cursor += timing.review_start_ms
         for index in range(len(items)):
             normal = word_audio[index]
             example = example_audio[index]
             start = cursor
-            word_start = start + self.REVIEW_LEAD_MS
-            example_start = word_start + durations[normal] + self.REVIEW_GAP_MS
-            cursor = example_start + durations[example] + self.REVIEW_AFTER_MS
+            word_start = start + timing.review_lead_ms
+            example_start = word_start + durations[normal] + timing.review_word_to_example_ms
+            cursor = (
+                example_start
+                + durations[example]
+                + timing.review_hold_ms(items[index], durations[example])
+            )
             scenes.append(MinigameScene("review", start, cursor, index))
-            audio_events.extend([(word_start, normal), (example_start, example)])
+            audio_events.extend(
+                [
+                    MinigameAudioEvent(word_start, normal, "review_word"),
+                    MinigameAudioEvent(example_start, example, "review_example"),
+                ]
+            )
         return MinigameTimeline(scenes, audio_events, cursor)
 
 

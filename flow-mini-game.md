@@ -137,7 +137,9 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 1. Composite `review-start-base.png` với hai chuỗi động trong 3,2 giây:
    `Let's review the N words you just learned` và `N/N completed`. Cả hai cùng lấy N từ project;
-   badge auto-fit cả cụm, chừa vùng icon check.
+   badge auto-fit cả cụm trong vùng bên phải icon check của từng theme. Score dùng Montserrat
+   ExtraBold với dạng gọn `N/N` (cỡ 40–62px trên canvas 1080×1920), label `COMPLETE` dùng
+   Montserrat SemiBold (18–23px); vùng badge và cỡ chữ đã tăng để vẫn dễ đọc trên điện thoại.
 2. Phát `review_start_bed` 3,2 giây (gain -18 dB, fade out 450 ms), rồi giữ nguyên màn thêm 650 ms
    không nhạc trước Review card đầu; scene này không có TTS.
 3. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
@@ -179,6 +181,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 - Các section title (`VIETNAMESE MEANING`, `ENGLISH WORD`, `WORD TYPE` và tương đương ở theme/flow)
   dùng style Label 22–34 px; giá trị Word Type dùng 28–46 px ở cả Answer và Review để còn đọc được
   trên màn hình điện thoại nhỏ.
+- Helper dưới ba phase voice (`LISTEN`, `SLOW`, `YOUR TURN`) dùng style đậm 26–42 px thay vì Body
+  18–34 px để đọc được trên màn hình điện thoại.
 - Thêm progress indicator `i/N` có chuyển trạng thái, nhưng không đổi layout artwork theme hoặc che
   vocabulary.
 - Có thể thêm micro-motion nền (zoom/pan 1–2%) trong scene dài để tránh cảm giác ảnh đứng, với điều

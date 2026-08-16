@@ -833,6 +833,20 @@ def test_voice_phase_text_uses_exact_scene_timestamp(tmp_path: Path) -> None:
     assert "1 • LISTEN" in content
 
 
+def test_voice_phase_helper_uses_large_mobile_readable_style(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-1")
+    project = MinigameProject(topic="Hospital", vocabulary=[_item()])
+    timeline = MinigameTimeline([MinigameScene("voice", 0, 1_000, 0, "repeat")], [], 1_000)
+    content = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "voice-helper.ass", "9:16", manifest
+    ).read_text(encoding="utf-8-sig")
+
+    style = manifest.styles["voice_helper"]
+    assert (style.min_size, style.max_size, style.bold) == (26, 42, True)
+    assert "Style: VoiceHelper,Montserrat,42" in content
+    assert ",VoiceHelper," in content
+
+
 def test_review_example_wraps_by_bundled_font_pixel_width(tmp_path: Path) -> None:
     item = VocabularyItem(
         "chăm sóc sức khỏe",
@@ -1088,6 +1102,25 @@ def test_dynamic_hook_review_and_cta_layers_stay_inside_declared_slots(
         for slot_name in slot_names:
             x1, y1, x2, y2 = manifest.slots[slot_name].bounds
             assert np.any(alpha[y1 : y2 + 1, x1 : x2 + 1] > 0), (theme_id, count, slot_name)
+
+
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_review_badge_uses_a_phone_readable_lockup_in_every_theme(
+    tmp_path: Path, theme_id: str
+) -> None:
+    """Keep the score badge large enough after future theme/layout changes."""
+    manifest = MinigameThemeService().get(theme_id)
+    project = MinigameProject(topic="Hospital", vocabulary=[_item()] * 5)
+    output = MinigameTextLayerService().build_review_start(project, manifest, tmp_path)
+
+    with Image.open(output) as image:
+        x1, y1, x2, y2 = manifest.slots["review_badge"].bounds
+        lockup = image.getchannel("A").crop((x1, y1, x2, y2)).getbbox()
+
+    assert lockup is not None
+    width, height = lockup[2] - lockup[0], lockup[3] - lockup[1]
+    assert width >= 240, (theme_id, width)
+    assert height >= 60, (theme_id, height)
 
 
 @pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])

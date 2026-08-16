@@ -186,21 +186,39 @@ class MinigameTextLayerService:
         The check mark is baked into the left side of every theme's pill.  A
         single centred sentence competed with that icon, particularly at small
         preview sizes.  This lockup intentionally uses the remaining visual
-        space: a condensed score as the focal point and a quiet status label.
+        space: a large score as the focal point and a compact status label.
         """
         draw = ImageDraw.Draw(image)
-        number_font = self._font(self.font_dir / "BebasNeue-Regular.ttf", 62)
-        label_font = self._font(self.font_dir / "Montserrat-Variable.ttf", 16)
-        try:
-            label_font.set_variation_by_name("SemiBold")
-        except OSError:
-            pass
-
-        number_box = draw.textbbox((0, 0), value, font=number_font, stroke_width=1)
+        # The old condensed display font made the score look optically left-heavy
+        # next to the wide status label. A shared Montserrat lockup is clearer on
+        # a phone and matches the rest of the review artwork.
+        # Keep the slash tight. It gives the score enough horizontal room to use a
+        # genuinely readable font size, while the separate label retains the
+        # meaning of the total without competing with the count.
+        score = value.replace(" ", "")
         label = "COMPLETE"
-        label_width = draw.textbbox((0, 0), label, font=label_font)[2]
-        number_width = number_box[2] - number_box[0]
-        gap = 12
+        gap = 8
+        available_width = bounds[2] - bounds[0] - 4
+        number_font = self._font(self.font_dir / "Montserrat-Variable.ttf", 62)
+        label_font = self._font(self.font_dir / "Montserrat-Variable.ttf", 23)
+        # One- and two-digit counts stay at the large end of this range. Very
+        # large vocabulary lists shrink only enough to remain inside the pill.
+        for number_size in range(62, 39, -2):
+            number_font = self._font(self.font_dir / "Montserrat-Variable.ttf", number_size)
+            label_font = self._font(
+                self.font_dir / "Montserrat-Variable.ttf", max(18, round(number_size * 0.37))
+            )
+            try:
+                number_font.set_variation_by_name("ExtraBold")
+                label_font.set_variation_by_name("SemiBold")
+            except OSError:
+                pass
+            number_box = draw.textbbox((0, 0), score, font=number_font, stroke_width=1)
+            label_width = draw.textbbox((0, 0), label, font=label_font)[2]
+            number_width = number_box[2] - number_box[0]
+            if number_width + gap + label_width <= available_width:
+                break
+
         lockup_width = number_width + gap + label_width
         x = round((bounds[0] + bounds[2] - lockup_width) / 2)
         center_y = (bounds[1] + bounds[3]) / 2
@@ -210,12 +228,13 @@ class MinigameTextLayerService:
         style = manifest.styles["review_dynamic"]
 
         draw.text(
-            (x, number_y), value, font=number_font,
-            fill=self._rgba(style.color), stroke_fill=self._rgba(style.outline_color), stroke_width=1,
+            (x, number_y), score, font=number_font,
+            fill=self._rgba(manifest.colors.review_primary),
+            stroke_fill=self._rgba(style.outline_color), stroke_width=1,
         )
         draw.text(
             (x + number_width + gap, label_y), label, font=label_font,
-            fill=self._rgba(manifest.colors.review_secondary),
+            fill=self._rgba(manifest.colors.review_primary),
         )
 
     @staticmethod

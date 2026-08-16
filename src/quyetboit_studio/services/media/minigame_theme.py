@@ -53,7 +53,9 @@ class MinigameThemeService:
     }
     # These were reviewed per theme on annotated 1080×1920 composites. The current
     # artwork shares geometry, but keeping an explicit record per theme prevents a
-    # later asset refresh from silently moving every theme at once.
+    # later asset refresh from silently moving every theme at once. The review pill
+    # reserves only its baked-in check mark so the remaining score stays legible on
+    # a phone.
     _DYNAMIC_BOUNDS: ClassVar[
         dict[str, dict[str, tuple[int, int, int, int]]]
     ] = {
@@ -64,7 +66,7 @@ class MinigameThemeService:
             # begins after the baked-in check mark, rather than being centred in
             # the whole pill (which made it look visibly right-heavy).
             "review_sentence": (145, 678, 935, 785),
-            "review_badge": (448, 798, 715, 870),
+            "review_badge": (460, 798, 722, 870),
             "cta_eyebrow": (170, 350, 910, 440),
             "cta_headline": (130, 430, 950, 760),
         }
@@ -275,6 +277,10 @@ class MinigameThemeService:
                 "Body", "Montserrat", "Montserrat-Variable.ttf", 18, 34,
                 role="secondary",
             ),
+            "voice_helper": style(
+                "VoiceHelper", "Montserrat", "Montserrat-Variable.ttf", 26, 42,
+                role="secondary", bold=True,
+            ),
             "ipa": style(
                 "IPA", "Montserrat", "Montserrat-Italic-Variable.ttf", 20, 46,
                 role="secondary", italic=True,
@@ -359,7 +365,7 @@ class MinigameThemeService:
             ),
             "ipa": TextPlacement("ipa", "ipa"),
             "voice_header": TextPlacement("header", "voice_header", layer=2),
-            "voice_helper": TextPlacement("body", "voice_helper", layer=2),
+            "voice_helper": TextPlacement("voice_helper", "voice_helper", layer=2),
             "answer_word_type": TextPlacement("word_type", "answer_word_type", layer=2),
             "review_meaning": TextPlacement("review_meaning", "review_meaning"),
             "review_word": TextPlacement("review_word", "review_word"),
@@ -436,7 +442,7 @@ class MinigameThemeService:
             slots=self._slots(theme_id),
             styles=styles,
             placements=self._placements(),
-            layout_version=13,
+            layout_version=15,
             checksum=checksum,
         )
 

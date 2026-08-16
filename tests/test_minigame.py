@@ -139,6 +139,26 @@ def test_audio_cue_manifest_resolves_bundled_assets_and_reports_missing(tmp_path
         MinigameAudioCueManifest(tmp_path).source("score_win")
 
 
+def test_transition_music_is_restricted_to_short_faded_beds() -> None:
+    manifest = MinigameAudioCueManifest()
+    for semantic in ("hook_bed", "review_start_bed", "cta_bed"):
+        cue = manifest.CUES[semantic]
+        assert cue.is_background_bed
+        assert cue.fade_ms == 180
+        assert manifest.source(semantic).is_file()
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_transition_music_is_trimmed_and_faded_to_its_scene(tmp_path: Path) -> None:
+    service = MinigameAudioService(FFmpegRunner())
+    artifact = service.normalize_cue(MinigameAudioCueManifest(), "hook_bed", tmp_path, duration_ms=3_200)
+
+    assert abs(artifact.duration_ms - 3_200) <= 40
+
+
 def test_timing_changes_invalidate_timeline_cache_but_not_tts_cache(tmp_path: Path) -> None:
     project = MinigameProject(topic="Cache", vocabulary=[_item()])
     pipeline = MinigamePipeline(project, workspace=tmp_path)
@@ -153,7 +173,7 @@ def test_timing_changes_invalidate_timeline_cache_but_not_tts_cache(tmp_path: Pa
     assert pipeline._speech_cache_key("word") == original_tts_key
 
 
-def test_review_cards_use_a_short_fade_between_items(tmp_path: Path) -> None:
+def test_review_cards_keep_the_background_stable_between_items(tmp_path: Path) -> None:
     timeline = MinigameTimeline(
         [
             MinigameScene("hook", 0, 100),
@@ -170,8 +190,28 @@ def test_review_cards_use_a_short_fade_between_items(tmp_path: Path) -> None:
     ]
     scenes = MinigamePipeline._visual_scenes(timeline, *frames)
 
-    assert [scene.fade_in_ms for scene in scenes[-2:]] == [0, 200]
+    assert [scene.fade_in_ms for scene in scenes[-2:]] == [0, 0]
     assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
+
+
+def test_answer_word_reveal_and_review_transition_use_motion(tmp_path: Path) -> None:
+    manifest = MinigameThemeService().get("theme-1")
+    project = MinigameProject(topic="Hospital", vocabulary=[_item()])
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("word", 0, 1_000, 0, "answer"),
+            MinigameScene("review", 1_000, 2_000, 0),
+        ],
+        [],
+        2_000,
+    )
+    content = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "motion.ass", "9:16", manifest
+    ).read_text(encoding="utf-8-sig")
+
+    assert r"\fscx0\fscy0\t(0,240,\alpha&H00&\fscx100\fscy100)" in content
+    assert r"\move(540,1175,540,1147,0,240)" in content
+    assert r"\move(540,383,540,363,0,200)" in content
 
 
 def test_timeline_timestamps_cover_multiple_words_and_clamp_long_review_hold(
@@ -690,7 +730,7 @@ def test_theme_subtitles_take_style_and_coordinates_from_manifest(tmp_path: Path
     placements = dict(manifest.placements)
     placements["meaning_label"] = replace(placements["meaning_label"], y=444)
     styles = dict(manifest.styles)
-    styles["label"] = replace(styles["label"], max_size=19)
+    styles["label"] = replace(styles["label"], min_size=16, max_size=19)
     manifest = replace(manifest, placements=placements, styles=styles)
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
     timeline = MinigameTimeline([MinigameScene("word", 0, 1_000, 0, "question")], [], 1_000)

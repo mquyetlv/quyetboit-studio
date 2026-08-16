@@ -40,6 +40,7 @@ nguyên từ JSON; renderer không tự dịch hoặc sửa nội dung.
 | `countdown_bed` | `assets/audio/sound-effect/clock-tick.mp3` | 3,709 giây | Nhạc nền duy nhất của countdown |
 | `answer_reveal` | `assets/audio/sound-effect/hoan-thanh/Happy Win Game.mp3` | 1,858 giây | Phần thưởng khi English word xuất hiện |
 | `score_win` | `assets/audio/sound-effect/hoan-thanh/Cartoon Big Win.mp3` | 4,340 giây | Mở màn kết quả |
+| `hook_bed`, `review_start_bed`, `cta_bed` | `assets/audio/sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3` | 35,135 giây | Nhạc nền cho ba scene chuyển tiếp im lặng; mỗi đoạn trim đúng scene với fade 180 ms ở hai đầu |
 
 Không tham chiếu asset bằng working directory. Đường dẫn phải resolve tương đối từ package
 `quyetboit_studio`. Mỗi asset được decode/normalize một lần sang PCM mono 48 kHz trong cache; cache key
@@ -78,8 +79,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 1. Composite `start-base.png` với hai số động `N`, Topic và artwork tĩnh trong 3,2 giây. Nội dung
    tương đương `CAN YOU GET N OUT OF N?`, với `N = len(project.vocabulary)` trong miền 1–50.
-2. Giữ cue mở đầu hiện có nếu không xung đột; không dùng một trong bốn asset semantic phía trên sai
-   vai trò.
+2. Phát `hook_bed` (gain -18 dB, fade 180 ms) xuyên suốt Hook. Nhạc nền chỉ nằm trong scene không
+   có TTS; không dùng asset semantic khác sai vai trò.
 3. Topic dài và số hai chữ số vẫn auto-fit theo manifest; cover là byte-for-byte cùng frame Hook,
    không có nhánh render riêng. Đổi N, asset, font hoặc layout phải invalid cache frame.
 4. Mỗi theme có `digit-atlas.png` RGBA gồm lưới 5×2 cho số 0–9. Manifest lưu typed grid metrics,
@@ -109,7 +110,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 ### 4.3. Answer và ba phase voice
 
-1. English word + IPA xuất hiện bằng reveal ngắn 180–260 ms.
+1. English word xuất hiện bằng reveal 240 ms: bay lên 28 px, opacity 0→100% và scale 0→100%; IPA
+   giữ fade ngắn để kết quả có điểm nhấn mà không che nội dung.
 2. Phát trọn `Happy Win Game.mp3` tại đầu Answer.
 3. Sau khi effect kết thúc, giữ gap 450 ms rồi mới bắt đầu voice English đầu tiên. Effect không được
    chồng lên TTS.
@@ -131,10 +133,13 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 1. Composite `review-start-base.png` với hai chuỗi động trong 3,2 giây:
    `Let's review the N words you just learned` và `N/N completed`. Cả hai cùng lấy N từ project;
    badge auto-fit cả cụm, chừa vùng icon check.
-2. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
-3. Phát voice của từ, chờ 900 ms, rồi phát voice example.
-4. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
-5. Chuyển card bằng fade/slide nhẹ 180–240 ms; không thêm sound effect ở mọi card để tránh mệt tai.
+2. Phát `review_start_bed` (gain -18 dB, fade 180 ms) trong toàn scene Review Start; scene này
+   không có TTS.
+3. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
+4. Phát voice của từ, chờ 900 ms, rồi phát voice example.
+5. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
+6. Giữ background Review ổn định giữa card. Nội dung card mới fade/slide nhẹ 180–240 ms; không
+   fade toàn frame (tránh chớp đen) và không thêm sound effect ở mọi card để tránh mệt tai.
 
 ### 4.6. CTA kết thúc
 
@@ -142,8 +147,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 2. Dùng trực tiếp `cta-new.png` riêng từng theme. Đây là artwork hoàn chỉnh với headline,
    nút Like/Share/Subscribe và các hành động lưu, bình luận, luyện tập; không chồng lớp chữ CTA
    động cũ lên artwork.
-3. Scene fade-in 220 ms, không tạo FFmpeg process hoặc audio cue riêng; CTA giữ im lặng nếu audio
-   trước đó đã kết thúc.
+3. Scene fade-in 220 ms và phát `cta_bed` (gain -18 dB, fade 180 ms); nhạc được trim đúng 6,5 giây
+   scene. CTA không có TTS nên không cần ducking.
 4. Nội dung nằm trong safe margin của canvas dọc và không phụ thuộc tên tài khoản.
 
 ## 5. Quy tắc mix audio
@@ -155,8 +160,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
   4–8 dB, true peak toàn timeline không vượt -1,5 dBTP.
 - Không chỉ peak-normalize cả timeline sau khi cộng track vì sẽ làm một effect lớn kéo voice xuống.
   Mỗi nhóm `voice/effect` cần gain staging trước limiter/master.
-- Mọi cue phải có fade in/out ngắn khi trim hoặc pad để không click. Không cắt đuôi MP3 bằng timestamp
-  scene ngắn hơn asset.
+- Mọi cue phải có fade in/out ngắn khi trim hoặc pad để không click. Effect phải phát trọn; riêng ba
+  background bed có chủ đích trim theo duration scene và fade 180 ms ở hai đầu.
 - Nếu asset thiếu/hỏng trong bản cài đặt, preflight báo `minigame_audio_asset_missing` với hướng dẫn
   cài lại. Tone tổng hợp hiện tại chỉ giữ làm fallback có chủ đích cho compatibility/test, không âm
   thầm thay asset trong production.
@@ -165,12 +170,16 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 - Remaining-time progress bar là motion chính của Question; Answer dùng pop/reveal vừa phải; Review
   dùng chuyển động nhẹ hơn.
+- Các section title (`VIETNAMESE MEANING`, `ENGLISH WORD`, `WORD TYPE` và tương đương ở theme/flow)
+  dùng style Label 22–34 px; giá trị Word Type dùng 28–46 px ở cả Answer và Review để còn đọc được
+  trên màn hình điện thoại nhỏ.
 - Thêm progress indicator `i/N` có chuyển trạng thái, nhưng không đổi layout artwork theme hoặc che
   vocabulary.
 - Có thể thêm micro-motion nền (zoom/pan 1–2%) trong scene dài để tránh cảm giác ảnh đứng, với điều
   kiện không làm text rung và render vẫn 1080×1920/30 fps.
-- Không thêm background music liên tục ở giai đoạn đầu. Chỉ bổ sung sau khi có track được xác nhận
-  quyền sử dụng và có ducking dưới voice; quá nhiều lớp âm thanh sẽ làm giảm khả năng học.
+- Không thêm background music liên tục ở các phần học. `hook_bed`, `review_start_bed` và `cta_bed`
+  chỉ phát tại các scene chuyển tiếp không có voice. Track đang chờ xác nhận license/Content ID;
+  không phát hành thương mại nếu chưa có chứng từ quyền sử dụng hoặc Claim Clear.
 - Không random sound/motion giữa các từ. Nhịp lặp lại nhất quán giúp người xem hiểu luật và tham gia.
 
 ## 7. Cách cập nhật thường gặp

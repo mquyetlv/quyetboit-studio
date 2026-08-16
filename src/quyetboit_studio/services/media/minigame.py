@@ -46,12 +46,13 @@ class MinigameAudioCue:
     relative_path: str
     gain_db: float
     fade_ms: int = 35
+    is_background_bed: bool = False
 
 
 class MinigameAudioCueManifest:
     """Bundled production cues. Missing assets are a recoverable preflight error."""
 
-    PROCESSING_VERSION: ClassVar[int] = 1
+    PROCESSING_VERSION: ClassVar[int] = 2
     CUES: ClassVar[dict[str, MinigameAudioCue]] = {
         "question_start": MinigameAudioCue("question_start", "sound-effect/check-mark.mp3", -8.0),
         "countdown_bed": MinigameAudioCue("countdown_bed", "sound-effect/clock-tick.mp3", -7.0),
@@ -60,6 +61,20 @@ class MinigameAudioCueManifest:
         ),
         "score_win": MinigameAudioCue(
             "score_win", "sound-effect/hoan-thanh/Cartoon Big Win.mp3", -6.0
+        ),
+        # This music is deliberately restricted to silent transition scenes. It
+        # never sits underneath TTS, so speech intelligibility is unaffected.
+        "hook_bed": MinigameAudioCue(
+            "hook_bed", "sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3",
+            -18.0, 180, True,
+        ),
+        "review_start_bed": MinigameAudioCue(
+            "review_start_bed", "sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3",
+            -18.0, 180, True,
+        ),
+        "cta_bed": MinigameAudioCue(
+            "cta_bed", "sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3",
+            -18.0, 180, True,
         ),
     }
 
@@ -148,14 +163,17 @@ class MinigameAudioService:
         semantic: str,
         cache_dir: Path,
         *,
+        duration_ms: int | None = None,
         cancel: CancellationToken | None = None,
     ) -> AudioArtifact:
         """Decode a packaged cue once, keyed by bytes/config rather than install path."""
         source = manifest.source(semantic)
         cue = manifest.CUES[semantic]
         checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+        if cue.is_background_bed and (duration_ms is None or duration_ms <= cue.fade_ms * 2):
+            raise ValueError("Nhạc nền minigame cần duration lớn hơn hai lần fade.")
         key = hashlib.sha256(
-            f"{checksum}:{manifest.PROCESSING_VERSION}:{cue.gain_db}:{cue.fade_ms}".encode()
+            f"{checksum}:{manifest.PROCESSING_VERSION}:{cue.gain_db}:{cue.fade_ms}:{duration_ms}".encode()
         ).hexdigest()[:20]
         output = cache_dir / f"{semantic}-{key}.wav"
         if output.is_file():
@@ -166,6 +184,15 @@ class MinigameAudioService:
         output.parent.mkdir(parents=True, exist_ok=True)
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")
         fade_seconds = cue.fade_ms / 1000
+        trim = ""
+        fade_out = ""
+        if cue.is_background_bed:
+            assert duration_ms is not None
+            duration_seconds = duration_ms / 1000
+            trim = f"atrim=duration={duration_seconds:.3f},"
+            fade_out = (
+                f",afade=t=out:st={duration_seconds - fade_seconds:.3f}:d={fade_seconds:.3f}"
+            )
         self.runner.run(
             [
                 "-i",
@@ -173,8 +200,8 @@ class MinigameAudioService:
                 "-vn",
                 "-filter:a",
                 (
-                    f"aformat=channel_layouts=mono,aresample=48000,volume={cue.gain_db}dB,"
-                    f"afade=t=in:st=0:d={fade_seconds}"
+                    f"aformat=channel_layouts=mono,aresample=48000,{trim}volume={cue.gain_db}dB,"
+                    f"afade=t=in:st=0:d={fade_seconds}{fade_out}"
                 ),
                 "-ac",
                 "1",
@@ -607,6 +634,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if placement_name == "word_header":
                 center_x = (x1 + x2) // 2
                 motion = rf"\move({center_x},{center_y - 10},{center_x},{center_y},0,200)"
+            elif placement_name == "english_word":
+                # Answer reveal: fly upward while fading/scaling from zero. This
+                # avoids a static-looking result without revealing the word early.
+                center_x = (x1 + x2) // 2
+                motion = (
+                    rf"\move({center_x},{center_y + 28},{center_x},{center_y},0,240)"
+                    r"\alpha&HFF&\fscx0\fscy0"
+                    r"\t(0,240,\alpha&H00&\fscx100\fscy100)"
+                )
+            elif scene.kind == "review":
+                # Keep the card background stable; only the new card content
+                # glides in. Fading whole frames was the source of the visible
+                # black flash between review words.
+                center_x = (x1 + x2) // 2
+                motion = rf"\move({center_x},{center_y + 20},{center_x},{center_y},0,200)"
             events.append(
                 f"Dialogue: {placement.layer},{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},"
                 f"{style.name},,0,0,0,,{{\\an5\\pos({(x1 + x2) // 2},{center_y})\\fs{size}{motion}\\fad(120,100)}}"

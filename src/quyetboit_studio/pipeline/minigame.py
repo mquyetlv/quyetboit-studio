@@ -52,7 +52,7 @@ class MinigameResult:
 
 
 class MinigamePipeline:
-    TIMELINE_CACHE_VERSION = 5
+    TIMELINE_CACHE_VERSION = 6
 
     def __init__(
         self,
@@ -173,7 +173,8 @@ class MinigamePipeline:
                 semantic: self.audio.normalize_cue(
                     self.cue_manifest, semantic, cue_dir, cancel=self.cancel
                 )
-                for semantic in self.cue_manifest.CUES
+                for semantic, cue in self.cue_manifest.CUES.items()
+                if not cue.is_background_bed
             }
             timeline = self.timeline_builder.build(
                 self.project.vocabulary,
@@ -193,6 +194,27 @@ class MinigamePipeline:
                             scene.start_ms, cue.path, scene.phase, MinigameAudioRole.EFFECT
                         )
                     )
+            scene_beds = {
+                "hook": "hook_bed",
+                "review_start": "review_start_bed",
+                "cta": "cta_bed",
+            }
+            for scene in timeline.scenes:
+                semantic = scene_beds.get(scene.kind)
+                if semantic is None:
+                    continue
+                cue = self.audio.normalize_cue(
+                    self.cue_manifest,
+                    semantic,
+                    cue_dir,
+                    duration_ms=scene.end_ms - scene.start_ms,
+                    cancel=self.cancel,
+                )
+                timeline.audio_events.append(
+                    MinigameAudioEvent(
+                        scene.start_ms, cue.path, semantic, MinigameAudioRole.EFFECT
+                    )
+                )
             timeline_key = self._timeline_cache_key(timeline)
             raw_path = self.workspace / "audio" / f"timeline-{timeline_key}-raw.wav"
             master_path = self.workspace / "audio" / f"timeline-{timeline_key}-master.wav"
@@ -301,9 +323,11 @@ class MinigamePipeline:
             MinigameVisualScene(
                 review_frame,
                 review.end_ms - review.start_ms,
-                fade_in_ms=200 if index else 0,
+                # Review content itself transitions in ASS. Never fade the whole
+                # frame here: that produced a black blink between cards.
+                fade_in_ms=0,
             )
-            for index, review in enumerate(reviews)
+            for review in reviews
         )
         if cta is not None:
             if cta_frame is None:

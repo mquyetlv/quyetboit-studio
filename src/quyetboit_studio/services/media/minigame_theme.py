@@ -242,7 +242,7 @@ class MinigameThemeService:
                 role="accent", bold=True, spacing=3, margin=80,
             ),
             "label": style(
-                "Label", "Montserrat", "Montserrat-Variable.ttf", 16, 24,
+                "Label", "Montserrat", "Montserrat-Variable.ttf", 22, 34,
                 role="accent", bold=True, spacing=4, margin=80,
             ),
             "hero": style(
@@ -280,8 +280,12 @@ class MinigameThemeService:
                 surface="review", role="secondary", italic=True,
             ),
             "review_word_type": style(
-                "ReviewWordType", "Montserrat", "Montserrat-Variable.ttf", 22, 38,
+                "ReviewWordType", "Montserrat", "Montserrat-Variable.ttf", 28, 46,
                 surface="review", role="accent", bold=True,
+            ),
+            "word_type": style(
+                "WordType", "Montserrat", "Montserrat-Variable.ttf", 28, 46,
+                role="accent", bold=True, spacing=2,
             ),
             "review_example": style(
                 "ReviewExample", "Montserrat", "Montserrat-Variable.ttf", 24, 44,
@@ -344,7 +348,7 @@ class MinigameThemeService:
             "ipa": TextPlacement("ipa", "ipa"),
             "voice_header": TextPlacement("header", "voice_header", layer=2),
             "voice_helper": TextPlacement("body", "voice_helper", layer=2),
-            "answer_word_type": TextPlacement("header", "answer_word_type", layer=2),
+            "answer_word_type": TextPlacement("word_type", "answer_word_type", layer=2),
             "review_meaning": TextPlacement("review_meaning", "review_meaning"),
             "review_word": TextPlacement("review_word", "review_word"),
             "review_ipa": TextPlacement("review_ipa", "review_ipa"),

@@ -52,7 +52,7 @@ class MinigameResult:
 
 
 class MinigamePipeline:
-    TIMELINE_CACHE_VERSION = 4
+    TIMELINE_CACHE_VERSION = 5
 
     def __init__(
         self,
@@ -108,9 +108,6 @@ class MinigamePipeline:
             review_start_text = self.text_layers.build_review_start(
                 self.project, manifest, self.workspace / "theme-text"
             )
-            cta_text = self.text_layers.build_cta(
-                self.project, manifest, self.workspace / "theme-text"
-            )
             frame_layout_key = {
                 "version": manifest.layout_version,
                 "slots": manifest.slots,
@@ -142,8 +139,8 @@ class MinigamePipeline:
                 layout_key=frame_layout_key,
             )
             cta_frame = self.frames.build(
-                manifest.cta_base,
-                (cta_text,),
+                manifest.cta_screen,
+                (),
                 self.workspace / "visual-frame",
                 layout_key=frame_layout_key,
             )

@@ -28,7 +28,7 @@ nguyên từ JSON; renderer không tự dịch hoặc sửa nội dung.
 | Tọa độ/style theme | `src/quyetboit_studio/services/media/minigame_theme.py` | Thêm track/fill slot cho progress bar trong safe box từng theme |
 | Ghép visual scene | `src/quyetboit_studio/pipeline/minigame.py` — `_visual_scenes()` và `services/media/minigame.py` — `_render_theme()` | Giữ tổng duration visual bằng audio; thêm transition/motion được cache |
 | Preview và thời lượng dự kiến | `src/quyetboit_studio/minigame.py` | Dùng cùng timing profile, không tự tính một bộ số khác |
-| Hook/Review Start/CTA động | `services/media/minigame_text.py`, `services/media/minigame_theme.py` | `N = len(vocabulary)`; Hook dùng digit atlas 0–9 riêng từng theme; RGBA layer cache theo asset/font/layout/N |
+| Hook/Review Start động; CTA tĩnh | `services/media/minigame_text.py`, `services/media/minigame_theme.py` | Hook dùng digit atlas 0–9 riêng từng theme; Review Start dựng RGBA theo `N`; CTA dùng artwork hoàn chỉnh `cta-new.png` riêng từng theme |
 | Regression/integration | `tests/test_minigame.py` | Kiểm tra timestamp, asset mapping, mix, frame animation và render thật |
 | Đóng gói asset | `pyproject.toml` — `[tool.setuptools.package-data]` | Bổ sung `assets/audio/**/*`; hiện mới đóng gói theme và font |
 
@@ -66,7 +66,7 @@ Các mốc dưới đây là baseline để tạo bản render A/B đầu tiên,
 | `REVIEW_WORD_TO_EXAMPLE_MS` | 900 ms | Tách voice từ khỏi voice câu ví dụ |
 | `REVIEW_AFTER_EXAMPLE_MIN_MS` | 1.600 ms | Giữ chữ sau khi voice example kết thúc |
 | `REVIEW_AFTER_EXAMPLE_MAX_MS` | 3.500 ms | Tránh review quá dài với câu rất dài |
-| `CTA_MS` | 4.500 ms | Kết video bằng CTA rõ ràng sau Review cuối |
+| `CTA_MS` | 6.500 ms | CTA mới chứa nhiều hành động cần thời gian đọc thoải mái sau Review cuối |
 
 `REVIEW_AFTER_EXAMPLE_MS` nên tính động theo độ dài phần chữ còn cần đọc, clamp trong khoảng
 1.600–3.500 ms. Công thức phải deterministic và có unit test; baseline: `max(1.600 ms,
@@ -138,10 +138,10 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 ### 4.6. CTA kết thúc
 
-1. Sau Review cuối, thêm scene `cta` đúng 4,5 giây; visual/audio timeline cùng kết thúc tại cuối CTA.
-2. Composite `cta-base.png` riêng từng theme với bốn vùng động: `GREAT WORK!`,
-   `YOU LEARNED N NEW WORDS`, `FOLLOW FOR MORE ENGLISH MINI GAMES` và
-   `SAVE • REVIEW • SHARE`.
+1. Sau Review cuối, thêm scene `cta` đúng 6,5 giây; visual/audio timeline cùng kết thúc tại cuối CTA.
+2. Dùng trực tiếp `cta-new.png` riêng từng theme. Đây là artwork hoàn chỉnh với headline,
+   nút Like/Share/Subscribe và các hành động lưu, bình luận, luyện tập; không chồng lớp chữ CTA
+   động cũ lên artwork.
 3. Scene fade-in 220 ms, không tạo FFmpeg process hoặc audio cue riêng; CTA giữ im lặng nếu audio
    trước đó đã kết thúc.
 4. Nội dung nằm trong safe margin của canvas dọc và không phụ thuộc tên tài khoản.
@@ -207,8 +207,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 - Không sound effect nào bị cắt đuôi hoặc che voice; không clipping/click ở điểm nối.
 - Cache cũ bị invalidate khi timing/audio processing/asset checksum thay đổi, nhưng không synthesize
   lại TTS nếu text/provider/voice không đổi.
-- Hook, Review Start và CTA phải cùng dùng `len(project.vocabulary)`; production không chứa literal
-  `5` cho tổng số câu.
+- Hook và Review Start phải cùng dùng `len(project.vocabulary)`; production không chứa literal `5`
+  cho tổng số câu. CTA là artwork tĩnh riêng từng theme và checksum asset phải làm invalid cache.
 - Atlas số của đúng theme phải có đủ 10 cell alpha, hai cụm số nằm trọn safe box với N=1/5/10/50;
   clean base không còn giữ nguyên pixel của hai vùng số `5` nguồn.
 - Preview và output dùng cùng timing profile.

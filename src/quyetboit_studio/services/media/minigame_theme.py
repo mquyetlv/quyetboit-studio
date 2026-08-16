@@ -379,7 +379,7 @@ class MinigameThemeService:
         review = root / "review.png"
         if not review.is_file():
             review = root / "rewview.png"
-        cta_base = root / "cta-base.png"
+        cta_screen = root / "cta-new.png"
         digit_atlas = root / "digit-atlas.png"
         self._validate_image(start, (941, 1672), "start screen")
         self._validate_image(start_base, (941, 1672), "start clean base")
@@ -389,14 +389,14 @@ class MinigameThemeService:
         self._validate_image(review_start, (941, 1672), "review start screen")
         self._validate_image(review_start_base, (941, 1672), "review start clean base")
         self._validate_image(review, (941, 1672), "review screen")
-        self._validate_image(cta_base, (941, 1672), "CTA base")
+        self._validate_image(cta_screen, (941, 1672), "CTA screen")
         digit_atlas_spec = DigitAtlasSpec()
         self._validate_digit_atlas(digit_atlas, digit_atlas_spec)
         styles = self._styles(theme_id)
         self._validate_fonts(styles)
         checksum = self._checksum(
             (start, start_base, background, text, score, review_start, review_start_base, review,
-            cta_base, digit_atlas)
+            cta_screen, digit_atlas)
         )
         return MinigameThemeManifest(
             theme_id=theme_id,
@@ -413,14 +413,14 @@ class MinigameThemeService:
             review_start_screen=review_start,
             review_start_base=review_start_base,
             review_screen=review,
-            cta_base=cta_base,
+            cta_screen=cta_screen,
             digit_atlas=digit_atlas,
             digit_atlas_spec=digit_atlas_spec,
             mask_profile=self._PROFILES[theme_id],
             slots=self._slots(theme_id),
             styles=styles,
             placements=self._placements(),
-            layout_version=11,
+            layout_version=12,
             checksum=checksum,
         )
 

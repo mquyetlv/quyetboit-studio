@@ -2,7 +2,7 @@
 
 ## Trạng thái triển khai — 2026-08-15
 
-- Hoàn thành và đã kiểm chứng: **30/30 task (100%)**.
+- Hoàn thành và đã kiểm chứng: **31/31 task (100%)**.
 - Đã triển khai một phần: **0/30 task (0%)**.
 - Chờ người dùng nghiệm thu visual: **0/30 task (0%)**.
 - Chưa triển khai: **0/30 task (0%)**.
@@ -30,8 +30,8 @@ Các nguyên nhân đã được xử lý:
    badge `5/5 completed`; nay pipeline dùng clean base và text layer động cho cả hai chuỗi.
 3. Nghĩa tiếng Việt trước đây dùng chung style `Hero` 88/36; nay dùng `question_meaning` 104/44.
 4. Question trước đây chưa có section `ENGLISH WORD`; nay có placeholder grapheme-aware trước reveal.
-5. Timeline trước đây kết thúc ngay sau Review cuối; nay có CTA 4,5 giây, asset/slot/style/timing và
-   transition riêng.
+5. Timeline trước đây kết thúc ngay sau Review cuối; nay có CTA 6,5 giây, artwork hoàn chỉnh theo
+   từng theme và transition riêng.
 
 Hai chuỗi có số trên Review Start phải cùng lấy từ `len(project.vocabulary)`. Nếu chỉ đổi badge mà
 giữ câu `Let’s review the 5 words...`, màn hình vẫn sai với bộ 10 câu.
@@ -86,17 +86,10 @@ giữ câu `Let’s review the 5 words...`, màn hình vẫn sai với bộ 10 c
 
 ### 2.5. CTA kết thúc video
 
-Thêm scene `cta` sau Review cuối, baseline **4.500 ms**. Nội dung không phụ thuộc tên tài khoản để
-không hardcode dữ liệu chưa có trong project:
-
-- Eyebrow: `GREAT WORK!`
-- Headline động: `YOU LEARNED {N} NEW WORDS`
-- Primary CTA: `FOLLOW FOR MORE ENGLISH MINI GAMES`
-- Secondary CTA: `SAVE • REVIEW • SHARE`
-
-Chuyển từ Review cuối bằng fade 220 ms; headline pop nhẹ 220–260 ms, primary CTA vào sau 300 ms và
-giữ ổn định ít nhất 3 giây. Chưa thêm voice hoặc sound effect mới trong phase này; chỉ tái sử dụng
-audio tail nếu không chồng voice và không vi phạm license.
+Thêm scene `cta` sau Review cuối, baseline **6.500 ms**. Mỗi theme dùng trực tiếp artwork hoàn
+chỉnh `cta-new.png`: headline Keep Learning, Like/Share/Subscribe cùng các action lưu, bình luận
+và luyện tập. Không chồng lớp chữ CTA động cũ lên artwork. Chuyển từ Review cuối bằng fade 220 ms;
+chưa thêm voice hoặc sound effect mới trong phase này.
 
 | Theme | Hướng thiết kế CTA | Màu/hiệu ứng chính | Bố cục |
 | --- | --- | --- | --- |
@@ -155,8 +148,8 @@ Mỗi CTA base phải giữ safe margin tối thiểu 80 px trên canvas 1080×1
   scene Hook và `_cover.png`.
 - [x] 18. Composite Review Start từ `review-start-base + dynamic review layer`; không dùng nguyên
   ảnh có số cố định.
-- [x] 19. Thêm `cta_ms=4_500` vào `MinigameTimingProfile`, validation/version và sinh `MinigameScene`
-  loại `cta` ngay sau Review cuối.
+- [x] 19. Thêm `cta_ms` vào `MinigameTimingProfile`, validation/version và sinh `MinigameScene`
+  loại `cta` ngay sau Review cuối; giá trị hiện hành sau CTA refresh là `6_500`.
 - [x] 20. Composite CTA từ `cta-base + dynamic text layer`, thêm vào `_visual_scenes()` và bảo đảm
   tổng duration visual bằng `timeline.duration_ms`.
 - [x] 21. Cập nhật cache key timeline/render: đổi N, theme, asset, font hoặc CTA layout phải invalidate
@@ -177,11 +170,16 @@ Mỗi CTA base phải giữ safe margin tối thiểu 80 px trên canvas 1080×1
 - [x] 27. Frame regression năm theme cho nghĩa Việt ngắn/dài, placeholder ngắn/dài và CTA; xác nhận
   font size Question mới lớn hơn baseline nhưng không overflow.
 - [x] 28. Integration render thật ít nhất hai bộ N=5 và N=10 trên cả năm theme; ffprobe xác nhận video/
-  audio hợp lệ, duration có thêm 4,5 giây CTA, progress 100% và không còn file/process mồ côi.
+  audio hợp lệ, duration có thêm đúng CTA duration đang cấu hình, progress 100% và không còn file/process mồ côi.
 - [x] 29. Xem frame Hook/cover, Question, Review Start và CTA ở 100% cùng bản thu nhỏ mobile; ghi nhận
   A/B hoặc approval cho font số, vị trí từng theme và độ đọc CTA.
 - [x] 30. Cập nhật `flow-mini-game.md`, `README.md`, kế hoạch chính và số liệu checkbox thực tế;
   giữ riêng nhánh đang chờ nghiệm thu visual, không đánh dấu hoàn thành thay người dùng.
+
+### Phase 5 — Refresh CTA artwork
+
+- [x] 31. Dùng `cta-new.png` cho đủ năm theme, bỏ composite lớp CTA động cũ, tăng scene CTA từ
+  4.500 ms lên 6.500 ms, invalid cache timeline/frame và xác nhận bằng full suite Minigame (119 pass).
 
 ### Bằng chứng nghiệm thu
 
@@ -200,12 +198,13 @@ Mỗi CTA base phải giữ safe margin tối thiểu 80 px trên canvas 1080×1
   `cta_ms`, CTA scene và timeline version.
 - `src/quyetboit_studio/services/media/minigame_theme.py`: bounds/style/placement riêng từng theme,
   asset discovery và validation.
-- `src/quyetboit_studio/services/media/minigame_text.py`: challenge count, Review Start và CTA RGBA
+- `src/quyetboit_studio/services/media/minigame_text.py`: challenge count và Review Start RGBA
   layer; cache key gồm N/font/layout.
 - `src/quyetboit_studio/services/media/minigame.py`: Question meaning lớn hơn, English placeholder,
   CTA/render transition.
 - `src/quyetboit_studio/pipeline/minigame.py`: build composite động, cover và nối CTA vào visual scene.
-- `src/quyetboit_studio/assets/theme/theme-{1..5}/`: clean base, digit/style asset và CTA base.
+- `src/quyetboit_studio/assets/theme/theme-{1..5}/`: clean base, digit/style asset và CTA artwork
+  `cta-new.png`.
 - `tests/test_minigame.py`: unit, frame regression và integration FFmpeg; có thể tách test visual nếu
   file tiếp tục lớn.
 - `pyproject.toml`, `flow-mini-game.md`, `README.md`, `plan-implement-chi-tiet-viet-sub.md`: package,
@@ -218,7 +217,8 @@ Mỗi CTA base phải giữ safe margin tối thiểu 80 px trên canvas 1080×1
 2. Nghĩa Việt ở Question lớn hơn rõ rệt so với baseline; từ dài vẫn không tràn panel trên cả năm theme.
 3. Trước reveal, người xem thấy đúng số underscore theo từ; sau reveal chỉ còn đáp án thật.
 4. Review Start dùng đúng N ở cả câu mô tả lẫn badge; N=10/50 không đè icon hoặc ra ngoài pill.
-5. CTA xuất hiện sau Review cuối đủ 4,5 giây, đúng artwork từng theme, có headline động và hai CTA dễ đọc.
+5. CTA xuất hiện sau Review cuối đủ 6,5 giây, dùng đúng `cta-new.png` theo theme và không bị lớp chữ
+   động cũ che lên artwork.
 6. Hook trong video và cover là cùng một frame composite; đổi số câu làm invalid cache đúng.
 7. Timeline audio/visual khớp, output ffprobe hợp lệ, progress đạt 100%, không clipping do thay đổi
    timeline và không có `.partial`/FFmpeg process mồ côi.

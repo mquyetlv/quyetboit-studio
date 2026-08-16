@@ -153,7 +153,7 @@ class MinigameThemeManifest:
     review_start_screen: Path
     review_start_base: Path
     review_screen: Path
-    cta_base: Path
+    cta_screen: Path
     digit_atlas: Path
     digit_atlas_spec: DigitAtlasSpec
     mask_profile: AlphaMaskProfile
@@ -480,9 +480,9 @@ class MinigameTimingProfile:
     review_word_to_example_ms: int = 900
     review_after_example_min_ms: int = 1_600
     review_after_example_max_ms: int = 3_500
-    cta_ms: int = 4_500
+    cta_ms: int = 6_500
     reading_chars_per_second: float = 15.0
-    version: int = 4
+    version: int = 5
 
     def __post_init__(self) -> None:
         numeric = (

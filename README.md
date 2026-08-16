@@ -100,8 +100,8 @@ nếu được cung cấp; câu English và bản dịch dùng hai vùng riêng 
 riêng theo từng theme, còn Word Type/voice ở answer dùng các hàng độc lập để không chồng chữ. Registry tương thích cả tên `review-start-screen.png`, alias
 `start-review-screen.png` của Theme 2 và tên asset hiện có `rewview.png`.
 
-Sau Review cuối, video hiển thị CTA riêng theo từng theme trong 4,5 giây với headline
-`YOU LEARNED N NEW WORDS`, lời mời follow và `SAVE • REVIEW • SHARE`. CTA không gọi thêm TTS và
+Sau Review cuối, video hiển thị artwork CTA mới riêng theo từng theme trong 6,5 giây, gồm các hành
+động Like/Share/Subscribe, lưu video, bình luận và luyện tập. CTA không gọi thêm TTS và
 không làm mất cache voice khi chỉ thay visual/theme.
 
 Màu chữ được định nghĩa riêng cho từng theme và từng surface. Theme 1/4 dùng foreground sáng trên nền

@@ -401,11 +401,13 @@ def test_theme_discovery_and_mask_are_complete_for_all_five_themes(tmp_path: Pat
         assert manifest.review_start_screen.is_file()
         assert manifest.review_start_base.is_file()
         assert manifest.review_screen.is_file()
-        assert manifest.cta_base.is_file()
+        assert manifest.cta_screen.name == "cta-new.png"
+        assert manifest.cta_screen.is_file()
+        with Image.open(manifest.cta_screen) as cta:
+            assert cta.size == (941, 1672)
         assert manifest.digit_atlas.is_file()
         assert manifest.digit_atlas_spec.glyph_count == 10
         result = MinigameAlphaMaskService().build(manifest, tmp_path)
-        from PIL import Image
 
         with Image.open(result) as image:
             assert image.mode == "RGBA"
@@ -1315,6 +1317,7 @@ def test_timeline_uses_all_pronunciations_and_review_examples(tmp_path: Path) ->
     cta = next(scene for scene in timeline.scenes if scene.kind == "cta")
     assert cta.start_ms == max(scene.end_ms for scene in timeline.scenes if scene.kind == "review")
     assert cta.end_ms - cta.start_ms == MinigameTimelineBuilder.CTA_MS
+    assert MinigameTimelineBuilder.CTA_MS == 6_500
 
 
 def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path) -> None:

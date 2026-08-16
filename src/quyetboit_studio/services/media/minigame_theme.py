@@ -130,6 +130,15 @@ class MinigameThemeService:
             "review_word_type": (413, 1227, 667, 1297),
         },
     }
+    # Measured against the thin divider in each canonical background-text asset.
+    # Keeping these per theme prevents an artwork refresh from moving the bar.
+    _COUNTDOWN_BAR_BOUNDS: ClassVar[dict[str, tuple[int, int, int, int]]] = {
+        "theme-1": (175, 878, 905, 920),
+        "theme-2": (170, 880, 910, 922),
+        "theme-3": (180, 884, 900, 926),
+        "theme-4": (170, 882, 910, 924),
+        "theme-5": (175, 884, 905, 926),
+    }
     # Body themes 1/4 are dark; 2/3/5 are light. Review follows the same split except
     # Theme 1, whose review card is light. These semantic palettes are deliberately
     # explicit so no scene inherits an unreadable global white foreground.
@@ -206,6 +215,9 @@ class MinigameThemeService:
                 name: TextSlot(name, bounds, 1)
                 for name, bounds in cls._REVIEW_PILL_BOUNDS[theme_id].items()
             }
+        )
+        slots["countdown_bar"] = TextSlot(
+            "countdown_bar", cls._COUNTDOWN_BAR_BOUNDS[theme_id], 1
         )
         return slots
 
@@ -424,7 +436,7 @@ class MinigameThemeService:
             slots=self._slots(theme_id),
             styles=styles,
             placements=self._placements(),
-            layout_version=12,
+            layout_version=13,
             checksum=checksum,
         )
 

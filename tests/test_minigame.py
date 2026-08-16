@@ -141,11 +141,28 @@ def test_audio_cue_manifest_resolves_bundled_assets_and_reports_missing(tmp_path
 
 def test_transition_music_is_restricted_to_short_faded_beds() -> None:
     manifest = MinigameAudioCueManifest()
-    for semantic in ("hook_bed", "review_start_bed", "cta_bed"):
+    expected_fades = {"hook_bed": 450, "review_start_bed": 450, "cta_bed": 180}
+    for semantic, fade_ms in expected_fades.items():
         cue = manifest.CUES[semantic]
         assert cue.is_background_bed
-        assert cue.fade_ms == 180
+        assert cue.fade_ms == fade_ms
         assert manifest.source(semantic).is_file()
+
+
+def test_hook_and_review_start_have_a_silent_hold_after_music_fades() -> None:
+    timing = MinigameTimingProfile()
+
+    assert timing.hook_ms - timing.hook_bed_ms == timing.hook_tail_hold_ms == 650
+    assert (
+        timing.review_start_ms - timing.review_start_bed_ms
+        == timing.review_start_tail_hold_ms
+        == 650
+    )
+    assert timing.transition_bed_duration_ms("hook", timing.hook_ms) == timing.hook_bed_ms
+    assert (
+        timing.transition_bed_duration_ms("review_start", timing.review_start_ms)
+        == timing.review_start_bed_ms
+    )
 
 
 @pytest.mark.skipif(
@@ -157,6 +174,10 @@ def test_transition_music_is_trimmed_and_faded_to_its_scene(tmp_path: Path) -> N
     artifact = service.normalize_cue(MinigameAudioCueManifest(), "hook_bed", tmp_path, duration_ms=3_200)
 
     assert abs(artifact.duration_ms - 3_200) <= 40
+    with wave.open(str(artifact.path), "rb") as source:
+        source.setpos(max(0, source.getnframes() - 480))
+        tail = np.frombuffer(source.readframes(480), dtype="<i2")
+    assert np.abs(tail).max() < 80
 
 
 def test_timing_changes_invalidate_timeline_cache_but_not_tts_cache(tmp_path: Path) -> None:
@@ -325,12 +346,35 @@ def test_countdown_progress_bar_frames_shrink_monotonically(tmp_path: Path) -> N
         frame_path = tmp_path / f"countdown-{index}.png"
         runner.run(["-ss", str(timestamp), "-i", str(video.path), "-frames:v", "1", str(frame_path)])
         with Image.open(frame_path) as frame:
-            pixels = np.asarray(frame.convert("RGB"))[940:960, 170:910]
+            x1, y1, x2, y2 = manifest.slots["countdown_bar"].bounds
+            pixels = np.asarray(frame.convert("RGB"))[y1:y2, x1:x2]
         cyan = (pixels[:, :, 0] < 120) & (pixels[:, :, 1] > 170) & (pixels[:, :, 2] > 170)
         widths.append(int(np.count_nonzero(np.any(cyan, axis=0))))
 
     assert widths == sorted(widths, reverse=True)
     assert widths[0] > widths[-1] + 400
+
+
+def test_countdown_bar_uses_each_theme_measured_divider_slot(tmp_path: Path) -> None:
+    project = MinigameProject(topic="Test", vocabulary=[_item()])
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("word", 0, 1_000, 0, "question"),
+            MinigameScene("boundary", 0, 0, 0, "countdown_bed"),
+        ],
+        [],
+        1_000,
+    )
+    positions = set()
+    for theme_id, manifest in MinigameThemeService().discover().items():
+        content = MinigameSubtitleBuilder().build(
+            project, timeline, tmp_path / f"{theme_id}.ass", "9:16", manifest
+        ).read_text(encoding="utf-8-sig")
+        x1, y1, _x2, _y2 = manifest.slots["countdown_bar"].bounds
+        positions.add((x1, y1))
+        assert rf"\pos({x1},{y1})" in content
+        assert "REVEALING ANSWER IN" not in content
+    assert len(positions) == 5
 
 
 def test_minigame_content_json_round_trips_every_field_and_normalizes_alias() -> None:
@@ -716,7 +760,7 @@ def test_theme_subtitles_follow_reference_scene_hierarchy(tmp_path: Path) -> Non
 
     assert "CAN YOU GET" not in content
     assert "VIETNAMESE MEANING" in content
-    assert "REVEALING ANSWER IN" in content
+    assert "REVEALING ANSWER IN" not in content
     assert "ENGLISH WORD" in content
     assert "1 • LISTEN" in content
     assert "Listen first, then repeat aloud" in content
@@ -765,8 +809,8 @@ def test_question_scene_never_contains_english_or_ipa_before_reveal(tmp_path: Pa
     assert "word1" not in content
     assert "/wɜːd 1/" not in content
     assert "ENGLISH WORD" in content
-    assert "_____" in content
-    assert "REVEALING ANSWER IN" in content
+    assert "w____" in content
+    assert "REVEALING ANSWER IN" not in content
 
 
 def test_voice_phase_text_uses_exact_scene_timestamp(tmp_path: Path) -> None:
@@ -1393,15 +1437,16 @@ def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path
 @pytest.mark.parametrize(
     ("english", "expected"),
     [
-        ("Doctor", "______"),
-        ("ice cream", "___ _____"),
-        ("mother-in-law", "______-__-___"),
-        ("teacher's", "_______'_"),
-        ("e\u0301lan", "____"),
-        ("👩‍⚕️", "_"),
+        ("Doctor", "D_____"),
+        ("Environment", "E__________"),
+        ("ice cream", "i__ c____"),
+        ("mother-in-law", "m_____-i_-l__"),
+        ("teacher's", "t______'s"),
+        ("e\u0301lan", "é___"),
+        ("👩‍⚕️", "👩‍⚕️"),
     ],
 )
-def test_answer_placeholder_preserves_separators_and_unicode_graphemes(
+def test_answer_placeholder_reveals_each_word_initial_and_keeps_unicode_graphemes(
     english: str, expected: str
 ) -> None:
     assert answer_placeholder(english) == expected

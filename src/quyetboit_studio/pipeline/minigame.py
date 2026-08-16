@@ -207,7 +207,9 @@ class MinigamePipeline:
                     self.cue_manifest,
                     semantic,
                     cue_dir,
-                    duration_ms=scene.end_ms - scene.start_ms,
+                    duration_ms=self.timeline_builder.timing.transition_bed_duration_ms(
+                        scene.kind, scene.end_ms - scene.start_ms
+                    ),
                     cancel=self.cancel,
                 )
                 timeline.audio_events.append(

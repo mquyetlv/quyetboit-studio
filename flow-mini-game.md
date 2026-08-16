@@ -1,7 +1,7 @@
 # Đặc tả luồng video English Mini game
 
 > Trạng thái: **Baseline vNext + dynamic challenge/CTA đã triển khai và nghiệm thu visual**
-> — cập nhật ngày 2026-08-15.
+> — cập nhật ngày 2026-08-16.
 >
 > File này là nguồn tra cứu cho mọi thay đổi về flow, timing, visual scene và sound effect của
 > menu `Tiếng Anh → Mini game`. Khi code và tài liệu khác nhau, phải cập nhật file này cùng thay đổi
@@ -40,7 +40,7 @@ nguyên từ JSON; renderer không tự dịch hoặc sửa nội dung.
 | `countdown_bed` | `assets/audio/sound-effect/clock-tick.mp3` | 3,709 giây | Nhạc nền duy nhất của countdown |
 | `answer_reveal` | `assets/audio/sound-effect/hoan-thanh/Happy Win Game.mp3` | 1,858 giây | Phần thưởng khi English word xuất hiện |
 | `score_win` | `assets/audio/sound-effect/hoan-thanh/Cartoon Big Win.mp3` | 4,340 giây | Mở màn kết quả |
-| `hook_bed`, `review_start_bed`, `cta_bed` | `assets/audio/sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3` | 35,135 giây | Nhạc nền cho ba scene chuyển tiếp im lặng; mỗi đoạn trim đúng scene với fade 180 ms ở hai đầu |
+| `hook_bed`, `review_start_bed`, `cta_bed` | `assets/audio/sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3` | 35,135 giây | Hook/Review Start phát 3,2 giây, fade out 450 ms rồi giữ màn 650 ms im lặng; CTA trim đúng scene với fade 180 ms |
 
 Không tham chiếu asset bằng working directory. Đường dẫn phải resolve tương đối từ package
 `quyetboit_studio`. Mỗi asset được decode/normalize một lần sang PCM mono 48 kHz trong cache; cache key
@@ -52,7 +52,8 @@ Các mốc dưới đây là baseline để tạo bản render A/B đầu tiên,
 
 | Hằng/profile field | Giá trị đề xuất | Lý do |
 | --- | ---: | --- |
-| `HOOK_MS` | 3.200 ms | Đủ đọc topic và hiểu luật, tăng nhẹ từ 2.800 ms |
+| `HOOK_MS` | 3.850 ms | 3,2 giây nhạc (fade out 450 ms) + 650 ms giữ Hook im lặng trước Question |
+| `HOOK_BED_MS` / `HOOK_TAIL_HOLD_MS` | 3.200 / 650 ms | Tách duration nhạc khỏi khoảng dừng màn hình, không chuyển cảnh đột ngột |
 | `QUESTION_INTRO_MS` | 700 ms | Transition + `check-mark`, tạo ranh giới giữa hai từ |
 | `COUNTDOWN_MS` | 3.750 ms | Phát trọn `clock-tick` 3,709 giây và có fade biên |
 | `COUNTDOWN_BAR_START` | 100% | Fill phủ toàn bộ track tại đầu countdown |
@@ -62,7 +63,8 @@ Các mốc dưới đây là baseline để tạo bản render A/B đầu tiên,
 | `BETWEEN_SLOW_REPEAT_MS` | 900 ms | Cho chuẩn bị trước `YOUR TURN` |
 | `AFTER_REPEAT_MS` | 1.200 ms | Khoảng trống để người xem thực sự nhắc lại |
 | `SCORE_MS` | 6.000 ms | Phát trọn Big Win và giữ thêm khoảng 1,66 giây để đọc kết quả |
-| `REVIEW_START_MS` | 3.200 ms | Báo chuyển flow rõ ràng, không quá dài |
+| `REVIEW_START_MS` | 3.850 ms | 3,2 giây nhạc (fade out 450 ms) + 650 ms giữ Review Start im lặng trước card đầu |
+| `REVIEW_START_BED_MS` / `REVIEW_START_TAIL_HOLD_MS` | 3.200 / 650 ms | Tạo nhịp chuyển êm giữa Score và Review |
 | `REVIEW_LEAD_MS` | 650 ms | Cho mắt định vị card trước voice từ |
 | `REVIEW_WORD_TO_EXAMPLE_MS` | 900 ms | Tách voice từ khỏi voice câu ví dụ |
 | `REVIEW_AFTER_EXAMPLE_MIN_MS` | 1.600 ms | Giữ chữ sau khi voice example kết thúc |
@@ -79,8 +81,9 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 1. Composite `start-base.png` với hai số động `N`, Topic và artwork tĩnh trong 3,2 giây. Nội dung
    tương đương `CAN YOU GET N OUT OF N?`, với `N = len(project.vocabulary)` trong miền 1–50.
-2. Phát `hook_bed` (gain -18 dB, fade 180 ms) xuyên suốt Hook. Nhạc nền chỉ nằm trong scene không
-   có TTS; không dùng asset semantic khác sai vai trò.
+2. Phát `hook_bed` trong 3,2 giây (gain -18 dB, fade out 450 ms), rồi giữ nguyên Hook thêm 650 ms
+   không nhạc trước Question. Nhạc nền chỉ nằm trong scene không có TTS; không dùng asset semantic
+   khác sai vai trò.
 3. Topic dài và số hai chữ số vẫn auto-fit theo manifest; cover là byte-for-byte cùng frame Hook,
    không có nhánh render riêng. Đổi N, asset, font hoặc layout phải invalid cache frame.
 4. Mỗi theme có `digit-atlas.png` RGBA gồm lưới 5×2 cho số 0–9. Manifest lưu typed grid metrics,
@@ -99,14 +102,16 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
    mép trái đến mép phải. Trong 3,75 giây, chiều rộng fill giảm liên tục về 0%; mép trái được neo cố
    định và mép phải trượt đều từ phải sang trái. Track nền giữ nguyên để người xem nhìn được phần
    thời gian đã mất và phần còn lại.
-5. Baseline không hiển thị các số lớn `3 → 2 → 1`; label `REVEALING ANSWER IN` và progress bar là
-   tín hiệu countdown chính. Bar phải cập nhật theo thời gian thực ở 30 fps, không giảm theo ba nấc.
+5. Baseline không hiển thị các số lớn `3 → 2 → 1` hoặc label `REVEALING ANSWER IN`. Thanh progress
+   nằm trực tiếp trên divider phía sau vị trí label cũ, theo safe slot `countdown_bar` đo riêng cho
+   từng theme. Bar là capsule có track/outline mờ, fill accent phát sáng nhẹ và cập nhật 30 fps.
 6. `clock-tick.mp3` phát một lần liên tục, không lặp ba bản và không dùng tone tick tổng hợp khi asset
    hợp lệ.
 7. Khi fill chạm 0%, chuyển thẳng sang Answer; không có dead frame và không để bar âm/nhảy ngược.
-8. Trong toàn phase Question, slot English hiển thị label `ENGLISH WORD` và placeholder. Mỗi Unicode
-   grapheme cần đoán thành `_`; khoảng trắng, hyphen và apostrophe được giữ. English/IPA thật chỉ
-   xuất hiện tại boundary `answer_reveal`.
+8. Trong toàn phase Question, slot English hiển thị label `ENGLISH WORD` và hint. Mỗi từ lộ Unicode
+   grapheme đầu tiên, các grapheme còn lại là `_`; khoảng trắng, hyphen và apostrophe được giữ. Ví dụ
+   `Environment → E__________`, `ice cream → i__ c____`. English/IPA thật chỉ xuất hiện tại boundary
+   `answer_reveal`.
 
 ### 4.3. Answer và ba phase voice
 
@@ -133,8 +138,8 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 1. Composite `review-start-base.png` với hai chuỗi động trong 3,2 giây:
    `Let's review the N words you just learned` và `N/N completed`. Cả hai cùng lấy N từ project;
    badge auto-fit cả cụm, chừa vùng icon check.
-2. Phát `review_start_bed` (gain -18 dB, fade 180 ms) trong toàn scene Review Start; scene này
-   không có TTS.
+2. Phát `review_start_bed` 3,2 giây (gain -18 dB, fade out 450 ms), rồi giữ nguyên màn thêm 650 ms
+   không nhạc trước Review card đầu; scene này không có TTS.
 3. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
 4. Phát voice của từ, chờ 900 ms, rồi phát voice example.
 5. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
@@ -160,8 +165,9 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
   4–8 dB, true peak toàn timeline không vượt -1,5 dBTP.
 - Không chỉ peak-normalize cả timeline sau khi cộng track vì sẽ làm một effect lớn kéo voice xuống.
   Mỗi nhóm `voice/effect` cần gain staging trước limiter/master.
-- Mọi cue phải có fade in/out ngắn khi trim hoặc pad để không click. Effect phải phát trọn; riêng ba
-  background bed có chủ đích trim theo duration scene và fade 180 ms ở hai đầu.
+- Mọi cue phải có fade in/out ngắn khi trim hoặc pad để không click. Effect phải phát trọn; Hook và
+  Review Start bed có fade out 450 ms trước silent hold 650 ms, CTA bed trim theo duration CTA với
+  fade 180 ms ở hai đầu.
 - Nếu asset thiếu/hỏng trong bản cài đặt, preflight báo `minigame_audio_asset_missing` với hướng dẫn
   cài lại. Tone tổng hợp hiện tại chỉ giữ làm fallback có chủ đích cho compatibility/test, không âm
   thầm thay asset trong production.

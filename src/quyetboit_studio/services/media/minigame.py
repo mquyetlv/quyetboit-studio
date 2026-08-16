@@ -66,11 +66,11 @@ class MinigameAudioCueManifest:
         # never sits underneath TTS, so speech intelligibility is unaffected.
         "hook_bed": MinigameAudioCue(
             "hook_bed", "sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3",
-            -18.0, 180, True,
+            -18.0, 450, True,
         ),
         "review_start_bed": MinigameAudioCue(
             "review_start_bed", "sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3",
-            -18.0, 180, True,
+            -18.0, 450, True,
         ),
         "cta_bed": MinigameAudioCue(
             "cta_bed", "sound-effect/intro/Be Happy (Teaser) (Kiểm tra bản quyền).mp3",
@@ -656,23 +656,61 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
         def add_countdown_bar(scene: MinigameScene) -> None:
-            """Draw a 30fps left-anchored remaining-time fill (right edge moves left)."""
-            x, y, width, height = 170, 940, 740, 20
-            track = rf"{{\an7\pos({x},{y})\p1\c&H50302010&}}m 0 0 l {width} 0 {width} {height} 0 {height}"
-            events.append(
-                f"Dialogue: 1,{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},Body,,0,0,0,,{track}"
+            """Draw the themed 30fps remaining-time bar over its artwork divider."""
+            slot = manifest.slots["countdown_bar"]
+            x, y, x2, y2 = slot.bounds
+            width, height = x2 - x, y2 - y
+            radius = min(height // 2, 12)
+
+            def pill(width_px: int, height_px: int) -> str:
+                edge = min(radius, width_px // 2)
+                return (
+                    f"m {edge} 0 l {width_px - edge} 0 {width_px} {edge} "
+                    f"{width_px} {height_px - edge} {width_px - edge} {height_px} "
+                    f"{edge} {height_px} 0 {height_px - edge} 0 {edge}"
+                )
+
+            # A translucent capsule and a restrained outline integrate the bar
+            # with every palette while retaining a legible empty-time track.
+            track = (
+                rf"{{\an7\pos({x},{y})\p1\c{_ass_color(manifest.colors.outline, alpha='78')}"
+                rf"\3c{_ass_color(manifest.colors.accent, alpha='70')}\bord2\blur1}}"
+                f"{pill(width, height)}"
+            )
+            inner_height = max(8, height - 14)
+            inner_y = y + (height - inner_height) // 2
+            inner = (
+                rf"{{\an7\pos({x + 7},{inner_y})\p1\c{_ass_color(manifest.colors.primary, alpha='8A')}}}"
+                f"{pill(max(1, width - 14), inner_height)}"
+            )
+            events.extend(
+                (
+                    f"Dialogue: 1,{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},Body,,0,0,0,,{track}",
+                    f"Dialogue: 2,{_ass_time(scene.start_ms)},{_ass_time(scene.end_ms)},Body,,0,0,0,,{inner}",
+                )
             )
             frame_ms = 1_000 / 30
             frame_count = max(1, round((scene.end_ms - scene.start_ms) / frame_ms))
             for frame in range(frame_count):
                 begin = round(scene.start_ms + frame * frame_ms)
                 end = min(scene.end_ms, round(scene.start_ms + (frame + 1) * frame_ms))
-                fill = max(0, round(width * (1 - frame / frame_count)))
+                fill = max(0, round((width - 14) * (1 - frame / frame_count)))
                 if end <= begin or fill <= 0:
                     continue
-                shape = rf"{{\an7\pos({x},{y})\p1\c&H00F4E643&}}m 0 0 l {fill} 0 {fill} {height} 0 {height}"
-                events.append(
-                    f"Dialogue: 2,{_ass_time(begin)},{_ass_time(end)},Body,,0,0,0,,{shape}"
+                fill_shape = pill(fill, inner_height)
+                glow = (
+                    rf"{{\an7\pos({x + 7},{inner_y})\p1\c{_ass_color(manifest.colors.accent, alpha='A8')}"
+                    rf"\bord5\blur6}}{fill_shape}"
+                )
+                shape = (
+                    rf"{{\an7\pos({x + 7},{inner_y})\p1\c{_ass_color(manifest.colors.accent)}}}"
+                    f"{fill_shape}"
+                )
+                events.extend(
+                    (
+                        f"Dialogue: 3,{_ass_time(begin)},{_ass_time(end)},Body,,0,0,0,,{glow}",
+                        f"Dialogue: 4,{_ass_time(begin)},{_ass_time(end)},Body,,0,0,0,,{shape}",
+                    )
                 )
 
         for scene in timeline.scenes:
@@ -691,7 +729,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         "question_english_placeholder",
                         answer_placeholder(item.english),
                     )
-                    add(scene, "reveal_label", "REVEALING ANSWER IN")
                     countdown_start = next(
                         (
                             boundary.start_ms

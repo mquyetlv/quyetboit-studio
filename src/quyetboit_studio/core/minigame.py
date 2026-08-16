@@ -467,7 +467,11 @@ class MinigameAudioEvent:
 class MinigameTimingProfile:
     """Single source of truth for mini-game pacing (all values are milliseconds)."""
 
-    hook_ms: int = 3_200
+    # The music ends before the scene: keeping the artwork briefly on screen
+    # gives viewers a calm visual hand-off into the first question/review card.
+    hook_ms: int = 3_850
+    hook_bed_ms: int = 3_200
+    hook_tail_hold_ms: int = 650
     question_intro_ms: int = 700
     countdown_ms: int = 3_750
     post_reveal_sfx_gap_ms: int = 450
@@ -475,18 +479,22 @@ class MinigameTimingProfile:
     between_slow_repeat_ms: int = 900
     after_repeat_ms: int = 1_200
     score_ms: int = 6_000
-    review_start_ms: int = 3_200
+    review_start_ms: int = 3_850
+    review_start_bed_ms: int = 3_200
+    review_start_tail_hold_ms: int = 650
     review_lead_ms: int = 650
     review_word_to_example_ms: int = 900
     review_after_example_min_ms: int = 1_600
     review_after_example_max_ms: int = 3_500
     cta_ms: int = 6_500
     reading_chars_per_second: float = 15.0
-    version: int = 5
+    version: int = 6
 
     def __post_init__(self) -> None:
         numeric = (
             self.hook_ms,
+            self.hook_bed_ms,
+            self.hook_tail_hold_ms,
             self.question_intro_ms,
             self.countdown_ms,
             self.post_reveal_sfx_gap_ms,
@@ -495,6 +503,8 @@ class MinigameTimingProfile:
             self.after_repeat_ms,
             self.score_ms,
             self.review_start_ms,
+            self.review_start_bed_ms,
+            self.review_start_tail_hold_ms,
             self.review_lead_ms,
             self.review_word_to_example_ms,
             self.review_after_example_min_ms,
@@ -505,6 +515,18 @@ class MinigameTimingProfile:
             raise ValueError("Các giá trị timing minigame phải lớn hơn 0.")
         if self.review_after_example_min_ms > self.review_after_example_max_ms:
             raise ValueError("Review hold tối thiểu không được lớn hơn tối đa.")
+        if self.hook_bed_ms + self.hook_tail_hold_ms > self.hook_ms:
+            raise ValueError("Hook music và thời gian giữ màn hình vượt quá duration Hook.")
+        if self.review_start_bed_ms + self.review_start_tail_hold_ms > self.review_start_ms:
+            raise ValueError("Review Start music và thời gian giữ màn hình vượt quá duration scene.")
+
+    def transition_bed_duration_ms(self, scene_kind: str, scene_duration_ms: int) -> int:
+        """Return the audible part of a transition scene, never its silent hold."""
+        if scene_kind == "hook":
+            return min(scene_duration_ms, self.hook_bed_ms)
+        if scene_kind == "review_start":
+            return min(scene_duration_ms, self.review_start_bed_ms)
+        return scene_duration_ms
 
     def review_hold_ms(self, item: VocabularyItem, example_audio_ms: int) -> int:
         text = f"{item.example} {item.example_vietnamese}".strip()
@@ -633,7 +655,7 @@ class MinigameTimelineBuilder:
 
 
 def answer_placeholder(english: str) -> str:
-    """Hide each Unicode grapheme while preserving word-boundary separators."""
+    """Reveal each word's first grapheme while preserving its remaining shape."""
     clusters: list[str] = []
     join_next = False
     regional_count = 0
@@ -659,7 +681,18 @@ def answer_placeholder(english: str) -> str:
             clusters.append(char)
             regional_count = regional_count + 1 if is_regional else 0
     separators = {"-", "'", "’"}
-    return "".join(cluster if cluster.isspace() or cluster in separators else "_" for cluster in clusters)
+    hint: list[str] = []
+    at_word_start = True
+    for cluster in clusters:
+        if cluster.isspace() or cluster in separators:
+            hint.append(cluster)
+            at_word_start = True
+        elif at_word_start:
+            hint.append(cluster)
+            at_word_start = False
+        else:
+            hint.append("_")
+    return "".join(hint)
 
 
 def score_ranges(

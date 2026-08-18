@@ -1563,6 +1563,38 @@ def test_minigame_speech_normalization_trims_provider_silence(tmp_path: Path) ->
     assert 250 <= output.duration_ms <= 500
 
 
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_minigame_speech_normalization_fades_nonzero_clip_edges(tmp_path: Path) -> None:
+    """A clipped TTS waveform must enter and exit at silence, not a hard edge."""
+    runner = FFmpegRunner()
+    source = tmp_path / "speech-hard-edge.wav"
+    runner.run(
+        [
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=0.8:s=48000:d=0.12",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+            str(source),
+        ]
+    )
+
+    output = MinigameAudioService(runner).normalize(source, tmp_path / "click-safe.wav")
+    with wave.open(str(output.path), "rb") as audio:
+        samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2")
+
+    fade_samples = round(MinigameAudioService.SPEECH_EDGE_FADE_SECONDS * 48_000)
+    assert abs(int(samples[0])) <= 1
+    assert abs(int(samples[fade_samples])) > 10_000
+    assert np.max(np.abs(samples[-100:])) <= 1
+
+
 def test_minigame_page_has_json_editor_and_tracks_valid_content(qtbot) -> None:
     page = MinigamePage()
     qtbot.addWidget(page)

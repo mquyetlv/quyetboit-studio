@@ -123,6 +123,11 @@ def _ass_color(value: str, *, alpha: str = "00") -> str:
 
 
 class MinigameAudioService:
+    # Removing provider padding can expose a non-zero waveform boundary.  A
+    # short ramp prevents that discontinuity from becoming an audible click
+    # when the clip is placed directly on the assembled timeline.
+    SPEECH_EDGE_FADE_SECONDS = 0.012
+
     def __init__(self, runner: FFmpegRunner | None = None) -> None:
         self.runner = runner or FFmpegRunner()
 
@@ -140,7 +145,13 @@ class MinigameAudioService:
                 (
                     "silenceremove=start_periods=1:start_duration=0.04:"
                     "start_threshold=-45dB:stop_periods=-1:stop_duration=0.10:"
-                    "stop_threshold=-45dB,apad=pad_dur=0.08"
+                    "stop_threshold=-45dB,"
+                    f"afade=t=in:st=0:d={self.SPEECH_EDGE_FADE_SECONDS},"
+                    # Reverse makes this a duration-independent fade-out: it
+                    # also works when providers return clips of different
+                    # lengths, without needing to probe before filtering.
+                    f"areverse,afade=t=in:st=0:d={self.SPEECH_EDGE_FADE_SECONDS},"
+                    "areverse,apad=pad_dur=0.08"
                 ),
                 "-ac",
                 "1",

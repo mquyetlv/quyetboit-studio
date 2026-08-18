@@ -361,7 +361,9 @@ class MinigamePipeline:
                 "language": self.project.voice_language,
                 "volume": self.project.volume,
                 "text": text,
-                "speech_processing_version": 2,
+                # Version 3 adds click-safe fades after trimming.  Do not
+                # reuse cache entries created before the waveform fix.
+                "speech_processing_version": 3,
             }
         )[:20]
 

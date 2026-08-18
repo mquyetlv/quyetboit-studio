@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QObject,
+    QSettings,
+    QSize,
+    QStandardPaths,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -19,6 +30,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -50,6 +62,57 @@ from .minigame_voice import MinigameVoiceDialog
 from .pipeline.minigame import MinigamePipeline, MinigameResult
 from .services.media.minigame_text import MinigameTextLayerService
 from .services.media.minigame_theme import MinigameThemeService
+
+
+class MinigameThemeDialog(QDialog):
+    """Choose a theme without exposing the full gallery on the main form."""
+
+    def __init__(
+        self,
+        *,
+        theme_service: MinigameThemeService,
+        selected_theme_id: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Cấu hình theme English Mini Game")
+        self.resize(720, 520)
+        self._selected_theme_id = selected_theme_id
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+        note = QLabel("Chọn một theme dọc 9:16 cho video minigame.")
+        note.setObjectName("Subtitle")
+        root.addWidget(note)
+        self.theme_group = QButtonGroup(self)
+        self.theme_group.setExclusive(True)
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        for index, (theme_id, manifest) in enumerate(theme_service.discover().items()):
+            card = QToolButton()
+            card.setCheckable(True)
+            card.setIcon(QIcon(str(manifest.start_screen)))
+            card.setIconSize(QSize(108, 192))
+            card.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            card.setText(f"{manifest.display_name}\n{' · '.join(manifest.palette)}")
+            card.setToolTip(f"{manifest.display_name} · hỗ trợ: {', '.join(manifest.supported_formats)}")
+            card.setChecked(theme_id == selected_theme_id)
+            card.clicked.connect(lambda _checked=False, value=theme_id: self._select(value))
+            self.theme_group.addButton(card)
+            grid.addWidget(card, index // 3, index % 3)
+        root.addLayout(grid)
+        controls = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save
+        )
+        controls.accepted.connect(self.accept)
+        controls.rejected.connect(self.reject)
+        root.addWidget(controls)
+
+    def _select(self, theme_id: str) -> None:
+        self._selected_theme_id = theme_id
+
+    def selected_theme_id(self) -> str:
+        return self._selected_theme_id
 
 
 class MinigameWorker(QObject):
@@ -122,19 +185,28 @@ class MinigamePage(QWidget):
         self.project_uuid = MinigameProject().project_uuid
         self._loading_project = False
         self._last_valid_content = MinigameContent.blank(5)
+        self._auto_output_name = True
+        self.preferences = QSettings("QuyetBoIT", "QuyetBoITStudio")
         default_account = Path.cwd() / "services-account.json"
-        self.voice_provider = MinigameTtsProvider.GOOGLE.value
-        self.voice_id = "en-US-Neural2-F"
-        self.voice_name = "en-US-Neural2-F"
-        self.voice_language = "en-US"
-        self.voice_gender = ""
-        self.voice_family = "Neural2"
-        self.voice_categories: list[str] = ["Neural2", "en"]
+        self.voice_provider = str(
+            self.preferences.value("minigame/voice/provider", MinigameTtsProvider.GOOGLE.value)
+        )
+        self.voice_id = str(self.preferences.value("minigame/voice/id", "en-US-Neural2-F"))
+        self.voice_name = str(self.preferences.value("minigame/voice/name", self.voice_id))
+        self.voice_language = str(self.preferences.value("minigame/voice/language", "en-US"))
+        self.voice_gender = str(self.preferences.value("minigame/voice/gender", ""))
+        self.voice_family = str(self.preferences.value("minigame/voice/family", "Neural2"))
+        cached_categories = self.preferences.value("minigame/voice/categories", ["Neural2", "en"])
+        self.voice_categories = (
+            [str(value) for value in cached_categories]
+            if isinstance(cached_categories, list)
+            else ["Neural2", "en"]
+        )
         self.service_account_path = (
             str(default_account.resolve()) if default_account.is_file() else ""
         )
-        self.voice_volume = 100
-        self.slow_rate = 0.72
+        self.voice_volume = int(self.preferences.value("minigame/voice/volume", 100))
+        self.slow_rate = float(self.preferences.value("minigame/voice/slow_rate", 0.72))
         self.theme_service = MinigameThemeService()
         self.text_layers = MinigameTextLayerService()
         cache_location = QStandardPaths.writableLocation(
@@ -197,7 +269,26 @@ class MinigamePage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        source_card, source = self._card("1. Giao diện và định dạng")
+        theme_card, theme = self._card("1. Cấu hình theme")
+        self.theme_id = QComboBox()
+        for theme_id, manifest in self.theme_service.discover().items():
+            self.theme_id.addItem(manifest.display_name, theme_id)
+        cached_theme_id = str(self.preferences.value("minigame/theme_id", "theme-1"))
+        cached_theme_index = self.theme_id.findData(cached_theme_id)
+        self.theme_id.setCurrentIndex(max(0, cached_theme_index))
+        self.theme_id.currentIndexChanged.connect(self._update_theme_summary)
+        self.theme_id.currentIndexChanged.connect(self._update_preview)
+        self.theme_summary = QLabel()
+        self.theme_summary.setObjectName("Subtitle")
+        self.theme_summary.setWordWrap(True)
+        self.theme_config_button = QPushButton("Cấu hình theme…")
+        self.theme_config_button.clicked.connect(self._open_theme_dialog)
+        theme.addWidget(self.theme_summary)
+        theme.addWidget(self.theme_config_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._update_theme_summary()
+        layout.addWidget(theme_card)
+
+        source_card, source = self._card("2. Giao diện và định dạng")
         source_form = QFormLayout()
         self.aspect = QComboBox()
         self.aspect.addItem("YouTube 16:9", MinigameFormat.YOUTUBE.value)
@@ -208,38 +299,6 @@ class MinigamePage(QWidget):
         self.aspect.setCurrentIndex(1)
         self.aspect.setToolTip("Bộ asset hiện chỉ được thiết kế cho video dọc 9:16.")
         self.aspect.currentIndexChanged.connect(self._update_preview)
-        self.theme_id = QComboBox()
-        self.theme_cards: list[QToolButton] = []
-        self.theme_group = QButtonGroup(self)
-        self.theme_group.setExclusive(True)
-        theme_cards_widget = QWidget()
-        theme_cards_layout = QGridLayout(theme_cards_widget)
-        theme_cards_layout.setContentsMargins(0, 0, 0, 0)
-        theme_cards_layout.setSpacing(8)
-        for theme_id, manifest in self.theme_service.discover().items():
-            thumbnail = QPixmap(str(manifest.start_screen)).scaledToHeight(72)
-            self.theme_id.addItem(QIcon(thumbnail), manifest.display_name, theme_id)
-            card = QToolButton()
-            card.setCheckable(True)
-            card.setIcon(QIcon(str(manifest.start_screen)))
-            card.setIconSize(QSize(72, 128))
-            card.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-            palette = " · ".join(manifest.palette)
-            card.setText(f"{manifest.display_name}\n9:16\n{palette}")
-            card.setToolTip(
-                f"{manifest.display_name} · hỗ trợ: {', '.join(manifest.supported_formats)}"
-            )
-            index = self.theme_id.count() - 1
-            card.clicked.connect(
-                lambda _checked=False, value=index: self.theme_id.setCurrentIndex(value)
-            )
-            self.theme_group.addButton(card, index)
-            self.theme_cards.append(card)
-            theme_cards_layout.addWidget(card, index // 3, index % 3)
-        self.theme_cards[0].setChecked(True)
-        self.theme_id.setVisible(False)
-        self.theme_id.currentIndexChanged.connect(self._update_preview)
-        self.theme_id.currentIndexChanged.connect(self._sync_theme_card)
         video_row = QWidget()
         video_layout = QHBoxLayout(video_row)
         video_layout.setContentsMargins(0, 0, 0, 0)
@@ -250,7 +309,6 @@ class MinigamePage(QWidget):
         choose_video.clicked.connect(self._choose_video)
         video_layout.addWidget(self.video_path, 1)
         video_layout.addWidget(choose_video)
-        source.addWidget(theme_cards_widget)
         source_form.addRow("Tỷ lệ", self.aspect)
         source_form.addRow("Video nền legacy", video_row)
         source.addLayout(source_form)
@@ -284,7 +342,7 @@ class MinigamePage(QWidget):
                 self.crop_9_x, self.crop_9_y = x, y
         layout.addWidget(source_card)
 
-        content_card, vocabulary_layout = self._card("2. Nội dung bắt buộc")
+        content_card, vocabulary_layout = self._card("3. Nội dung bắt buộc")
         json_help = QLabel(
             "Nhập một object JSON gồm schemaVersion, topic và words. Mỗi từ có đủ: "
             "vietnamese, english, ipa, wordType, example, exampleVietnamese, level "
@@ -320,7 +378,7 @@ class MinigamePage(QWidget):
         vocabulary_layout.addWidget(self.content_status)
         layout.addWidget(content_card)
 
-        voice_card, voice = self._card("3. Voice")
+        voice_card, voice = self._card("4. Cấu hình giọng đọc")
         self.voice_summary = QLabel()
         self.voice_summary.setWordWrap(True)
         self.voice_summary.setObjectName("Subtitle")
@@ -331,7 +389,7 @@ class MinigamePage(QWidget):
         self._update_voice_summary()
         layout.addWidget(voice_card)
 
-        output_card, output = self._card("4. Xuất video")
+        output_card, output = self._card("5. Xuất video")
         output_form = QFormLayout()
         folder_row = QWidget()
         folder_layout = QHBoxLayout(folder_row)
@@ -341,7 +399,9 @@ class MinigamePage(QWidget):
         choose_folder.clicked.connect(self._choose_output_folder)
         folder_layout.addWidget(self.output_folder, 1)
         folder_layout.addWidget(choose_folder)
-        self.output_name = QLineEdit("english_minigame")
+        self.output_name = QLineEdit()
+        self.output_name.setPlaceholderText("Tự động lấy từ Topic; bạn có thể sửa lại")
+        self.output_name.textEdited.connect(self._mark_output_name_custom)
         output_form.addRow("Thư mục", folder_row)
         output_form.addRow("Tên video", self.output_name)
         output.addLayout(output_form)
@@ -371,10 +431,32 @@ class MinigamePage(QWidget):
         layout.addStretch()
         return panel
 
-    @Slot(int)
-    def _sync_theme_card(self, index: int) -> None:
-        if 0 <= index < len(self.theme_cards):
-            self.theme_cards[index].setChecked(True)
+    def _open_theme_dialog(self) -> None:
+        dialog = MinigameThemeDialog(
+            theme_service=self.theme_service,
+            selected_theme_id=str(self.theme_id.currentData()),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_theme_id = dialog.selected_theme_id()
+        index = self.theme_id.findData(selected_theme_id)
+        if index < 0:
+            return
+        self.theme_id.setCurrentIndex(index)
+        self.preferences.setValue("minigame/theme_id", selected_theme_id)
+
+    def _update_theme_summary(self) -> None:
+        theme_id = str(self.theme_id.currentData())
+        try:
+            manifest = self.theme_service.get(theme_id)
+        except PipelineError:
+            self.theme_summary.setText("Chưa chọn theme hợp lệ.")
+            return
+        self.theme_summary.setText(
+            f"{manifest.display_name} · {' · '.join(manifest.palette)} · "
+            f"hỗ trợ {', '.join(manifest.supported_formats)}"
+        )
 
     def _preview_panel(self) -> QWidget:
         card, layout = self._card("Preview bố cục")
@@ -413,7 +495,15 @@ class MinigamePage(QWidget):
                 f"Cấu trúc JSON hợp lệ · Topic: {content.topic or '(chưa nhập)'} · "
                 f"{len(content.words)} từ"
             )
+            self._sync_output_name_from_topic(content.topic)
         self._update_preview()
+
+    def _mark_output_name_custom(self, _value: str) -> None:
+        self._auto_output_name = False
+
+    def _sync_output_name_from_topic(self, topic: str) -> None:
+        if self._auto_output_name and topic.strip():
+            self.output_name.setText(topic.strip())
 
     def _load_content_json(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Mở dữ liệu Minigame", "", "JSON (*.json)")
@@ -487,7 +577,19 @@ class MinigamePage(QWidget):
             self.aspect.setCurrentIndex(format_index if format_index >= 0 else 1)
             self.video_path.setText(project.background_video)
             self.output_folder.setText(project.output_folder)
-            self.output_name.setText(project.output_name)
+            # MainWindow restores a blank MinigameProject on every new app
+            # session.  Treat its empty/legacy/default name as automatic so a
+            # Topic entered in the JSON editor can populate this field.  A
+            # saved name different from the Topic remains an explicit edit.
+            stored_name = project.output_name.strip()
+            self._auto_output_name = stored_name in {
+                "",
+                "english_minigame",
+                project.topic.strip(),
+            }
+            self.output_name.setText(
+                project.topic.strip() if self._auto_output_name and project.topic.strip() else stored_name
+            )
             self.voice_provider = project.tts_provider
             self.voice_id = project.voice
             self.voice_name = project.voice
@@ -612,7 +714,20 @@ class MinigamePage(QWidget):
         self.voice_categories = list(config["voice_categories"])  # type: ignore[arg-type]
         self.voice_volume = int(config["volume"])
         self.slow_rate = float(config["slow_rate"])
+        self._cache_voice_configuration()
         self._update_voice_summary()
+
+    def _cache_voice_configuration(self) -> None:
+        """Persist the last non-sensitive voice selection for the next minigame."""
+        self.preferences.setValue("minigame/voice/provider", self.voice_provider)
+        self.preferences.setValue("minigame/voice/id", self.voice_id)
+        self.preferences.setValue("minigame/voice/name", self.voice_name)
+        self.preferences.setValue("minigame/voice/language", self.voice_language)
+        self.preferences.setValue("minigame/voice/gender", self.voice_gender)
+        self.preferences.setValue("minigame/voice/family", self.voice_family)
+        self.preferences.setValue("minigame/voice/categories", self.voice_categories)
+        self.preferences.setValue("minigame/voice/volume", self.voice_volume)
+        self.preferences.setValue("minigame/voice/slow_rate", self.slow_rate)
 
     def _update_voice_summary(self) -> None:
         provider = "Google Cloud TTS" if self.voice_provider == "google" else "CapCut TTS"

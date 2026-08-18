@@ -66,7 +66,7 @@ Các mốc dưới đây là baseline để tạo bản render A/B đầu tiên,
 | `REVIEW_START_MS` | 3.850 ms | 3,2 giây nhạc (fade out 450 ms) + 650 ms giữ Review Start im lặng trước card đầu |
 | `REVIEW_START_BED_MS` / `REVIEW_START_TAIL_HOLD_MS` | 3.200 / 650 ms | Tạo nhịp chuyển êm giữa Score và Review |
 | `REVIEW_LEAD_MS` | 650 ms | Cho mắt định vị card trước voice từ |
-| `REVIEW_WORD_TO_EXAMPLE_MS` | 900 ms | Tách voice từ khỏi voice câu ví dụ |
+| `REVIEW_WORD_TO_EXAMPLE_MS` | 1.800 ms | Cho người xem đọc hết từ/IPA/nghĩa trên card trước khi voice câu ví dụ bắt đầu |
 | `REVIEW_AFTER_EXAMPLE_MIN_MS` | 1.600 ms | Giữ chữ sau khi voice example kết thúc |
 | `REVIEW_AFTER_EXAMPLE_MAX_MS` | 3.500 ms | Tránh review quá dài với câu rất dài |
 | `CTA_MS` | 6.500 ms | CTA mới chứa nhiều hành động cần thời gian đọc thoải mái sau Review cuối |
@@ -120,11 +120,15 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 2. Phát trọn `Happy Win Game.mp3` tại đầu Answer.
 3. Sau khi effect kết thúc, giữ gap 450 ms rồi mới bắt đầu voice English đầu tiên. Effect không được
    chồng lên TTS.
-4. Phase `LISTEN`: phát voice tự nhiên; giữ label trong toàn clip và 700 ms sau clip.
-5. Phase `SLOW`: phát slow voice; giữ label trong toàn clip và 900 ms sau clip.
-6. Phase `YOUR TURN`: phát lại mẫu tự nhiên như hành vi hiện tại, sau đó giữ 1.200 ms yên lặng để
+4. Khi bắt đầu mỗi phase `LISTEN`, `SLOW` hoặc `YOUR TURN`, hiện label và helper của phase đó ngay
+   từ boundary. Giữ nguyên hai text này cho đến boundary bắt đầu phase kế tiếp; riêng `YOUR TURN`
+   được giữ đến khi chuyển sang Question của từ kế tiếp hoặc Score. Không ẩn text chỉ vì TTS của
+   phase vừa phát xong.
+5. Phase `LISTEN`: phát voice tự nhiên; label tiếp tục hiển thị trong 700 ms sau clip.
+6. Phase `SLOW`: phát slow voice; label tiếp tục hiển thị trong 900 ms sau clip.
+7. Phase `YOUR TURN`: phát lại mẫu tự nhiên như hành vi hiện tại, sau đó giữ 1.200 ms yên lặng để
    người xem nhắc lại. Nếu sau này đổi thành phase hoàn toàn im lặng, đó là thay đổi flow cần xác nhận.
-7. Sang từ tiếp theo bằng `question_start`; không chèn thêm effect khác khiến âm thanh dày đặc.
+8. Sang từ tiếp theo bằng `question_start`; không chèn thêm effect khác khiến âm thanh dày đặc.
 
 ### 4.4. Score
 
@@ -143,7 +147,7 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 2. Phát `review_start_bed` 3,2 giây (gain -18 dB, fade out 450 ms), rồi giữ nguyên màn thêm 650 ms
    không nhạc trước Review card đầu; scene này không có TTS.
 3. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
-4. Phát voice của từ, chờ 900 ms, rồi phát voice example.
+4. Phát voice của từ, chờ 1.800 ms, rồi phát voice example để người xem kịp đọc toàn bộ card.
 5. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
 6. Giữ background Review ổn định giữa card. Nội dung card mới fade/slide nhẹ 180–240 ms; không
    fade toàn frame (tránh chớp đen) và không thêm sound effect ở mọi card để tránh mệt tai.

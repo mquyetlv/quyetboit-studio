@@ -483,12 +483,15 @@ class MinigameTimingProfile:
     review_start_bed_ms: int = 3_200
     review_start_tail_hold_ms: int = 650
     review_lead_ms: int = 650
-    review_word_to_example_ms: int = 900
+    # Let viewers finish reading the vocabulary card before narration moves on
+    # to its example sentence.  This is a phase boundary, not a magic offset
+    # in the pipeline, so previews and rendered timelines stay in sync.
+    review_word_to_example_ms: int = 1_800
     review_after_example_min_ms: int = 1_600
     review_after_example_max_ms: int = 3_500
     cta_ms: int = 6_500
     reading_chars_per_second: float = 15.0
-    version: int = 6
+    version: int = 7
 
     def __post_init__(self) -> None:
         numeric = (
@@ -596,27 +599,13 @@ class MinigameTimelineBuilder:
             scenes.append(MinigameScene("word", reveal, cursor, index, "answer"))
             scenes.extend(
                 [
-                    MinigameScene(
-                        "voice",
-                        normal_start,
-                        normal_start + durations[normal],
-                        index,
-                        "listen",
-                    ),
-                    MinigameScene(
-                        "voice",
-                        slow_start,
-                        slow_start + durations[slow],
-                        index,
-                        "slow",
-                    ),
-                    MinigameScene(
-                        "voice",
-                        final_start,
-                        final_start + durations[normal],
-                        index,
-                        "repeat",
-                    ),
+                    # Phase captions deliberately extend through their quiet
+                    # hold.  They only change at the next phase boundary (or
+                    # when the next word begins), rather than disappearing as
+                    # soon as the corresponding TTS clip finishes.
+                    MinigameScene("voice", normal_start, slow_start, index, "listen"),
+                    MinigameScene("voice", slow_start, final_start, index, "slow"),
+                    MinigameScene("voice", final_start, cursor, index, "repeat"),
                 ]
             )
             audio_events.extend(

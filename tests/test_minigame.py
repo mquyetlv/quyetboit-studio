@@ -125,6 +125,16 @@ def test_vnext_timing_profile_builds_semantic_boundaries_and_full_reveal_gap(
     assert boundaries["answer_reveal"] - boundaries["countdown_bed"] == profile.countdown_ms
     listen = next(event for event in timeline.audio_events if event.semantic == "voice_listen")
     assert listen.start_ms - boundaries["answer_reveal"] == 1_858 + profile.post_reveal_sfx_gap_ms
+    voice_scenes = [scene for scene in timeline.scenes if scene.kind == "voice"]
+    assert [(scene.phase, scene.start_ms, scene.end_ms) for scene in voice_scenes] == [
+        ("listen", listen.start_ms, next(scene.start_ms for scene in voice_scenes if scene.phase == "slow")),
+        (
+            "slow",
+            next(scene.start_ms for scene in voice_scenes if scene.phase == "slow"),
+            next(scene.start_ms for scene in voice_scenes if scene.phase == "repeat"),
+        ),
+        ("repeat", next(scene.start_ms for scene in voice_scenes if scene.phase == "repeat"), timeline.scenes[5].end_ms),
+    ]
     assert (
         profile.review_after_example_min_ms
         <= profile.review_hold_ms(_item(), 900)
@@ -1123,6 +1133,14 @@ def test_review_badge_uses_a_phone_readable_lockup_in_every_theme(
     assert height >= 60, (theme_id, height)
 
 
+def test_theme_three_review_badge_reserves_space_for_its_wider_check_icon() -> None:
+    theme_three = MinigameThemeService().get("theme-3")
+    shared_badge_left = MinigameThemeService().get("theme-1").slots["review_badge"].bounds[0]
+
+    assert theme_three.slots["review_badge"].bounds == (485, 798, 755, 870)
+    assert theme_three.slots["review_badge"].bounds[0] > shared_badge_left
+
+
 @pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
 def test_question_meaning_and_placeholder_short_long_matrix_fits(theme_id: str) -> None:
     manifest = MinigameThemeService().get(theme_id)
@@ -1552,18 +1570,23 @@ def test_minigame_page_has_json_editor_and_tracks_valid_content(qtbot) -> None:
     assert len(MinigameContent.from_json(page.content_editor.toPlainText()).words) == 5
     assert page.aspect.count() == 3
     assert page.theme_id.count() == 5
-    assert len(page.theme_cards) == 5
-    assert all("9:16" in card.text() for card in page.theme_cards)
+    assert page.theme_config_button.text() == "Cấu hình theme…"
+    assert "hỗ trợ 9:16" in page.theme_summary.text()
     assert page.voice_config_button.text() == "Cấu hình Voice…"
-    assert "Google Cloud TTS" in page.voice_summary.text()
+    assert page.voice_summary.text()
     page.content_editor.setPlainText(_content_json(7, "Food"))
     assert "7 từ" in page.content_status.text()
+    assert page.output_name.text() == "Food"
+    page.output_name.setText("Food-custom")
+    page.output_name.textEdited.emit("Food-custom")
+    page.content_editor.setPlainText(_content_json(7, "Travel"))
+    assert page.output_name.text() == "Food-custom"
     page.theme_id.setCurrentIndex(4)
     result = page._collect_project()
     assert result.theme_id == "theme-5"
-    assert result.topic == "Food"
+    assert result.topic == "Travel"
     assert len(result.vocabulary) == 7
-    assert page.theme_cards[4].isChecked()
+    assert "Theme 5" in page.theme_summary.text()
 
 
 def test_minigame_page_keeps_last_valid_content_while_json_is_incomplete(qtbot) -> None:
@@ -1578,12 +1601,23 @@ def test_minigame_page_keeps_last_valid_content_while_json_is_incomplete(qtbot) 
         page._collect_project(strict_content=True)
 
 
+def test_minigame_page_uses_json_topic_after_restoring_new_project(qtbot) -> None:
+    page = MinigamePage()
+    qtbot.addWidget(page)
+    # This mirrors MainWindow's normal startup path.
+    page.set_project(MinigameProject())
+
+    page.content_editor.setPlainText(_content_json(2, "Travel"))
+
+    assert page.output_name.text() == "Travel"
+
+
 def test_minigame_preview_runs_debounced_and_safe_boxes_use_manifest(qtbot) -> None:
     page = MinigamePage()
     qtbot.addWidget(page)
     page.show()
     page.content_editor.setPlainText(_content_json(2, "Chăm sóc sức khỏe bằng tiếng Việt"))
-    page.theme_cards[2].click()
+    page.theme_id.setCurrentIndex(2)
 
     qtbot.waitUntil(
         lambda: page.preview_thread is None and not page._preview_base.isNull(), timeout=10_000

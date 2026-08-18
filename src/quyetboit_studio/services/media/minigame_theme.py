@@ -72,6 +72,10 @@ class MinigameThemeService:
         }
         for theme_id in ("theme-1", "theme-2", "theme-3", "theme-4", "theme-5")
     }
+    # Theme 3's paper-note artwork has a wider baked-in check icon.  Its score
+    # lockup therefore starts farther right than the shared geometry, so the
+    # large count does not look pulled toward the icon.
+    _DYNAMIC_BOUNDS["theme-3"]["review_badge"] = (485, 798, 755, 870)
     _CTA_BOUNDS: ClassVar[dict[str, dict[str, tuple[int, int, int, int]]]] = {
         "theme-1": {
             "cta_primary": (145, 1330, 935, 1470),
@@ -442,7 +446,7 @@ class MinigameThemeService:
             slots=self._slots(theme_id),
             styles=styles,
             placements=self._placements(),
-            layout_version=15,
+            layout_version=16,
             checksum=checksum,
         )
 

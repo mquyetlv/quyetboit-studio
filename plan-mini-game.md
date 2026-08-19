@@ -1,11 +1,11 @@
 # Kế hoạch cập nhật menu English Mini game theo bộ theme ảnh
 
-### Tiến độ cập nhật ngày 2026-08-12
+### Tiến độ cập nhật ngày 2026-08-19
 
-- Hoàn thành: **90/90 task (100%)**.
-- Đang làm một phần: **0/90 task (0%)**.
-- Chưa triển khai: **0/90 task (0%)**.
-- Đã kiểm chứng: **142 test pass**, Ruff/compileall/diff check pass; package-data chứa đủ asset start, review và score.
+- Hoàn thành: **93/93 task (100%)**.
+- Đang làm một phần: **0/93 task (0%)**.
+- Chưa triển khai: **0/93 task (0%)**.
+- Đã kiểm chứng: **225 test pass**, Ruff/compileall/diff check pass; package-data chứa đủ asset start, review và score.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -397,3 +397,19 @@ git diff --check
   word, căn IPA/Word Type review đúng tâm pill và chia English/Vietnamese example thành hai vùng dễ đọc.
 - [x] Tăng `layout_version` lên 8; thêm regression geometry/tách vùng/bilingual example và render FFmpeg QA thật
   Theme 1–5 ở 1080×1920, đủ audio, đúng 6 giây, không còn file partial/process mồ côi.
+
+## 14. Video nền tùy chọn cho phần học
+
+- [x] Gom chọn theme tĩnh, file video nền và bộ màu video-theme vào dialog cấu hình gọn; lưu/mở lại
+  `background_video` cùng `video_theme_id`, validate file trước khi chạy và giữ tương thích project v2.
+
+## 15. Tách static flow và full video-background flow
+
+- [x] Giữ nguyên static theme flow; khi chọn video, dùng video đó xuyên suốt toàn bộ Hook, Body,
+  Score, Review Start, từng Review card và CTA bằng surface RGBA theo ba bộ màu riêng. Background
+  tiếp tục theo global timestamp, audio nguồn bị bỏ, output có cover trích từ Hook đã render và có
+  regression FFmpeg full-flow 1080×1920.
+- [x] Thiết kế lại ba video theme theo art direction Theme 2/3/5: Medical Blue dùng glass/health UI,
+  Scrapbook dùng paper/tape/stitch và Garden dùng glass/wood/leaf/flower. Giữ ID project cũ, tách
+  semantic màu chữ sáng/tối, kiểm tra trực quan đủ Hook/Score/Review Start/Review/CTA và render
+  FFmpeg full-flow không chồng lấn text động.

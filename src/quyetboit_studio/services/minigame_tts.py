@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +28,7 @@ class CatalogVoice:
 
 class VoiceCatalogService(Protocol):
     def list_voices(self, refresh: bool = False) -> list[CatalogVoice]: ...
-    def preview(self, voice: CatalogVoice) -> str | Path: ...
+    def preview(self, voice: CatalogVoice, text: str | None = None) -> str | Path: ...
 
 
 def google_voice_family(name: str) -> str:
@@ -58,8 +59,21 @@ def google_voice_family(name: str) -> str:
 
 
 class GoogleVoiceCatalogService:
-    def __init__(self, service_account_path: str | Path) -> None:
+    CACHE_SCHEMA_VERSION = 1
+
+    def __init__(
+        self,
+        service_account_path: str | Path,
+        *,
+        cache_path: str | Path | None = None,
+    ) -> None:
         self.service_account_path = Path(service_account_path).expanduser().resolve()
+        cache_root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        self.cache_path = (
+            Path(cache_path).expanduser()
+            if cache_path is not None
+            else cache_root / "QuyetBoITStudio" / "cache" / "google-voices-v1.json"
+        )
 
     def _module_and_client(self):
         if not self.service_account_path.is_file():
@@ -90,7 +104,11 @@ class GoogleVoiceCatalogService:
             ) from exc
 
     def list_voices(self, refresh: bool = False) -> list[CatalogVoice]:
-        del refresh  # Google returns the authoritative catalog; no local catalog cache is used.
+        if not refresh:
+            cached = self._load_cached_voices()
+            if cached:
+                return cached
+
         texttospeech, client = self._module_and_client()
         try:
             response = client.list_voices(timeout=60)
@@ -119,16 +137,88 @@ class GoogleVoiceCatalogService:
                     int(voice.natural_sample_rate_hertz or 0),
                 )
             )
+        voices = self._sort_voices(voices)
+        self._save_cached_voices(voices)
+        return voices
+
+    @staticmethod
+    def _sort_voices(voices: list[CatalogVoice]) -> list[CatalogVoice]:
         return sorted(voices, key=lambda item: (item.primary_language, item.family, item.name))
 
-    def preview(self, voice: CatalogVoice) -> Path:
+    def _load_cached_voices(self) -> list[CatalogVoice]:
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("schema_version") != self.CACHE_SCHEMA_VERSION:
+                return []
+            rows = payload.get("voices")
+            if not isinstance(rows, list):
+                return []
+            voices = []
+            for row in rows:
+                if not isinstance(row, dict) or row.get("provider") != "google":
+                    return []
+                language_codes = row.get("language_codes")
+                categories = row.get("categories", [])
+                if not isinstance(language_codes, list) or not all(
+                    isinstance(value, str) for value in language_codes
+                ):
+                    return []
+                if not isinstance(categories, list) or not all(
+                    isinstance(value, str) for value in categories
+                ):
+                    return []
+                voices.append(
+                    CatalogVoice(
+                        "google",
+                        str(row["voice_id"]),
+                        str(row["name"]),
+                        tuple(language_codes),
+                        str(row["gender"]),
+                        str(row["family"]),
+                        tuple(categories),
+                        int(row.get("sample_rate_hz", 0)),
+                    )
+                )
+            return self._sort_voices(voices)
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return []
+
+    def _save_cached_voices(self, voices: list[CatalogVoice]) -> None:
+        payload = {
+            "schema_version": self.CACHE_SCHEMA_VERSION,
+            "voices": [
+                {
+                    "provider": voice.provider,
+                    "voice_id": voice.voice_id,
+                    "name": voice.name,
+                    "language_codes": list(voice.language_codes),
+                    "gender": voice.gender,
+                    "family": voice.family,
+                    "categories": list(voice.categories),
+                    "sample_rate_hz": voice.sample_rate_hz,
+                }
+                for voice in voices
+            ],
+        }
+        partial = self.cache_path.with_suffix(f"{self.cache_path.suffix}.partial")
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            partial.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(partial, self.cache_path)
+        except OSError:
+            partial.unlink(missing_ok=True)
+
+    def preview(self, voice: CatalogVoice, text: str | None = None) -> Path:
         cache_root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         output = cache_root / "QuyetBoITStudio" / "cache" / "voice-preview" / "google-preview.wav"
         GoogleCloudSpeechService(
             self.service_account_path,
             voice.voice_id,
             language_code=voice.primary_language or "en-US",
-        ).synthesize("Can you guess this English word?", output)
+        ).synthesize(text or "Can you guess this English word?", output)
         return output
 
 
@@ -166,7 +256,8 @@ class CapCutVoiceCatalogService:
             )
         return sorted(output, key=lambda item: (item.primary_language, item.family, item.name.casefold()))
 
-    def preview(self, voice: CatalogVoice) -> str:
+    def preview(self, voice: CatalogVoice, text: str | None = None) -> str:
+        del text  # CapCut returns its provider-managed audition clip.
         raw = self._voices.get(voice.voice_id)
         if raw is None:
             raise PipelineError(

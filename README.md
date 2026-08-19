@@ -44,7 +44,7 @@ access token hay nội dung JSON vào log.
 ## English Mini game
 
 1. Chọn `16:9`, `9:16` hoặc **Xuất cả hai**.
-2. Chọn video nền và chỉnh điểm crop X/Y riêng cho từng tỷ lệ.
+2. Mở **Cấu hình theme…**: không chọn video để dùng flow theme ảnh cũ; chọn video để dùng flow nền video xuyên suốt Hook → Question/Answer → Score → Review → CTA và chọn một bộ màu video-theme. Âm thanh gốc luôn tắt. Chỉnh crop X/Y cho khung 9:16 tại phần Định dạng.
 3. Nhập/dán JSON nội dung theo schema bên dưới hoặc mở file `.json`; UI có nút định dạng và sao chép
    JSON mẫu.
 4. Bấm **Cấu hình Voice…**, chọn Google Cloud TTS hoặc CapCut TTS rồi lọc theo ngôn ngữ, loại
@@ -57,7 +57,11 @@ access token hay nội dung JSON vào log.
 Output luôn được render vào file `.partial`, kiểm tra bằng ffprobe rồi mới đổi tên. Nếu tên file đã
 tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
 
-Mini game theme hiện xuất 9:16 và dùng asset đóng gói trong ứng dụng. Montserrat và Bebas Neue cùng
+Mini game theme hiện xuất 9:16. Flow tĩnh dùng asset PNG đóng gói như trước. Flow nền video loop/crop
+video theo timestamp xuyên suốt và dựng panel RGBA theo ba art direction kế thừa Theme 2
+(Medical Blue), Theme 3 (Scrapbook) hoặc Theme 5 (Garden); không quay lại artwork full-frame ở các
+scene chuyển tiếp/review/CTA. Mỗi video vẫn xuất ảnh
+cover 1080×1920 tương ứng với Hook và đúng nền đã chọn. Montserrat và Bebas Neue cùng
 license OFL được kèm trong `assets/fonts/`; renderer theme truyền thư mục này cho FFmpeg/libass nên không
 phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
 Hook composite `start-base.png` với hai số `N = tổng số từ` và Topic động. Tên Topic được tự co chữ, xuống tối đa ba dòng và căn giữa theo cả hai
@@ -111,6 +115,8 @@ visual tự invalidate khi palette/layout version thay đổi.
 
 Catalog Google lấy từ `TextToSpeechClient.list_voices()` và giữ language codes, SSML gender, sample
 rate cùng nhóm Chirp 3 HD/Chirp HD/Studio/Neural2/WaveNet/Standard và các loại mới provider trả về.
+Kết quả được cache cục bộ để các lần mở sau không gọi API; chỉ nút **Làm mới từ Google** mới bỏ qua
+cache và tải lại catalog mới nhất.
 Catalog CapCut gọi toàn bộ category cấu hình trong `services/capcut/config.py`, merge voice trùng
 theo speaker ID rồi giữ tất cả category để lọc. File service-account và các biến thể tên phổ biến
 được `.gitignore`; không được stage/commit.

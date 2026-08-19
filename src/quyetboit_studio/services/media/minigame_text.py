@@ -113,10 +113,15 @@ class MinigameTextLayerService:
         self, project: MinigameProject, manifest: MinigameThemeManifest, cache_dir: Path
     ) -> Path:
         total = len(project.vocabulary)
+        sentence = f"LET'S REVISIT THE {total} WORDS\nYOU JUST LEARNED"
+        if manifest.theme_id == "theme-3":
+            # The paper-note artwork has a dedicated horizontal sentence band.
+            # Keep this copy on one line rather than crowding REVIEW TIME.
+            sentence = f"LET'S REVISIT THE {total} WORDS YOU JUST LEARNED"
         return self._build_dynamic_layer(
             "review-start", manifest, cache_dir, {"total": total},
             (
-                ("review_sentence", f"LET'S REVISIT THE {total} WORDS\nYOU JUST LEARNED", "review_dynamic"),
+                ("review_sentence", sentence, "review_dynamic"),
                 ("review_badge", f"{total}/{total}", "review_dynamic"),
             ),
         )

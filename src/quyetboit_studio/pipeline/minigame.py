@@ -36,6 +36,7 @@ from ..services.media.minigame_frame import MinigameVisualFrameService
 from ..services.media.minigame_mask import MinigameAlphaMaskService
 from ..services.media.minigame_text import MinigameTextLayerService
 from ..services.media.minigame_theme import MinigameThemeService
+from ..services.media.minigame_video_theme import MinigameVideoThemeService
 from ..services.minigame_tts import (
     CapCutEnglishSpeechService,
     GoogleCloudSpeechService,
@@ -75,6 +76,7 @@ class MinigamePipeline:
         self.renderer = MinigameVideoRenderer(self.runner)
         self.subtitles = MinigameSubtitleBuilder()
         self.themes = MinigameThemeService()
+        self.video_themes = MinigameVideoThemeService(self.themes)
         self.masks = MinigameAlphaMaskService()
         self.frames = MinigameVisualFrameService()
         self.text_layers = MinigameTextLayerService()
@@ -100,13 +102,31 @@ class MinigamePipeline:
             self.project.validate()
             self.cancel.raise_if_cancelled()
             self.runner.preflight()
-            manifest = self.themes.get(self.project.theme_id)
-            mask = self.masks.build(manifest, self.workspace / "theme-mask")
+            custom_background = self._custom_background_video()
+            if custom_background is None:
+                manifest = self.themes.get(self.project.theme_id)
+                mask = self.masks.build(manifest, self.workspace / "theme-mask")
+                video_surfaces: dict[str, Path] = {}
+            else:
+                manifest = self.video_themes.manifest(self.project.video_theme_id)
+                mask = None
+                video_surfaces = self.video_themes.build_surfaces(
+                    self.project.video_theme_id,
+                    manifest,
+                    self.workspace / "video-theme",
+                )
             hook_text = self.text_layers.build_hook(
                 self.project, manifest, self.workspace / "theme-text"
             )
             review_start_text = self.text_layers.build_review_start(
                 self.project, manifest, self.workspace / "theme-text"
+            )
+            cta_text = (
+                self.text_layers.build_cta(
+                    self.project, manifest, self.workspace / "theme-text"
+                )
+                if custom_background is not None
+                else None
             )
             frame_layout_key = {
                 "version": manifest.layout_version,
@@ -114,36 +134,39 @@ class MinigamePipeline:
                 "styles": manifest.styles,
                 "placements": manifest.placements,
             }
-            hook_frame = self.frames.build(
-                manifest.start_base,
-                (hook_text,),
-                self.workspace / "visual-frame",
-                layout_key=frame_layout_key,
-            )
-            body_frame = self.frames.build(
-                manifest.background_video,
-                (mask,),
-                self.workspace / "visual-frame",
-                layout_key=frame_layout_key,
-            )
-            review_start_frame = self.frames.build(
-                manifest.review_start_base,
-                (review_start_text,),
-                self.workspace / "visual-frame",
-                layout_key=frame_layout_key,
-            )
-            review_frame = self.frames.build(
-                manifest.review_screen,
-                (),
-                self.workspace / "visual-frame",
-                layout_key=frame_layout_key,
-            )
-            cta_frame = self.frames.build(
-                manifest.cta_screen,
-                (),
-                self.workspace / "visual-frame",
-                layout_key=frame_layout_key,
-            )
+            if custom_background is None:
+                hook_frame = self.frames.build(
+                    manifest.start_base,
+                    (hook_text,),
+                    self.workspace / "visual-frame",
+                    layout_key=frame_layout_key,
+                )
+                body_frame = self.frames.build(
+                    manifest.background_video,
+                    (mask,) if mask is not None else (),
+                    self.workspace / "visual-frame",
+                    layout_key=frame_layout_key,
+                )
+                review_start_frame = self.frames.build(
+                    manifest.review_start_base,
+                    (review_start_text,),
+                    self.workspace / "visual-frame",
+                    layout_key=frame_layout_key,
+                )
+                review_frame = self.frames.build(
+                    manifest.review_screen,
+                    (),
+                    self.workspace / "visual-frame",
+                    layout_key=frame_layout_key,
+                )
+                cta_frame = self.frames.build(
+                    manifest.cta_screen,
+                    (),
+                    self.workspace / "visual-frame",
+                    layout_key=frame_layout_key,
+                )
+            else:
+                hook_frame = body_frame = review_start_frame = review_frame = cta_frame = None
             speech = self.speech_factory(self.project)
             word_audio: list[Path] = []
             slow_audio: list[Path] = []
@@ -273,18 +296,34 @@ class MinigamePipeline:
                     start_background=manifest.start_base,
                     hook_text_overlay=hook_text,
                     hook_duration_ms=self.timeline_builder.HOOK_MS,
-                    visual_scenes=self._visual_scenes(
-                        timeline,
-                        hook_frame,
-                        body_frame,
-                        manifest.score_screen,
-                        review_start_frame,
-                        review_frame,
-                        cta_frame,
+                    visual_scenes=(
+                        self._video_visual_scenes(
+                            timeline,
+                            custom_background,
+                            video_surfaces,
+                            hook_text,
+                            review_start_text,
+                            cta_text,
+                            self.project.crop_focus.get("9:16", [0.5, 0.5]),
+                        )
+                        if custom_background is not None
+                        else self._visual_scenes(
+                            timeline,
+                            hook_frame,
+                            body_frame,
+                            manifest.score_screen,
+                            review_start_frame,
+                            review_frame,
+                            cta_frame,
+                        )
                     ),
                 )
                 outputs.append(rendered.path)
-                covers.append(self._write_cover(hook_frame, rendered.path))
+                covers.append(
+                    self._write_video_cover(rendered.path)
+                    if custom_background is not None
+                    else self._write_cover(hook_frame, rendered.path)
+                )
             self._emit(progress, 1.0, "Đã hoàn thành video minigame")
             return MinigameResult(
                 outputs, covers, timeline.duration_ms, len(self.project.vocabulary)
@@ -302,11 +341,15 @@ class MinigamePipeline:
     def _visual_scenes(
         timeline,
         hook_frame: Path,
-        body_frame: Path,
+        body_frame: Path | None,
         score_frame: Path,
         review_start_frame: Path,
         review_frame: Path,
         cta_frame: Path | None = None,
+        *,
+        custom_background: Path | None = None,
+        theme_text_overlay: Path | None = None,
+        crop_focus: list[float] | None = None,
     ) -> list[MinigameVisualScene]:
         hook = next(scene for scene in timeline.scenes if scene.kind == "hook")
         review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
@@ -316,7 +359,25 @@ class MinigamePipeline:
         scenes = [MinigameVisualScene(hook_frame, hook.end_ms - hook.start_ms)]
         before_score = score.start_ms - hook.end_ms
         if before_score > 0:
-            scenes.append(MinigameVisualScene(body_frame, before_score))
+            if custom_background is not None:
+                if theme_text_overlay is None:
+                    raise PipelineError("theme_scene_invalid", "Thiếu lớp nền chữ của theme.")
+                crop_focus = crop_focus or [0.5, 0.5]
+                focus_x = max(0.0, min(1.0, float(crop_focus[0] if crop_focus else 0.5)))
+                focus_y = max(0.0, min(1.0, float(crop_focus[1] if len(crop_focus) > 1 else 0.5)))
+                scenes.append(
+                    MinigameVisualScene(
+                        custom_background,
+                        before_score,
+                        (theme_text_overlay,),
+                        background_is_video=True,
+                        crop_focus=(focus_x, focus_y),
+                    )
+                )
+            elif body_frame is not None:
+                scenes.append(MinigameVisualScene(body_frame, before_score))
+            else:
+                raise PipelineError("theme_scene_invalid", "Thiếu nền phần học của minigame.")
         scenes.append(MinigameVisualScene(score_frame, score.end_ms - score.start_ms))
         scenes.append(
             MinigameVisualScene(review_start_frame, review_start.end_ms - review_start.start_ms)
@@ -338,6 +399,104 @@ class MinigamePipeline:
                 MinigameVisualScene(cta_frame, cta.end_ms - cta.start_ms, fade_in_ms=220)
             )
         return scenes
+
+    @staticmethod
+    def _video_visual_scenes(
+        timeline,
+        background: Path,
+        surfaces: dict[str, Path],
+        hook_text: Path,
+        review_start_text: Path,
+        cta_text: Path | None,
+        crop_focus: list[float],
+    ) -> list[MinigameVisualScene]:
+        """Use one continuous user video beneath every visual scene in the flow."""
+        hook = next(scene for scene in timeline.scenes if scene.kind == "hook")
+        score = next(scene for scene in timeline.scenes if scene.kind == "score")
+        review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
+        reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
+        cta = next((scene for scene in timeline.scenes if scene.kind == "cta"), None)
+        focus_x = max(0.0, min(1.0, float(crop_focus[0] if crop_focus else 0.5)))
+        focus_y = max(0.0, min(1.0, float(crop_focus[1] if len(crop_focus) > 1 else 0.5)))
+        focus = (focus_x, focus_y)
+
+        def scene(kind: str, start_ms: int, end_ms: int, *extra: Path) -> MinigameVisualScene:
+            return MinigameVisualScene(
+                background,
+                end_ms - start_ms,
+                (surfaces[kind], *extra),
+                fade_in_ms=220 if kind == "cta" else 0,
+                background_is_video=True,
+                crop_focus=focus,
+                background_start_ms=start_ms,
+            )
+
+        result = [scene("hook", hook.start_ms, hook.end_ms, hook_text)]
+        if score.start_ms > hook.end_ms:
+            result.append(scene("body", hook.end_ms, score.start_ms))
+        result.append(scene("score", score.start_ms, score.end_ms))
+        result.append(
+            scene(
+                "review_start",
+                review_start.start_ms,
+                review_start.end_ms,
+                review_start_text,
+            )
+        )
+        result.extend(scene("review", item.start_ms, item.end_ms) for item in reviews)
+        if cta is not None:
+            if cta_text is None:
+                raise PipelineError("theme_scene_invalid", "Thiếu lớp chữ CTA cho nền video.")
+            result.append(scene("cta", cta.start_ms, cta.end_ms, cta_text))
+        return result
+
+    def _custom_background_video(self) -> Path | None:
+        value = self.project.background_video.strip()
+        if not value:
+            return None
+        path = Path(value).expanduser().resolve()
+        try:
+            self.runner.probe.video_artifact(path)
+        except PipelineError as exc:
+            raise PipelineError(
+                "minigame_background_invalid",
+                "Video nền không có video stream hợp lệ. Hãy chọn lại file MP4/MOV/MKV.",
+                debug_detail=exc.debug_detail,
+            ) from exc
+        return path
+
+    def _write_video_cover(self, video_output: Path) -> Path:
+        """Extract the rendered Hook frame so the cover matches the chosen video background."""
+        cover = video_output.with_name(f"{video_output.stem}_cover.png")
+        if cover.exists():
+            raise PipelineError(
+                "minigame_cover_exists", "Ảnh bìa đã tồn tại; không ghi đè output cũ."
+            )
+        partial = cover.with_name(f".{cover.stem}.partial{cover.suffix}")
+        try:
+            self.runner.run(
+                [
+                    "-ss",
+                    "0.100",
+                    "-i",
+                    str(video_output),
+                    "-frames:v",
+                    "1",
+                    "-update",
+                    "1",
+                    str(partial),
+                ],
+                duration_ms=100,
+                cancel=self.cancel,
+                step=0,
+            )
+            with Image.open(partial) as image:
+                if image.size != (1080, 1920) or image.mode not in {"RGB", "RGBA"}:
+                    raise PipelineError("minigame_cover_invalid", "Ảnh bìa minigame không hợp lệ.")
+            os.replace(partial, cover)
+            return cover
+        finally:
+            partial.unlink(missing_ok=True)
 
     def _speech_clip(self, speech: MinigameSpeechService, text: str, item_id: str):
         key = self._speech_cache_key(text)

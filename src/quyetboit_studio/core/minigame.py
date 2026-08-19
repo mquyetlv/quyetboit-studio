@@ -365,6 +365,7 @@ class MinigameProject:
     topic: str = ""
     background_video: str = ""
     theme_id: str = "theme-1"
+    video_theme_id: str = "video-ocean"
     output_format: str = MinigameFormat.VERTICAL.value
     output_folder: str = "output"
     output_name: str = "english_minigame"
@@ -387,8 +388,10 @@ class MinigameProject:
             raise ValueError("Vui lòng nhập Topic.")
         if self.theme_id not in {f"theme-{index}" for index in range(1, 6)}:
             raise ValueError("Giao diện minigame không hợp lệ.")
-        # Theme image is the production background. Keep this field untouched for old projects;
-        # it is intentionally not validated or consumed by themed rendering.
+        if self.video_theme_id not in {"video-ocean", "video-violet", "video-emerald"}:
+            raise ValueError("Bộ màu nền video không hợp lệ.")
+        if self.background_video.strip() and not Path(self.background_video).expanduser().is_file():
+            raise ValueError("Video nền đã chọn không tồn tại hoặc không thể đọc.")
         if not self.vocabulary:
             raise ValueError("Vui lòng nhập ít nhất một từ.")
         for index, item in enumerate(self.vocabulary, 1):
@@ -417,6 +420,7 @@ class MinigameProject:
         data = {key: item for key, item in value.items() if key in allowed}
         data.setdefault("schema_version", 1)
         data.setdefault("theme_id", "theme-1")
+        data.setdefault("video_theme_id", "video-ocean")
         vocabulary = data.get("vocabulary", [])
         data["vocabulary"] = []
         levels = tuple(VocabularyLevel)

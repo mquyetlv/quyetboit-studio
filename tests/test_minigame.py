@@ -13,6 +13,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from PIL import Image
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QDialogButtonBox, QLabel
 
 from quyetboit_studio.core.minigame import (
     MinigameAudioEvent,
@@ -44,7 +46,12 @@ from quyetboit_studio.services.media.minigame_frame import MinigameVisualFrameSe
 from quyetboit_studio.services.media.minigame_mask import MinigameAlphaMaskService
 from quyetboit_studio.services.media.minigame_text import MinigameTextLayerService
 from quyetboit_studio.services.media.minigame_theme import MinigameThemeService
-from quyetboit_studio.services.minigame_tts import CatalogVoice, google_voice_family
+from quyetboit_studio.services.media.minigame_video_theme import MinigameVideoThemeService
+from quyetboit_studio.services.minigame_tts import (
+    CatalogVoice,
+    GoogleVoiceCatalogService,
+    google_voice_family,
+)
 
 
 def _item(index: int = 1) -> VocabularyItem:
@@ -222,6 +229,86 @@ def test_review_cards_keep_the_background_stable_between_items(tmp_path: Path) -
     scenes = MinigamePipeline._visual_scenes(timeline, *frames)
 
     assert [scene.fade_in_ms for scene in scenes[-2:]] == [0, 0]
+    assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
+
+
+def test_custom_background_video_replaces_only_the_theme_body_background(tmp_path: Path) -> None:
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("hook", 0, 100),
+            MinigameScene("score", 500, 600),
+            MinigameScene("review_start", 600, 700),
+            MinigameScene("review", 700, 800, 0),
+        ],
+        [],
+        800,
+    )
+    hook, body, score, review_start, review, custom_video, theme_text = (
+        tmp_path / name
+        for name in (
+            "hook.png", "body.png", "score.png", "review-start.png", "review.png",
+            "custom.mp4", "theme-text.png",
+        )
+    )
+
+    scenes = MinigamePipeline._visual_scenes(
+        timeline,
+        hook,
+        body,
+        score,
+        review_start,
+        review,
+        custom_background=custom_video,
+        theme_text_overlay=theme_text,
+        crop_focus=[0.2, 0.8],
+    )
+
+    body_scene = scenes[1]
+    assert body_scene.background == custom_video
+    assert body_scene.overlays == (theme_text,)
+    assert body_scene.background_is_video
+    assert body_scene.crop_focus == (0.2, 0.8)
+    assert scenes[0].background == hook
+    assert scenes[2].background == score
+
+
+def test_video_background_flow_covers_every_scene_with_continuous_offsets(tmp_path: Path) -> None:
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("hook", 0, 100),
+            MinigameScene("word", 100, 300, 0, "question"),
+            MinigameScene("score", 300, 400),
+            MinigameScene("review_start", 400, 500),
+            MinigameScene("review", 500, 700, 0),
+            MinigameScene("cta", 700, 800),
+        ],
+        [],
+        800,
+    )
+    background = tmp_path / "background.mp4"
+    surfaces = {kind: tmp_path / f"{kind}.png" for kind in (
+        "hook", "body", "score", "review_start", "review", "cta"
+    )}
+    hook_text = tmp_path / "hook-text.png"
+    review_start_text = tmp_path / "review-start-text.png"
+    cta_text = tmp_path / "cta-text.png"
+
+    scenes = MinigamePipeline._video_visual_scenes(
+        timeline,
+        background,
+        surfaces,
+        hook_text,
+        review_start_text,
+        cta_text,
+        [0.25, 0.75],
+    )
+
+    assert [scene.background for scene in scenes] == [background] * 6
+    assert [scene.background_start_ms for scene in scenes] == [0, 100, 300, 400, 500, 700]
+    assert all(scene.background_is_video for scene in scenes)
+    assert all(scene.crop_focus == (0.25, 0.75) for scene in scenes)
+    assert scenes[0].overlays == (surfaces["hook"], hook_text)
+    assert scenes[-1].overlays == (surfaces["cta"], cta_text)
     assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
 
 
@@ -443,6 +530,55 @@ def test_safe_project_serialization_excludes_service_account_path() -> None:
     project = MinigameProject(service_account_path="C:/secret/service-account.json")
 
     assert project.to_safe_dict()["service_account_path"] == ""
+
+
+def test_video_theme_selection_round_trips_in_project_v2() -> None:
+    project = MinigameProject.from_dict(
+        MinigameProject(video_theme_id="video-violet").to_safe_dict()
+    )
+
+    assert project.video_theme_id == "video-violet"
+
+
+@pytest.mark.parametrize("video_theme_id", ["video-ocean", "video-violet", "video-emerald"])
+def test_video_theme_profiles_build_all_rgba_surfaces(
+    tmp_path: Path, video_theme_id: str
+) -> None:
+    service = MinigameVideoThemeService()
+    manifest = service.manifest(video_theme_id)
+
+    surfaces = service.build_surfaces(video_theme_id, manifest, tmp_path / video_theme_id)
+
+    assert set(surfaces) == {"hook", "body", "score", "review_start", "review", "cta"}
+    for surface in surfaces.values():
+        with Image.open(surface) as image:
+            assert image.mode == "RGBA"
+            assert image.size == (1080, 1920)
+            assert image.getchannel("A").getextrema()[0] < 255
+
+
+@pytest.mark.parametrize(
+    ("video_theme_id", "base_theme_id", "art_direction", "display_name"),
+    [
+        ("video-ocean", "theme-2", "medical", "Theme 2 · Medical Blue"),
+        ("video-violet", "theme-3", "scrapbook", "Theme 3 · Scrapbook"),
+        ("video-emerald", "theme-5", "garden", "Theme 5 · Garden"),
+    ],
+)
+def test_video_theme_profiles_inherit_the_intended_static_art_direction(
+    video_theme_id: str,
+    base_theme_id: str,
+    art_direction: str,
+    display_name: str,
+) -> None:
+    service = MinigameVideoThemeService()
+    profile = service.get(video_theme_id)
+    manifest = service.manifest(video_theme_id)
+
+    assert profile.base_theme_id == base_theme_id
+    assert profile.art_direction == art_direction
+    assert manifest.display_name == display_name
+    assert manifest.start_screen == service.themes.get(base_theme_id).start_screen
 
 
 def test_legacy_minigame_project_migrates_to_default_theme() -> None:
@@ -1137,7 +1273,9 @@ def test_theme_three_review_badge_reserves_space_for_its_wider_check_icon() -> N
     theme_three = MinigameThemeService().get("theme-3")
     shared_badge_left = MinigameThemeService().get("theme-1").slots["review_badge"].bounds[0]
 
-    assert theme_three.slots["review_badge"].bounds == (485, 798, 755, 870)
+    assert theme_three.slots["review_sentence"].bounds == (145, 720, 935, 790)
+    assert theme_three.slots["review_sentence"].max_lines == 1
+    assert theme_three.slots["review_badge"].bounds == (463, 817, 733, 891)
     assert theme_three.slots["review_badge"].bounds[0] > shared_badge_left
 
 
@@ -1612,13 +1750,26 @@ def test_minigame_page_has_json_editor_and_tracks_valid_content(qtbot) -> None:
     page.output_name.setText("Food-custom")
     page.output_name.textEdited.emit("Food-custom")
     page.content_editor.setPlainText(_content_json(7, "Travel"))
-    assert page.output_name.text() == "Food-custom"
+    assert page.output_name.text() == "Travel"
     page.theme_id.setCurrentIndex(4)
     result = page._collect_project()
     assert result.theme_id == "theme-5"
     assert result.topic == "Travel"
     assert len(result.vocabulary) == 7
     assert "Theme 5" in page.theme_summary.text()
+
+
+def test_minigame_page_orders_voice_and_export_before_required_content(qtbot) -> None:
+    page = MinigamePage()
+    qtbot.addWidget(page)
+
+    titles = [label.text() for label in page.findChildren(QLabel) if label.objectName() == "SectionTitle"]
+
+    assert titles.index("3. Cấu hình giọng đọc") < titles.index("4. Xuất video")
+    assert titles.index("4. Xuất video") < titles.index("5. Nội dung bắt buộc")
+    assert page.render_button.parent() is page.action_dock
+    assert page.action_dock.parent() is page
+    assert page.action_dock is not page.config_scroll.widget()
 
 
 def test_minigame_page_keeps_last_valid_content_while_json_is_incomplete(qtbot) -> None:
@@ -1642,6 +1793,41 @@ def test_minigame_page_uses_json_topic_after_restoring_new_project(qtbot) -> Non
     page.content_editor.setPlainText(_content_json(2, "Travel"))
 
     assert page.output_name.text() == "Travel"
+
+
+def test_minigame_page_reuses_last_theme_voice_and_export_for_new_project(
+    qtbot, tmp_path: Path
+) -> None:
+    settings_path = tmp_path / "minigame-settings.ini"
+    source = MinigamePage(QSettings(str(settings_path), QSettings.Format.IniFormat))
+    qtbot.addWidget(source)
+    source.theme_id.setCurrentIndex(source.theme_id.findData("theme-5"))
+    source.output_folder.setText(str(tmp_path / "exports"))
+    source.output_folder.editingFinished.emit()
+    source.voice_provider = "google"
+    source.voice_id = "en-GB-Neural2-A"
+    source.voice_name = "English UK A"
+    source.voice_language = "en-GB"
+    source.voice_gender = "MALE"
+    source.voice_family = "Neural2"
+    source.voice_categories = ["Neural2", "en"]
+    source.voice_volume = 88
+    source.slow_rate = 0.65
+    source._cache_voice_configuration()
+    source.preferences.sync()
+
+    restored = MinigamePage(QSettings(str(settings_path), QSettings.Format.IniFormat))
+    qtbot.addWidget(restored)
+    restored.set_project(MinigameProject())
+
+    assert restored.theme_id.currentData() == "theme-5"
+    assert restored.aspect.currentData() == "9:16"
+    assert restored.output_folder.text() == str(tmp_path / "exports")
+    assert restored.voice_id == "en-GB-Neural2-A"
+    assert restored.voice_name == "English UK A"
+    assert restored.voice_language == "en-GB"
+    assert restored.voice_volume == 88
+    assert restored.slow_rate == pytest.approx(0.65)
 
 
 def test_minigame_preview_runs_debounced_and_safe_boxes_use_manifest(qtbot) -> None:
@@ -1745,12 +1931,150 @@ def test_voice_dialog_filters_catalog_and_returns_metadata(qtbot) -> None:
     dialog._loaded((object(), voices))
 
     assert dialog.list.count() == 1
+    assert dialog.width() >= 1_100
+    assert dialog.list.gridSize().width() == 246
+    assert dialog.list.gridSize().height() == 62
+    assert not hasattr(dialog, "family")
+    assert not hasattr(dialog, "category")
+    voice_card = dialog.list.itemWidget(dialog.list.item(0))
+    assert voice_card is not None
+    assert "EU" in [label.text() for label in voice_card.findChildren(QLabel)]
+    assert "af-ZA, en-US  ·  Female" in [label.text() for label in voice_card.findChildren(QLabel)]
+    assert dialog.preview_panel.name.text() == "en-US-Neural2-F"
+    assert dialog.preview_panel.preview.text() == "▶  Nghe thử"
+    assert "Tốc độ lần đọc chậm" in [
+        label.text() for label in dialog.preview_panel.findChildren(QLabel)
+    ]
+    assert dialog.controls.button(QDialogButtonBox.StandardButton.Save).text() == "Lưu & đóng"
     config = dialog.configuration()
     assert config["voice"] == "en-US-Neural2-F"
     assert config["voice_language"] == "en-US"
     assert config["voice_family"] == "Neural2"
     dialog.language.setCurrentIndex(0)
     assert dialog.list.count() == 2
+
+    dialog.search.setText("không có voice này")
+    assert dialog.catalog_stack.currentWidget() is dialog.catalog_state
+    assert "Không tìm thấy" in dialog.catalog_state.message.text()
+
+
+def test_voice_dialog_preview_and_provider_error_states(qtbot) -> None:
+    dialog = MinigameVoiceDialog(
+        provider="google",
+        service_account_path="missing.json",
+        selected_voice_id="",
+        selected_language="en-US",
+        volume=100,
+        slow_rate=0.72,
+        auto_load=False,
+    )
+    qtbot.addWidget(dialog)
+
+    dialog.preview_panel.text.setPlainText("x" * 350)
+    assert len(dialog.preview_panel.text.toPlainText()) == 300
+    assert dialog.preview_panel.count.text() == "300 / 300"
+
+    dialog._catalog_loading = True
+    dialog._failed("Service account không hợp lệ.")
+    assert dialog.catalog_stack.currentWidget() is dialog.catalog_state
+    assert dialog.provider_settings.property("invalid") is True
+    assert dialog.provider_settings.badge.text() == "Lỗi kết nối"
+
+
+def test_google_preview_uses_custom_preview_text(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeSpeechService:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def synthesize(self, text: str, output: Path) -> Path:
+            captured["text"] = text
+            return output
+
+    monkeypatch.setattr(
+        "quyetboit_studio.services.minigame_tts.GoogleCloudSpeechService",
+        FakeSpeechService,
+    )
+    voice = CatalogVoice("google", "en-US-Neural2-F", "Voice", ("en-US",), "FEMALE", "Neural2")
+
+    GoogleVoiceCatalogService(tmp_path / "account.json").preview(voice, "Custom preview")
+
+    assert captured["text"] == "Custom preview"
+
+
+def test_google_voice_catalog_uses_disk_cache_until_explicit_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    cache_path = tmp_path / "google-voices.json"
+    calls = 0
+
+    class FakeClient:
+        def list_voices(self, timeout: int):
+            nonlocal calls
+            assert timeout == 60
+            calls += 1
+            suffix = "A" if calls == 1 else "B"
+            return SimpleNamespace(
+                voices=[
+                    SimpleNamespace(
+                        name=f"en-US-Neural2-{suffix}",
+                        language_codes=["en-US"],
+                        ssml_gender=1,
+                        natural_sample_rate_hertz=24_000,
+                    )
+                ]
+            )
+
+    module = SimpleNamespace(
+        SsmlVoiceGender=lambda _value: SimpleNamespace(name="FEMALE")
+    )
+    service = GoogleVoiceCatalogService(
+        tmp_path / "account.json", cache_path=cache_path
+    )
+    monkeypatch.setattr(service, "_module_and_client", lambda: (module, FakeClient()))
+
+    assert service.list_voices()[0].voice_id == "en-US-Neural2-A"
+    assert cache_path.is_file()
+    cached_service = GoogleVoiceCatalogService(
+        tmp_path / "missing-account.json", cache_path=cache_path
+    )
+    monkeypatch.setattr(
+        cached_service,
+        "_module_and_client",
+        lambda: pytest.fail("Không được gọi Google khi cache hợp lệ"),
+    )
+    assert cached_service.list_voices()[0].voice_id == "en-US-Neural2-A"
+    assert calls == 1
+
+    assert service.list_voices(refresh=True)[0].voice_id == "en-US-Neural2-B"
+    assert calls == 2
+
+
+def test_google_voice_catalog_recovers_from_invalid_cache(tmp_path: Path, monkeypatch) -> None:
+    cache_path = tmp_path / "google-voices.json"
+    cache_path.write_text("{invalid", encoding="utf-8")
+    client = SimpleNamespace(
+        list_voices=lambda timeout: SimpleNamespace(
+            voices=[
+                SimpleNamespace(
+                    name="vi-VN-Standard-A",
+                    language_codes=["vi-VN"],
+                    ssml_gender=1,
+                    natural_sample_rate_hertz=24_000,
+                )
+            ]
+        )
+    )
+    module = SimpleNamespace(
+        SsmlVoiceGender=lambda _value: SimpleNamespace(name="FEMALE")
+    )
+    service = GoogleVoiceCatalogService(
+        tmp_path / "account.json", cache_path=cache_path
+    )
+    monkeypatch.setattr(service, "_module_and_client", lambda: (module, client))
+
+    assert service.list_voices()[0].voice_id == "vi-VN-Standard-A"
 
 
 @pytest.mark.skipif(
@@ -1863,6 +2187,140 @@ def test_theme_renderer_uses_bundled_fonts_with_libass(tmp_path: Path) -> None:
 
     assert (output.width, output.height) == (1080, 1920)
     assert not list(tmp_path.glob(".*.scene-*.mp4"))
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_theme_renderer_composites_theme_text_over_custom_background_video(tmp_path: Path) -> None:
+    runner = FFmpegRunner()
+    source = tmp_path / "custom-background.mp4"
+    audio_path = tmp_path / "timeline.wav"
+    runner.run(
+        [
+            "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=0.25",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+        ]
+    )
+    runner.run(
+        [
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=0.25",
+            "-c:a", "pcm_s16le", str(audio_path),
+        ]
+    )
+    audio = runner.probe.audio_artifact(audio_path)
+    manifest = MinigameThemeService().get("theme-1")
+    mask = MinigameAlphaMaskService().build(manifest, tmp_path / "mask")
+    subtitles = MinigameSubtitleBuilder().build(
+        MinigameProject(topic="Test", vocabulary=[_item()]),
+        MinigameTimeline([], [], audio.duration_ms),
+        tmp_path / "custom-background.ass",
+        "9:16",
+        manifest,
+    )
+    progress: list[float] = []
+
+    output = MinigameVideoRenderer(runner).render(
+        None,
+        audio,
+        subtitles,
+        tmp_path / "custom-background-result.mp4",
+        "9:16",
+        [0.2, 0.8],
+        theme_background=manifest.background_video,
+        theme_overlay=mask,
+        visual_scenes=[
+            MinigameVisualScene(
+                source, audio.duration_ms, (mask,), background_is_video=True, crop_focus=(0.2, 0.8)
+            )
+        ],
+        progress=lambda event: progress.append(event.fraction),
+    )
+
+    assert (output.width, output.height) == (1080, 1920)
+    assert progress[-1] == 1.0
+    assert not list(tmp_path.glob(".*.scene-*.mp4"))
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="FFmpeg/ffprobe không có trong PATH",
+)
+def test_real_video_theme_runs_under_full_flow_and_exports_matching_cover(tmp_path: Path) -> None:
+    runner = FFmpegRunner()
+    source = tmp_path / "full-flow-background.mp4"
+    audio_path = tmp_path / "full-flow.wav"
+    runner.run(
+        [
+            "-f", "lavfi", "-i", "testsrc2=size=480x854:rate=30:duration=0.4",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+        ]
+    )
+    runner.run(
+        [
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1.2",
+            "-c:a", "pcm_s16le", str(audio_path),
+        ]
+    )
+    audio = runner.probe.audio_artifact(audio_path)
+    timeline = MinigameTimeline(
+        [
+            MinigameScene("hook", 0, 200),
+            MinigameScene("word", 200, 400, 0, "question"),
+            MinigameScene("score", 400, 600),
+            MinigameScene("review_start", 600, 800),
+            MinigameScene("review", 800, 1_000, 0),
+            MinigameScene("cta", 1_000, 1_200),
+        ],
+        [],
+        1_200,
+    )
+    project = MinigameProject(topic="Travel", vocabulary=[_item()])
+    video_themes = MinigameVideoThemeService()
+    manifest = video_themes.manifest("video-violet")
+    surfaces = video_themes.build_surfaces("video-violet", manifest, tmp_path / "surfaces")
+    text_layers = MinigameTextLayerService()
+    hook_text = text_layers.build_hook(project, manifest, tmp_path / "text")
+    review_start_text = text_layers.build_review_start(project, manifest, tmp_path / "text")
+    cta_text = text_layers.build_cta(project, manifest, tmp_path / "text")
+    subtitles = MinigameSubtitleBuilder().build(
+        project, timeline, tmp_path / "full-flow.ass", "9:16", manifest
+    )
+    scenes = MinigamePipeline._video_visual_scenes(
+        timeline,
+        source,
+        surfaces,
+        hook_text,
+        review_start_text,
+        cta_text,
+        [0.5, 0.5],
+    )
+    progress: list[float] = []
+
+    output = MinigameVideoRenderer(runner).render(
+        None,
+        audio,
+        subtitles,
+        tmp_path / "full-flow.mp4",
+        "9:16",
+        [0.5, 0.5],
+        theme_background=manifest.background_video,
+        visual_scenes=scenes,
+        progress=lambda event: progress.append(event.fraction),
+    )
+    cover = MinigamePipeline(project, workspace=tmp_path / "workspace", runner=runner)._write_video_cover(
+        output.path
+    )
+
+    assert (output.width, output.height) == (1080, 1920)
+    assert abs(output.duration_ms - timeline.duration_ms) <= 100
+    assert progress[-1] == 1.0
+    with Image.open(cover) as image:
+        assert image.size == (1080, 1920)
+        assert np.asarray(image.convert("RGB")).std() > 10
+    assert not list(tmp_path.glob(".*.scene-*.mp4"))
+    assert not list(tmp_path.glob(".*.partial*"))
 
 
 @pytest.mark.skipif(

@@ -60,47 +60,82 @@ from .core.minigame import (
 from .core.models import PipelineError, ProgressEvent
 from .minigame_voice import MinigameVoiceDialog
 from .pipeline.minigame import MinigamePipeline, MinigameResult
+from .services.media.ffmpeg import FFmpegRunner
+from .services.media.minigame_frame import MinigameVisualFrameService
 from .services.media.minigame_text import MinigameTextLayerService
 from .services.media.minigame_theme import MinigameThemeService
+from .services.media.minigame_video_theme import MinigameVideoThemeService
 
 
 class MinigameThemeDialog(QDialog):
-    """Choose a theme without exposing the full gallery on the main form."""
+    """Compact visual configuration for the themed minigame renderer."""
 
     def __init__(
         self,
         *,
         theme_service: MinigameThemeService,
         selected_theme_id: str,
+        background_video: str,
+        video_theme_id: str,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Cấu hình theme English Mini Game")
-        self.resize(720, 520)
+        self.setWindowTitle("Cấu hình giao diện Mini Game")
+        self.resize(760, 360)
         self._selected_theme_id = selected_theme_id
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(12)
-        note = QLabel("Chọn một theme dọc 9:16 cho video minigame.")
+        note = QLabel(
+            "Không chọn video: dùng luồng theme ảnh. Có video: dùng luồng màu trên video xuyên suốt."
+        )
         note.setObjectName("Subtitle")
         root.addWidget(note)
+        root.addWidget(QLabel("Luồng theme tĩnh"))
         self.theme_group = QButtonGroup(self)
         self.theme_group.setExclusive(True)
         grid = QGridLayout()
-        grid.setSpacing(10)
+        grid.setSpacing(8)
         for index, (theme_id, manifest) in enumerate(theme_service.discover().items()):
             card = QToolButton()
             card.setCheckable(True)
             card.setIcon(QIcon(str(manifest.start_screen)))
-            card.setIconSize(QSize(108, 192))
+            card.setIconSize(QSize(72, 128))
             card.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-            card.setText(f"{manifest.display_name}\n{' · '.join(manifest.palette)}")
+            card.setText(manifest.display_name)
             card.setToolTip(f"{manifest.display_name} · hỗ trợ: {', '.join(manifest.supported_formats)}")
             card.setChecked(theme_id == selected_theme_id)
             card.clicked.connect(lambda _checked=False, value=theme_id: self._select(value))
             self.theme_group.addButton(card)
-            grid.addWidget(card, index // 3, index % 3)
+            grid.addWidget(card, 0, index)
         root.addLayout(grid)
+        root.addWidget(QLabel("Luồng nền video"))
+        background_row = QWidget()
+        background_layout = QHBoxLayout(background_row)
+        background_layout.setContentsMargins(0, 0, 0, 0)
+        self.background_video = QLineEdit(background_video)
+        self.background_video.setPlaceholderText("Không chọn: dùng nền ảnh có sẵn của theme")
+        choose_video = QPushButton("Chọn video…")
+        choose_video.clicked.connect(self._choose_background_video)
+        clear_video = QPushButton("Bỏ chọn")
+        clear_video.clicked.connect(self.background_video.clear)
+        background_layout.addWidget(self.background_video, 1)
+        background_layout.addWidget(choose_video)
+        background_layout.addWidget(clear_video)
+        root.addWidget(background_row)
+        self.video_theme = QComboBox()
+        for profile_id, profile in MinigameVideoThemeService(theme_service).discover().items():
+            self.video_theme.addItem(profile.display_name, profile_id)
+        selected_video_theme = self.video_theme.findData(video_theme_id)
+        self.video_theme.setCurrentIndex(max(0, selected_video_theme))
+        root.addWidget(self.video_theme)
+        background_note = QLabel(
+            "Video chạy phía sau toàn bộ Hook, Question/Answer, Score, Review và CTA. "
+            "Các panel/chữ lấy từ bộ màu đã chọn; âm thanh gốc của video không được dùng."
+        )
+        background_note.setObjectName("Subtitle")
+        background_note.setWordWrap(True)
+        root.addWidget(background_note)
         controls = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save
         )
@@ -113,6 +148,19 @@ class MinigameThemeDialog(QDialog):
 
     def selected_theme_id(self) -> str:
         return self._selected_theme_id
+
+    def selected_background_video(self) -> str:
+        return self.background_video.text().strip()
+
+    def selected_video_theme_id(self) -> str:
+        return str(self.video_theme.currentData())
+
+    def _choose_background_video(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn video nền", "", "Video (*.mp4 *.mov *.mkv *.webm *.avi)"
+        )
+        if path:
+            self.background_video.setText(path)
 
 
 class MinigameWorker(QObject):
@@ -143,9 +191,21 @@ class MinigamePreviewWorker(QObject):
     failed = Signal(object)
     finished = Signal()
 
-    def __init__(self, theme_id: str, topic: str, total: int, cache_dir: Path) -> None:
+    def __init__(
+        self,
+        theme_id: str,
+        video_theme_id: str,
+        background_video: str,
+        crop_focus: tuple[float, float],
+        topic: str,
+        total: int,
+        cache_dir: Path,
+    ) -> None:
         super().__init__()
         self.theme_id = theme_id
+        self.video_theme_id = video_theme_id
+        self.background_video = background_video
+        self.crop_focus = crop_focus
         self.topic = topic
         self.total = total
         self.cache_dir = cache_dir
@@ -153,14 +213,70 @@ class MinigamePreviewWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            manifest = MinigameThemeService().get(self.theme_id)
+            themes = MinigameThemeService()
+            video_themes = MinigameVideoThemeService(themes)
+            manifest = (
+                video_themes.manifest(self.video_theme_id)
+                if self.background_video
+                else themes.get(self.theme_id)
+            )
             project = MinigameProject(
                 topic=self.topic,
                 theme_id=self.theme_id,
+                video_theme_id=self.video_theme_id,
                 vocabulary=[VocabularyItem("", "", "", "") for _ in range(self.total)],
             )
             text_path = MinigameTextLayerService().build_hook(project, manifest, self.cache_dir)
-            self.succeeded.emit((manifest, text_path, self.topic, self.total))
+            frames = MinigameVisualFrameService()
+            if self.background_video:
+                background = Path(self.background_video).expanduser().resolve()
+                if not background.is_file():
+                    raise ValueError("Video nền đã chọn không còn tồn tại.")
+                stat = background.stat()
+                frame_path = self.cache_dir / (
+                    f"video-frame-{stat.st_size}-{stat.st_mtime_ns}-"
+                    f"{round(self.crop_focus[0] * 100)}-{round(self.crop_focus[1] * 100)}.png"
+                )
+                if not frame_path.is_file():
+                    partial = frame_path.with_name(f".{frame_path.stem}.partial.png")
+                    frame_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        FFmpegRunner().run(
+                            [
+                                "-ss", "0.100", "-i", str(background), "-frames:v", "1",
+                                "-vf",
+                                (
+                                    "scale=1080:1920:force_original_aspect_ratio=increase,"
+                                    f"crop=1080:1920:(in_w-out_w)*{self.crop_focus[0]:.4f}:"
+                                    f"(in_h-out_h)*{self.crop_focus[1]:.4f}"
+                                ),
+                                "-update", "1", str(partial),
+                            ],
+                            duration_ms=100,
+                            step=0,
+                        )
+                        partial.replace(frame_path)
+                    finally:
+                        partial.unlink(missing_ok=True)
+                surface = video_themes.build_surfaces(
+                    self.video_theme_id, manifest, self.cache_dir / "surfaces"
+                )["hook"]
+                preview = frames.build(
+                    frame_path,
+                    (surface, text_path),
+                    self.cache_dir / "frames",
+                    layout_key={"video_theme": manifest.checksum},
+                )
+                mode = "video"
+            else:
+                preview = frames.build(
+                    manifest.start_base,
+                    (text_path,),
+                    self.cache_dir / "frames",
+                    layout_key={"theme": manifest.checksum},
+                )
+                mode = "static"
+            self.succeeded.emit((manifest, preview, mode))
         except Exception as exc:  # noqa: BLE001 - report preview failure to Qt UI
             self.failed.emit(exc)
         finally:
@@ -170,7 +286,7 @@ class MinigamePreviewWorker(QObject):
 class MinigamePage(QWidget):
     dirty_changed = Signal(bool)
 
-    def __init__(self) -> None:
+    def __init__(self, preferences: QSettings | None = None) -> None:
         super().__init__()
         self.setObjectName("AppRoot")
         self.thread: QThread | None = None
@@ -186,7 +302,11 @@ class MinigamePage(QWidget):
         self._loading_project = False
         self._last_valid_content = MinigameContent.blank(5)
         self._auto_output_name = True
-        self.preferences = QSettings("QuyetBoIT", "QuyetBoITStudio")
+        self.background_video_path = ""
+        self.video_theme_id = "video-ocean"
+        self.preferences = (
+            preferences if preferences is not None else QSettings("QuyetBoIT", "QuyetBoITStudio")
+        )
         default_account = Path.cwd() / "services-account.json"
         self.voice_provider = str(
             self.preferences.value("minigame/voice/provider", MinigameTtsProvider.GOOGLE.value)
@@ -240,17 +360,21 @@ class MinigamePage(QWidget):
         header.addStretch()
         root.addLayout(header)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.config_scroll = QScrollArea()
+        self.config_scroll.setWidgetResizable(True)
+        self.config_scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
         columns = QHBoxLayout(content)
         columns.setContentsMargins(0, 16, 0, 0)
         columns.setSpacing(18)
         columns.addWidget(self._configuration_panel(), 3)
         columns.addWidget(self._preview_panel(), 2)
-        scroll.setWidget(content)
-        root.addWidget(scroll, 1)
+        self.config_scroll.setWidget(content)
+        root.addWidget(self.config_scroll, 1)
+        # This dock deliberately lives outside the ScrollArea: long JSON input
+        # must never hide the render controls or live progress from the user.
+        self.action_dock = self._action_dock()
+        root.addWidget(self.action_dock)
 
     def _card(self, title: str) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
@@ -276,6 +400,7 @@ class MinigamePage(QWidget):
         cached_theme_id = str(self.preferences.value("minigame/theme_id", "theme-1"))
         cached_theme_index = self.theme_id.findData(cached_theme_id)
         self.theme_id.setCurrentIndex(max(0, cached_theme_index))
+        self.theme_id.currentIndexChanged.connect(self._cache_theme_selection)
         self.theme_id.currentIndexChanged.connect(self._update_theme_summary)
         self.theme_id.currentIndexChanged.connect(self._update_preview)
         self.theme_summary = QLabel()
@@ -288,7 +413,7 @@ class MinigamePage(QWidget):
         self._update_theme_summary()
         layout.addWidget(theme_card)
 
-        source_card, source = self._card("2. Giao diện và định dạng")
+        source_card, source = self._card("2. Định dạng")
         source_form = QFormLayout()
         self.aspect = QComboBox()
         self.aspect.addItem("YouTube 16:9", MinigameFormat.YOUTUBE.value)
@@ -296,24 +421,20 @@ class MinigamePage(QWidget):
         self.aspect.addItem("Xuất cả hai", MinigameFormat.BOTH.value)
         self.aspect.model().item(0).setEnabled(False)
         self.aspect.model().item(2).setEnabled(False)
-        self.aspect.setCurrentIndex(1)
+        cached_format = str(
+            self.preferences.value("minigame/export/format", MinigameFormat.VERTICAL.value)
+        )
+        cached_format_index = self.aspect.findData(cached_format)
+        if cached_format_index < 0 or not self.aspect.model().item(cached_format_index).isEnabled():
+            cached_format_index = 1
+        self.aspect.setCurrentIndex(cached_format_index)
         self.aspect.setToolTip("Bộ asset hiện chỉ được thiết kế cho video dọc 9:16.")
+        self.aspect.currentIndexChanged.connect(self._cache_export_configuration)
         self.aspect.currentIndexChanged.connect(self._update_preview)
-        video_row = QWidget()
-        video_layout = QHBoxLayout(video_row)
-        video_layout.setContentsMargins(0, 0, 0, 0)
-        self.video_path = QLineEdit()
-        self.video_path.setPlaceholderText("Chọn video MP4/MOV/MKV…")
-        self.video_path.textChanged.connect(self._update_preview)
-        choose_video = QPushButton("Chọn…")
-        choose_video.clicked.connect(self._choose_video)
-        video_layout.addWidget(self.video_path, 1)
-        video_layout.addWidget(choose_video)
         source_form.addRow("Tỷ lệ", self.aspect)
-        source_form.addRow("Video nền legacy", video_row)
         source.addLayout(source_form)
         audio_note = QLabel(
-            "Theme dùng ảnh nền có sẵn và chỉ hỗ trợ 9:16. Video nền legacy được giữ để mở project cũ."
+            "Theme hiện hỗ trợ video dọc 9:16. Chọn video nền trong Cấu hình theme khi cần thay nền ảnh phần học."
         )
         audio_note.setObjectName("Subtitle")
         audio_note.setWordWrap(True)
@@ -342,7 +463,41 @@ class MinigamePage(QWidget):
                 self.crop_9_x, self.crop_9_y = x, y
         layout.addWidget(source_card)
 
-        content_card, vocabulary_layout = self._card("3. Nội dung bắt buộc")
+        voice_card, voice = self._card("3. Cấu hình giọng đọc")
+        self.voice_summary = QLabel()
+        self.voice_summary.setWordWrap(True)
+        self.voice_summary.setObjectName("Subtitle")
+        self.voice_config_button = QPushButton("Cấu hình Voice…")
+        self.voice_config_button.clicked.connect(self._open_voice_dialog)
+        voice.addWidget(self.voice_summary)
+        voice.addWidget(self.voice_config_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._update_voice_summary()
+        layout.addWidget(voice_card)
+
+        output_card, output = self._card("4. Xuất video")
+        output_form = QFormLayout()
+        folder_row = QWidget()
+        folder_layout = QHBoxLayout(folder_row)
+        folder_layout.setContentsMargins(0, 0, 0, 0)
+        default_output_folder = str((Path.cwd() / "output").resolve())
+        cached_output_folder = str(
+            self.preferences.value("minigame/export/folder", default_output_folder)
+        )
+        self.output_folder = QLineEdit(cached_output_folder)
+        self.output_folder.editingFinished.connect(self._cache_export_configuration)
+        choose_folder = QPushButton("Chọn…")
+        choose_folder.clicked.connect(self._choose_output_folder)
+        folder_layout.addWidget(self.output_folder, 1)
+        folder_layout.addWidget(choose_folder)
+        self.output_name = QLineEdit()
+        self.output_name.setPlaceholderText("Tự động lấy từ Topic; bạn có thể sửa lại")
+        self.output_name.textEdited.connect(self._mark_output_name_custom)
+        output_form.addRow("Thư mục", folder_row)
+        output_form.addRow("Tên video", self.output_name)
+        output.addLayout(output_form)
+        layout.addWidget(output_card)
+
+        content_card, vocabulary_layout = self._card("5. Nội dung bắt buộc")
         json_help = QLabel(
             "Nhập một object JSON gồm schemaVersion, topic và words. Mỗi từ có đủ: "
             "vietnamese, english, ipa, wordType, example, exampleVietnamese, level "
@@ -378,34 +533,24 @@ class MinigamePage(QWidget):
         vocabulary_layout.addWidget(self.content_status)
         layout.addWidget(content_card)
 
-        voice_card, voice = self._card("4. Cấu hình giọng đọc")
-        self.voice_summary = QLabel()
-        self.voice_summary.setWordWrap(True)
-        self.voice_summary.setObjectName("Subtitle")
-        self.voice_config_button = QPushButton("Cấu hình Voice…")
-        self.voice_config_button.clicked.connect(self._open_voice_dialog)
-        voice.addWidget(self.voice_summary)
-        voice.addWidget(self.voice_config_button, 0, Qt.AlignmentFlag.AlignLeft)
-        self._update_voice_summary()
-        layout.addWidget(voice_card)
+        return panel
 
-        output_card, output = self._card("5. Xuất video")
-        output_form = QFormLayout()
-        folder_row = QWidget()
-        folder_layout = QHBoxLayout(folder_row)
-        folder_layout.setContentsMargins(0, 0, 0, 0)
-        self.output_folder = QLineEdit(str((Path.cwd() / "output").resolve()))
-        choose_folder = QPushButton("Chọn…")
-        choose_folder.clicked.connect(self._choose_output_folder)
-        folder_layout.addWidget(self.output_folder, 1)
-        folder_layout.addWidget(choose_folder)
-        self.output_name = QLineEdit()
-        self.output_name.setPlaceholderText("Tự động lấy từ Topic; bạn có thể sửa lại")
-        self.output_name.textEdited.connect(self._mark_output_name_custom)
-        output_form.addRow("Thư mục", folder_row)
-        output_form.addRow("Tên video", self.output_name)
-        output.addLayout(output_form)
+    def _action_dock(self) -> QFrame:
+        """Persistent render controls shown below the scrollable configuration."""
+        action_card = QFrame()
+        action_card.setObjectName("MinigameActionDock")
+        action_card.setStyleSheet(
+            "QFrame#MinigameActionDock { background: #ffffff; border: 1px solid #d0d5dd; "
+            "border-radius: 14px; }"
+        )
+        action_layout = QVBoxLayout(action_card)
+        action_layout.setContentsMargins(18, 12, 18, 12)
+        action_layout.setSpacing(8)
         actions = QHBoxLayout()
+        dock_title = QLabel("Xuất video")
+        dock_title.setObjectName("SectionTitle")
+        actions.addWidget(dock_title)
+        actions.addStretch()
         self.render_button = QPushButton("Tạo video")
         self.render_button.setObjectName("Primary")
         self.render_button.clicked.connect(self._start_render)
@@ -419,22 +564,22 @@ class MinigamePage(QWidget):
         actions.addWidget(self.render_button)
         actions.addWidget(self.stop_button)
         actions.addWidget(self.open_button)
-        output.addLayout(actions)
+        action_layout.addLayout(actions)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        output.addWidget(self.progress)
+        action_layout.addWidget(self.progress)
         self.status = QLabel("Sẵn sàng")
         self.status.setObjectName("Subtitle")
         self.status.setWordWrap(True)
-        output.addWidget(self.status)
-        layout.addWidget(output_card)
-        layout.addStretch()
-        return panel
+        action_layout.addWidget(self.status)
+        return action_card
 
     def _open_theme_dialog(self) -> None:
         dialog = MinigameThemeDialog(
             theme_service=self.theme_service,
             selected_theme_id=str(self.theme_id.currentData()),
+            background_video=self.background_video_path,
+            video_theme_id=self.video_theme_id,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -444,7 +589,26 @@ class MinigamePage(QWidget):
         if index < 0:
             return
         self.theme_id.setCurrentIndex(index)
+        self.background_video_path = dialog.selected_background_video()
+        self.video_theme_id = dialog.selected_video_theme_id()
+        self._update_theme_summary()
+        self._update_preview()
         self.preferences.setValue("minigame/theme_id", selected_theme_id)
+
+    def _cache_theme_selection(self) -> None:
+        if self._loading_project:
+            return
+        theme_id = self.theme_id.currentData()
+        if theme_id:
+            self.preferences.setValue("minigame/theme_id", str(theme_id))
+
+    def _cache_export_configuration(self) -> None:
+        if self._loading_project:
+            return
+        output_format = self.aspect.currentData()
+        if output_format:
+            self.preferences.setValue("minigame/export/format", str(output_format))
+        self.preferences.setValue("minigame/export/folder", self.output_folder.text().strip())
 
     def _update_theme_summary(self) -> None:
         theme_id = str(self.theme_id.currentData())
@@ -455,7 +619,8 @@ class MinigamePage(QWidget):
             return
         self.theme_summary.setText(
             f"{manifest.display_name} · {' · '.join(manifest.palette)} · "
-            f"hỗ trợ {', '.join(manifest.supported_formats)}"
+            f"hỗ trợ {', '.join(manifest.supported_formats)} · "
+            f"luồng {'nền video · ' + MinigameVideoThemeService(self.theme_service).get(self.video_theme_id).display_name if self.background_video_path else 'theme tĩnh'}"
         )
 
     def _preview_panel(self) -> QWidget:
@@ -490,19 +655,24 @@ class MinigamePage(QWidget):
         except ValueError as exc:
             self.content_status.setText(f"JSON chưa hợp lệ — chưa thể lưu/chạy: {exc}")
         else:
+            topic_changed = content.topic.strip() != self._last_valid_content.topic.strip()
             self._last_valid_content = content
             self.content_status.setText(
                 f"Cấu trúc JSON hợp lệ · Topic: {content.topic or '(chưa nhập)'} · "
                 f"{len(content.words)} từ"
             )
-            self._sync_output_name_from_topic(content.topic)
+            self._sync_output_name_from_topic(
+                content.topic,
+                force=topic_changed and not self._loading_project,
+            )
         self._update_preview()
 
     def _mark_output_name_custom(self, _value: str) -> None:
         self._auto_output_name = False
 
-    def _sync_output_name_from_topic(self, topic: str) -> None:
-        if self._auto_output_name and topic.strip():
+    def _sync_output_name_from_topic(self, topic: str, *, force: bool = False) -> None:
+        if (force or self._auto_output_name) and topic.strip():
+            self._auto_output_name = True
             self.output_name.setText(topic.strip())
 
     def _load_content_json(self) -> None:
@@ -545,8 +715,9 @@ class MinigamePage(QWidget):
         return MinigameProject(
             project_uuid=self.project_uuid,
             topic=content.topic,
-            background_video=self.video_path.text(),
+            background_video=self.background_video_path,
             theme_id=str(self.theme_id.currentData()),
+            video_theme_id=self.video_theme_id,
             output_format=str(self.aspect.currentData()),
             output_folder=self.output_folder.text(),
             output_name=self.output_name.text(),
@@ -568,15 +739,36 @@ class MinigamePage(QWidget):
 
     def set_project(self, project: MinigameProject) -> None:
         """Restore persisted Minigame state without restoring credential paths."""
+        defaults = MinigameProject()
+        is_new_project = (
+            not project.topic
+            and not project.vocabulary
+            and not project.background_video
+            and project.theme_id == defaults.theme_id
+            and project.output_format == defaults.output_format
+            and project.output_folder == defaults.output_folder
+            and project.output_name == defaults.output_name
+            and project.tts_provider == defaults.tts_provider
+            and project.voice == defaults.voice
+            and project.voice_language == defaults.voice_language
+            and project.voice_gender == defaults.voice_gender
+            and project.voice_family == defaults.voice_family
+            and project.voice_categories == defaults.voice_categories
+            and project.volume == defaults.volume
+            and project.slow_rate == defaults.slow_rate
+        )
         self._loading_project = True
         try:
             self.project_uuid = project.project_uuid
-            theme_index = self.theme_id.findData(project.theme_id)
-            self.theme_id.setCurrentIndex(max(0, theme_index))
-            format_index = self.aspect.findData(project.output_format)
-            self.aspect.setCurrentIndex(format_index if format_index >= 0 else 1)
-            self.video_path.setText(project.background_video)
-            self.output_folder.setText(project.output_folder)
+            if not is_new_project:
+                theme_index = self.theme_id.findData(project.theme_id)
+                self.theme_id.setCurrentIndex(max(0, theme_index))
+                format_index = self.aspect.findData(project.output_format)
+                self.aspect.setCurrentIndex(format_index if format_index >= 0 else 1)
+            self.background_video_path = project.background_video
+            self.video_theme_id = project.video_theme_id
+            if not is_new_project:
+                self.output_folder.setText(project.output_folder)
             # MainWindow restores a blank MinigameProject on every new app
             # session.  Treat its empty/legacy/default name as automatic so a
             # Topic entered in the JSON editor can populate this field.  A
@@ -590,15 +782,16 @@ class MinigamePage(QWidget):
             self.output_name.setText(
                 project.topic.strip() if self._auto_output_name and project.topic.strip() else stored_name
             )
-            self.voice_provider = project.tts_provider
-            self.voice_id = project.voice
-            self.voice_name = project.voice
-            self.voice_language = project.voice_language
-            self.voice_gender = project.voice_gender
-            self.voice_family = project.voice_family
-            self.voice_categories = list(project.voice_categories)
-            self.voice_volume = project.volume
-            self.slow_rate = project.slow_rate
+            if not is_new_project:
+                self.voice_provider = project.tts_provider
+                self.voice_id = project.voice
+                self.voice_name = project.voice
+                self.voice_language = project.voice_language
+                self.voice_gender = project.voice_gender
+                self.voice_family = project.voice_family
+                self.voice_categories = list(project.voice_categories)
+                self.voice_volume = project.volume
+                self.slow_rate = project.slow_rate
             self.crop_16_x.setValue(round(project.crop_focus.get("16:9", [0.5, 0.5])[0] * 100))
             self.crop_16_y.setValue(round(project.crop_focus.get("16:9", [0.5, 0.5])[1] * 100))
             self.crop_9_x.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[0] * 100))
@@ -608,6 +801,7 @@ class MinigamePage(QWidget):
             )
             self._last_valid_content = content
             self.content_editor.setPlainText(content.to_json())
+            self._update_theme_summary()
             self._update_voice_summary()
             self._update_preview()
         finally:
@@ -800,7 +994,15 @@ class MinigamePage(QWidget):
         total = len(self._last_valid_content.words)
         theme_id = str(self.theme_id.currentData())
         self.preview_thread = QThread(self)
-        self.preview_worker = MinigamePreviewWorker(theme_id, topic, total, self.preview_cache)
+        self.preview_worker = MinigamePreviewWorker(
+            theme_id,
+            self.video_theme_id,
+            self.background_video_path,
+            (self.crop_9_x.value() / 100, self.crop_9_y.value() / 100),
+            topic,
+            total,
+            self.preview_cache,
+        )
         self.preview_worker.moveToThread(self.preview_thread)
         self.preview_thread.started.connect(self.preview_worker.run)
         self.preview_worker.succeeded.connect(self._preview_ready)
@@ -812,20 +1014,15 @@ class MinigamePage(QWidget):
 
     @Slot(object)
     def _preview_ready(self, result: object) -> None:
-        manifest, text_path, _topic, _total = result  # type: ignore[misc]
-        start = QPixmap(str(manifest.start_screen)).scaled(
-            manifest.canvas.width,
-            manifest.canvas.height,
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        painter = QPainter(start)
-        painter.drawPixmap(0, 0, QPixmap(str(text_path)))
-        painter.end()
-        self._preview_base = start
+        manifest, preview_path, mode = result  # type: ignore[misc]
+        self._preview_base = QPixmap(str(preview_path))
         self._preview_manifest = manifest
         self._display_preview()
-        self.preview_caption.setText("Preview dùng đúng start.png và typography như video/ảnh bìa.")
+        self.preview_caption.setText(
+            "Preview Hook dùng video nền và bộ màu đã chọn; ảnh bìa lấy từ frame render này."
+            if mode == "video"
+            else "Preview dùng đúng start.png và typography như video/ảnh bìa."
+        )
 
     @Slot(object)
     def _preview_failed(self, error: object) -> None:
@@ -862,17 +1059,11 @@ class MinigamePage(QWidget):
             )
         )
 
-    def _choose_video(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn video nền", "", "Video (*.mp4 *.mov *.mkv *.webm)"
-        )
-        if path:
-            self.video_path.setText(path)
-
     def _choose_output_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục xuất video")
         if path:
             self.output_folder.setText(path)
+            self._cache_export_configuration()
 
     def _open_output(self) -> None:
         folder = (

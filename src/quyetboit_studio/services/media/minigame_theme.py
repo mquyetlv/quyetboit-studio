@@ -75,7 +75,14 @@ class MinigameThemeService:
     # Theme 3's paper-note artwork has a wider baked-in check icon.  Its score
     # lockup therefore starts farther right than the shared geometry, so the
     # large count does not look pulled toward the icon.
-    _DYNAMIC_BOUNDS["theme-3"]["review_badge"] = (485, 798, 755, 870)
+    # Theme 3's paper-note artwork leaves one intentionally wide, single-line
+    # gap below the REVIEW TIME title.  The shared two-line layout crowded the
+    # headline and placed the score too high in its pill.
+    _DYNAMIC_BOUNDS["theme-3"]["review_sentence"] = (145, 720, 935, 790)
+    # Centre the lockup in the pill's usable area (to the right of the baked-in
+    # check mark), not in the full pill.  The shared centre left Theme 3's
+    # `3/3 COMPLETE` visibly pulled to the right.
+    _DYNAMIC_BOUNDS["theme-3"]["review_badge"] = (463, 817, 733, 891)
     _CTA_BOUNDS: ClassVar[dict[str, dict[str, tuple[int, int, int, int]]]] = {
         "theme-1": {
             "cta_primary": (145, 1330, 935, 1470),
@@ -206,8 +213,16 @@ class MinigameThemeService:
             "review_example_vi": TextSlot("review_example_vi", (175, 1555, 905, 1670), 3),
         }
         slots.update(
-            {name: TextSlot(name, bounds, 2 if name in {"cta_headline", "review_sentence"} else 1)
-            for name, bounds in cls._DYNAMIC_BOUNDS[theme_id].items()}
+            {
+                name: TextSlot(
+                    name,
+                    bounds,
+                    1
+                    if name == "review_sentence" and theme_id == "theme-3"
+                    else 2 if name in {"cta_headline", "review_sentence"} else 1,
+                )
+                for name, bounds in cls._DYNAMIC_BOUNDS[theme_id].items()
+            }
         )
         slots.update(
             {name: TextSlot(name, bounds, 2 if name == "cta_primary" else 1)
@@ -446,7 +461,7 @@ class MinigameThemeService:
             slots=self._slots(theme_id),
             styles=styles,
             placements=self._placements(),
-            layout_version=16,
+            layout_version=18 if theme_id == "theme-3" else 16,
             checksum=checksum,
         )
 

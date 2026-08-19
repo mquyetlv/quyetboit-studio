@@ -38,6 +38,9 @@ class MinigameVisualScene:
     duration_ms: int
     overlays: tuple[Path, ...] = ()
     fade_in_ms: int = 0
+    background_is_video: bool = False
+    crop_focus: tuple[float, float] = (0.5, 0.5)
+    background_start_ms: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -936,7 +939,9 @@ class MinigameVideoRenderer:
         hook_duration_ms: int,
         visual_scenes: list[MinigameVisualScene] | None = None,
     ) -> VideoArtifact:
-        if overlay is None or not background.is_file() or not overlay.is_file():
+        if not background.is_file() or (
+            visual_scenes is None and (overlay is None or not overlay.is_file())
+        ):
             raise PipelineError(
                 "theme_asset_missing", "Theme chưa có đủ background hoặc alpha mask."
             )
@@ -963,10 +968,31 @@ class MinigameVideoRenderer:
                 scene_path = output.with_name(f".{output.stem}.scene-{index}.mp4")
                 scene_partial = output.with_name(f".{output.stem}.scene-{index}.partial.mp4")
                 scene_paths.append(scene_path)
-                inputs = ["-loop", "1", "-framerate", "30", "-i", str(scene.background)]
+                if scene.background_is_video:
+                    source = self.runner.probe.video_artifact(scene.background)
+                    source_duration = max(1, source.duration_ms)
+                    start_seconds = (scene.background_start_ms % source_duration) / 1_000
+                    inputs = [
+                        "-stream_loop",
+                        "-1",
+                        "-ss",
+                        f"{start_seconds:.3f}",
+                        "-i",
+                        str(scene.background),
+                    ]
+                    focus_x = max(0.0, min(1.0, scene.crop_focus[0]))
+                    focus_y = max(0.0, min(1.0, scene.crop_focus[1]))
+                    background_filter = (
+                        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                        f"crop=1080:1920:(in_w-out_w)*{focus_x:.4f}:(in_h-out_h)*{focus_y:.4f},"
+                        "setsar=1,format=rgba"
+                    )
+                else:
+                    inputs = ["-loop", "1", "-framerate", "30", "-i", str(scene.background)]
+                    background_filter = "[0:v]scale=1080:1920,format=rgba"
                 fade = min(max(0, scene.fade_in_ms), scene.duration_ms) / 1000
                 fade_filter = f",fade=t=in:st=0:d={fade:.3f}" if fade else ""
-                graph_parts = [f"[0:v]scale=1080:1920,format=rgba{fade_filter}[v0]"]
+                graph_parts = [f"{background_filter}{fade_filter}[v0]"]
                 current = "v0"
                 for overlay_index, overlay_path in enumerate(scene.overlays, 1):
                     inputs.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])

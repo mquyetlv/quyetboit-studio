@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QDialogButtonBox, QLabel
 from quyetboit_studio.core.minigame import (
     MinigameAudioEvent,
     MinigameContent,
+    MinigameFlow,
     MinigameMultipartContent,
     MinigameProject,
     MinigameScene,
@@ -32,7 +33,7 @@ from quyetboit_studio.core.minigame import (
     score_ranges,
 )
 from quyetboit_studio.core.models import CancellationToken, PipelineError
-from quyetboit_studio.minigame import MinigamePage
+from quyetboit_studio.minigame import MinigameFlowDialog, MinigamePage
 from quyetboit_studio.minigame_voice import MinigameVoiceDialog
 from quyetboit_studio.pipeline.minigame import (
     MinigameMultipartPipeline,
@@ -172,12 +173,16 @@ def test_multipart_pipeline_reuses_single_pipeline_with_part_output_names(
     ).run()
 
     assert [project.output_name for project in created] == [
-        "Greetings & Introductions Part 1",
-        "Greetings & Introductions Part 2",
+        "Greetings & Introductions - Part 1",
+        "Greetings & Introductions - Part 2",
+    ]
+    assert [project.topic for project in created] == [
+        "Greetings & Introductions - Part 1",
+        "Greetings & Introductions - Part 2",
     ]
     assert [path.name for path in result.outputs] == [
-        "Greetings & Introductions Part 1.mp4",
-        "Greetings & Introductions Part 2.mp4",
+        "Greetings & Introductions - Part 1.mp4",
+        "Greetings & Introductions - Part 2.mp4",
     ]
 
 
@@ -227,6 +232,42 @@ def test_vnext_timing_profile_builds_semantic_boundaries_and_full_reveal_gap(
         <= profile.review_hold_ms(_item(), 900)
         <= profile.review_after_example_max_ms
     )
+
+
+def test_selected_flows_omit_hook_and_start_immediately_with_question(tmp_path: Path) -> None:
+    normal = tmp_path / "normal.wav"
+    slow = tmp_path / "slow.wav"
+    example = tmp_path / "example.wav"
+    timeline = MinigameTimelineBuilder().build(
+        [_item()],
+        [normal],
+        [slow],
+        [example],
+        {normal: 800, slow: 1_100, example: 900},
+        enabled_flows={MinigameFlow.QUESTION.value},
+    )
+
+    question = next(scene for scene in timeline.scenes if scene.kind == "word")
+    assert question.phase == "question"
+    assert question.start_ms == 0
+    assert {scene.kind for scene in timeline.scenes} == {"word", "boundary"}
+    assert timeline.audio_events == []
+
+
+def test_project_flow_configuration_round_trips_and_rejects_empty_selection() -> None:
+    project = MinigameProject(
+        topic="Flow",
+        vocabulary=[_item()],
+        tts_provider="capcut",
+        voice="voice",
+        enabled_flows=[MinigameFlow.QUESTION.value, MinigameFlow.ANSWER.value],
+    )
+
+    restored = MinigameProject.from_dict(project.to_safe_dict())
+    assert restored.enabled_flows == project.enabled_flows
+    project.enabled_flows = []
+    with pytest.raises(ValueError, match="ít nhất một flow"):
+        project.validate()
 
 
 def test_audio_cue_manifest_resolves_bundled_assets_and_reports_missing(tmp_path: Path) -> None:
@@ -1906,11 +1947,47 @@ def test_minigame_page_orders_voice_and_export_before_required_content(qtbot) ->
         label.text() for label in page.findChildren(QLabel) if label.objectName() == "SectionTitle"
     ]
 
-    assert titles.index("3. Cấu hình giọng đọc") < titles.index("4. Xuất video")
-    assert titles.index("4. Xuất video") < titles.index("5. Nội dung bắt buộc")
+    assert titles.index("2. Cấu hình flow") < titles.index("4. Cấu hình giọng đọc")
+    assert titles.index("4. Cấu hình giọng đọc") < titles.index("5. Xuất video")
+    assert titles.index("5. Xuất video") < titles.index("6. Nội dung bắt buộc")
     assert page.render_button.parent() is page.action_dock
     assert page.action_dock.parent() is page
     assert page.action_dock is not page.config_scroll.widget()
+
+
+def test_minigame_page_collects_and_restores_selected_flows(qtbot) -> None:
+    page = MinigamePage()
+    restored = MinigamePage()
+    qtbot.addWidget(page)
+    qtbot.addWidget(restored)
+    page.enabled_flows -= {MinigameFlow.HOOK.value, MinigameFlow.REVIEW.value}
+
+    project = page._collect_project()
+    assert MinigameFlow.HOOK.value not in project.enabled_flows
+    assert MinigameFlow.REVIEW.value not in project.enabled_flows
+
+    restored.set_project(project)
+    assert MinigameFlow.HOOK.value not in restored.enabled_flows
+    assert MinigameFlow.REVIEW.value not in restored.enabled_flows
+
+
+def test_minigame_flow_dialog_and_last_used_configuration(qtbot, tmp_path: Path) -> None:
+    dialog = MinigameFlowDialog({MinigameFlow.QUESTION.value})
+    qtbot.addWidget(dialog)
+    assert dialog.checks[MinigameFlow.QUESTION].isChecked()
+    assert not dialog.checks[MinigameFlow.HOOK].isChecked()
+
+    settings = QSettings(str(tmp_path / "flow-settings.ini"), QSettings.Format.IniFormat)
+    source = MinigamePage(settings)
+    qtbot.addWidget(source)
+    source.enabled_flows = {MinigameFlow.QUESTION.value, MinigameFlow.ANSWER.value}
+    source._cache_flow_configuration()
+    source.preferences.sync()
+
+    restored = MinigamePage(QSettings(str(tmp_path / "flow-settings.ini"), QSettings.Format.IniFormat))
+    qtbot.addWidget(restored)
+    restored.set_project(MinigameProject())
+    assert restored.enabled_flows == source.enabled_flows
 
 
 def test_minigame_page_keeps_last_valid_content_while_json_is_incomplete(qtbot) -> None:

@@ -22,11 +22,11 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 
 ### Tiến độ cập nhật ngày 2026-08-23
 
-- Hoàn thành: **152/205 task (74,15%)**.
-- Đang làm/đã có một phần: **40 task (19,51%)**.
-- Chưa triển khai: **8 task (3,90%)**.
-- Chờ credential/live test hoặc nghiệm thu: **5 task (2,44%)**.
-- Unit/lint hiện tại: **234 test pass**, Ruff pass.
+- Hoàn thành: **153/206 task (74,27%)**.
+- Đang làm/đã có một phần: **40 task (19,42%)**.
+- Chưa triển khai: **8 task (3,88%)**.
+- Chờ credential/live test hoặc nghiệm thu: **5 task (2,43%)**.
+- Unit/lint hiện tại: **237 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -313,8 +313,10 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Cache voice theo provider + voice + text + volume; output ghi `.partial`, ffprobe validate rồi
   rename atomically và tự tăng suffix nếu file cũ tồn tại.
 - [x] Thêm tab JSON `Nhiều phần`: kiểm tra `totalParts`/`totalWords`/`partNumber`, render tuần tự
-  từng mảng qua đúng pipeline cũ, workspace riêng từng phần và tên output `<Topic> Part <n>`.
+  từng mảng qua đúng pipeline cũ, workspace riêng từng phần; tên output và Topic trên Hook/ảnh bìa
+  dùng `<Topic> - Part <n>`.
 - [x] Thêm dependency chính thức `google-cloud-texttospeech` và import-lazy với lỗi hướng dẫn rõ ràng.
+- [x] Thêm **Cấu hình flow…** dạng dialog trong menu Mini game: chọn độc lập Hook, Question/countdown, Answer, ba pha voice, Score, Review Start, Review và CTA; lựa chọn gần nhất được lưu trong `QSettings` cho project mới, còn project đã lưu giữ cấu hình riêng; timeline/ASS/audio/visual render loại hẳn section không chọn và bỏ Hook bắt đầu Question tại mốc 0; có regression test model/UI/visual mapping.
 - [x] Thêm unit test validation, credential-safe serialization, score, timeline, ASS và integration
   render FFmpeg thật xác nhận cả 1920×1080/1080×1920, video/audio stream và progress 100%.
 - [x] Nâng cấp layout bằng typography Unicode, phân cấp English/IPA/nghĩa Việt/example và nhãn voice

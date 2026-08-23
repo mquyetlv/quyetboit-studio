@@ -105,8 +105,9 @@ tại `minigame-content.schema.json`.
 
 Tab **Nhiều phần** nhận một topic và mảng `parts`; mỗi phần được đưa nguyên vẹn qua luồng tạo video
 mini-game hiện có, theo thứ tự `partNumber`. `totalParts` và `totalWords` phải đúng với dữ liệu thực,
-`partNumber` phải liên tiếp từ 1. Tên video được đặt cố định là `<topic> Part <partNumber>` (ví dụ
-`Greetings & Introductions Part 1`) và hệ thống vẫn tự thêm suffix nếu file đã tồn tại.
+`partNumber` phải liên tiếp từ 1. Tên video và Topic trên Hook/ảnh bìa được đặt cố định là
+`<topic> - Part <partNumber>` (ví dụ `Greetings & Introductions - Part 1`); hệ thống vẫn tự thêm
+suffix nếu file đã tồn tại.
 
 ```json
 {

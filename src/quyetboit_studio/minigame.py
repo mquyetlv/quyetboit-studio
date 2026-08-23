@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 
 from .core.minigame import (
     MinigameContent,
+    MinigameFlow,
     MinigameFormat,
     MinigameMultipartContent,
     MinigameProject,
@@ -161,6 +162,51 @@ class MinigameThemeDialog(QDialog):
         )
         if path:
             self.background_video.setText(path)
+
+
+class MinigameFlowDialog(QDialog):
+    """Select the sections included in an English mini-game video."""
+
+    FLOW_LABELS = (
+        (MinigameFlow.HOOK, "Hook"),
+        (MinigameFlow.QUESTION, "Mỗi từ — Question và countdown"),
+        (MinigameFlow.ANSWER, "Mỗi từ — Answer"),
+        (MinigameFlow.VOICE_LISTEN, "Mỗi từ — Voice: nghe tự nhiên"),
+        (MinigameFlow.VOICE_SLOW, "Mỗi từ — Voice: nghe chậm"),
+        (MinigameFlow.VOICE_REPEAT, "Mỗi từ — Voice: lặp lại"),
+        (MinigameFlow.SCORE, "Chấm điểm"),
+        (MinigameFlow.REVIEW_START, "Mở đầu ôn tập"),
+        (MinigameFlow.REVIEW, "Ôn tập từng từ"),
+        (MinigameFlow.CTA, "CTA / kêu gọi bình luận"),
+    )
+
+    def __init__(self, enabled_flows: set[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Cấu hình flow Mini game")
+        self.setMinimumWidth(430)
+        layout = QVBoxLayout(self)
+        note = QLabel(
+            "Chỉ các mục được chọn mới xuất hiện trong video. Bỏ Hook sẽ bắt đầu từ "
+            "Question/countdown nếu mục đó được chọn."
+        )
+        note.setObjectName("Subtitle")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.checks: dict[MinigameFlow, QCheckBox] = {}
+        for flow, label in self.FLOW_LABELS:
+            check = QCheckBox(label)
+            check.setChecked(flow.value in enabled_flows)
+            self.checks[flow] = check
+            layout.addWidget(check)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_flows(self) -> list[str]:
+        return [flow.value for flow, check in self.checks.items() if check.isChecked()]
 
 
 class MinigameWorker(QObject):
@@ -413,7 +459,19 @@ class MinigamePage(QWidget):
         self._update_theme_summary()
         layout.addWidget(theme_card)
 
-        source_card, source = self._card("2. Định dạng")
+        flow_card, flow = self._card("2. Cấu hình flow")
+        self.enabled_flows = set(self._last_used_flows())
+        self.flow_summary = QLabel()
+        self.flow_summary.setObjectName("Subtitle")
+        self.flow_summary.setWordWrap(True)
+        self.flow_config_button = QPushButton("Cấu hình flow…")
+        self.flow_config_button.clicked.connect(self._open_flow_dialog)
+        flow.addWidget(self.flow_summary)
+        flow.addWidget(self.flow_config_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._update_flow_summary()
+        layout.addWidget(flow_card)
+
+        source_card, source = self._card("3. Định dạng")
         source_form = QFormLayout()
         self.aspect = QComboBox()
         self.aspect.addItem("YouTube 16:9", MinigameFormat.YOUTUBE.value)
@@ -463,7 +521,7 @@ class MinigamePage(QWidget):
                 self.crop_9_x, self.crop_9_y = x, y
         layout.addWidget(source_card)
 
-        voice_card, voice = self._card("3. Cấu hình giọng đọc")
+        voice_card, voice = self._card("4. Cấu hình giọng đọc")
         self.voice_summary = QLabel()
         self.voice_summary.setWordWrap(True)
         self.voice_summary.setObjectName("Subtitle")
@@ -474,7 +532,7 @@ class MinigamePage(QWidget):
         self._update_voice_summary()
         layout.addWidget(voice_card)
 
-        output_card, output = self._card("4. Xuất video")
+        output_card, output = self._card("5. Xuất video")
         output_form = QFormLayout()
         folder_row = QWidget()
         folder_layout = QHBoxLayout(folder_row)
@@ -497,7 +555,7 @@ class MinigamePage(QWidget):
         output.addLayout(output_form)
         layout.addWidget(output_card)
 
-        content_card, vocabulary_layout = self._card("5. Nội dung bắt buộc")
+        content_card, vocabulary_layout = self._card("6. Nội dung bắt buộc")
         json_help = QLabel(
             "Nhập một object JSON gồm schemaVersion, topic và words. Mỗi từ có đủ: "
             "vietnamese, english, ipa, wordType, example, exampleVietnamese, level "
@@ -542,7 +600,7 @@ class MinigamePage(QWidget):
         multipart_layout.setContentsMargins(0, 8, 0, 0)
         multipart_help = QLabel(
             "Dán JSON gồm topic, totalParts, totalWords và mảng parts. Mỗi phần được render "
-            "qua luồng hiện tại thành một video riêng: <Topic> Part <partNumber>."
+            "qua luồng hiện tại thành một video riêng: <Topic> - Part <partNumber>."
         )
         multipart_help.setWordWrap(True)
         multipart_help.setObjectName("Subtitle")
@@ -625,6 +683,39 @@ class MinigamePage(QWidget):
         self._update_theme_summary()
         self._update_preview()
         self.preferences.setValue("minigame/theme_id", selected_theme_id)
+
+    def _open_flow_dialog(self) -> None:
+        dialog = MinigameFlowDialog(self.enabled_flows, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = dialog.selected_flows()
+        if not selected:
+            QMessageBox.warning(self, "Thiếu flow", "Vui lòng chọn ít nhất một flow để tạo video.")
+            return
+        self.enabled_flows = set(selected)
+        self._cache_flow_configuration()
+        self._update_flow_summary()
+        self._update_preview()
+
+    def _last_used_flows(self) -> list[str]:
+        raw = self.preferences.value("minigame/flow/enabled", MinigameFlow.defaults())
+        values = raw if isinstance(raw, list) else [raw]
+        selected = [str(value) for value in values if str(value) in MinigameFlow.defaults()]
+        return selected or MinigameFlow.defaults()
+
+    def _cache_flow_configuration(self) -> None:
+        if not self._loading_project:
+            self.preferences.setValue("minigame/flow/enabled", sorted(self.enabled_flows))
+
+    def _update_flow_summary(self) -> None:
+        labels = [
+            label
+            for flow, label in MinigameFlowDialog.FLOW_LABELS
+            if flow.value in self.enabled_flows
+        ]
+        self.flow_summary.setText(
+            f"Đã chọn {len(labels)}/{len(MinigameFlow)} flow · {', '.join(labels)}"
+        )
 
     def _cache_theme_selection(self) -> None:
         if self._loading_project:
@@ -814,6 +905,7 @@ class MinigamePage(QWidget):
                 "16:9": [self.crop_16_x.value() / 100, self.crop_16_y.value() / 100],
                 "9:16": [self.crop_9_x.value() / 100, self.crop_9_y.value() / 100],
             },
+            enabled_flows=sorted(self.enabled_flows),
             vocabulary=list(content.words),
         )
 
@@ -878,6 +970,10 @@ class MinigamePage(QWidget):
             self.crop_16_y.setValue(round(project.crop_focus.get("16:9", [0.5, 0.5])[1] * 100))
             self.crop_9_x.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[0] * 100))
             self.crop_9_y.setValue(round(project.crop_focus.get("9:16", [0.5, 0.5])[1] * 100))
+            self.enabled_flows = (
+                set(self._last_used_flows()) if is_new_project else set(project.enabled_flows)
+            )
+            self._update_flow_summary()
             content = MinigameContent(
                 project.topic, list(project.vocabulary or MinigameContent.blank().words)
             )

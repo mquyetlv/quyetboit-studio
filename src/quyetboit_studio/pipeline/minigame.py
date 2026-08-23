@@ -53,7 +53,7 @@ class MinigameResult:
 
 
 class MinigamePipeline:
-    TIMELINE_CACHE_VERSION = 6
+    TIMELINE_CACHE_VERSION = 7
 
     def __init__(
         self,
@@ -192,6 +192,7 @@ class MinigamePipeline:
                 example_audio,
                 durations,
                 answer_reveal_duration_ms=cues["answer_reveal"].duration_ms,
+                enabled_flows=set(self.project.enabled_flows),
             )
             for scene in timeline.scenes:
                 if scene.kind != "boundary":
@@ -324,71 +325,95 @@ class MinigamePipeline:
         review_text_overlay: Path | None = None,
         crop_focus: list[float] | None = None,
     ) -> list[MinigameVisualScene]:
-        hook = next(scene for scene in timeline.scenes if scene.kind == "hook")
-        review_start = next(scene for scene in timeline.scenes if scene.kind == "review_start")
-        score = next(scene for scene in timeline.scenes if scene.kind == "score")
-        reviews = [scene for scene in timeline.scenes if scene.kind == "review"]
-        cta = next((scene for scene in timeline.scenes if scene.kind == "cta"), None)
-        scenes = [MinigameVisualScene(hook_frame, hook.end_ms - hook.start_ms)]
         crop_focus = crop_focus or [0.5, 0.5]
         focus_x = max(0.0, min(1.0, float(crop_focus[0] if crop_focus else 0.5)))
         focus_y = max(
             0.0,
             min(1.0, float(crop_focus[1] if len(crop_focus) > 1 else 0.5)),
         )
-        before_score = score.start_ms - hook.end_ms
-        if before_score > 0:
+        primary = [scene for scene in timeline.scenes if scene.kind in {
+            "hook", "word", "score", "review_start", "review", "cta"
+        }]
+        word_scenes = [scene for scene in primary if scene.kind == "word"]
+        primary.extend(
+            scene
+            for scene in timeline.scenes
+            if scene.kind == "voice"
+            and not any(word.start_ms <= scene.start_ms and scene.end_ms <= word.end_ms for word in word_scenes)
+        )
+        scenes: list[MinigameVisualScene] = []
+        visual_cursor = 0
+        for scene in sorted(primary, key=lambda item: (item.start_ms, item.end_ms)):
+            if scene.start_ms > visual_cursor:
+                gap_duration = scene.start_ms - visual_cursor
+                if custom_background is not None:
+                    if theme_text_overlay is None:
+                        raise PipelineError("theme_scene_invalid", "Thiếu lớp nền chữ của theme.")
+                    scenes.append(
+                        MinigameVisualScene(
+                            custom_background, gap_duration, (theme_text_overlay,),
+                            background_is_video=True, crop_focus=(focus_x, focus_y),
+                            background_start_ms=visual_cursor,
+                        )
+                    )
+                elif body_frame is not None:
+                    scenes.append(MinigameVisualScene(body_frame, gap_duration))
+                else:
+                    raise PipelineError("theme_scene_invalid", "Thiếu nền phần học của minigame.")
+            duration = scene.end_ms - scene.start_ms
+            if duration <= 0:
+                continue
+            if scene.kind == "hook":
+                scenes.append(MinigameVisualScene(hook_frame, duration))
+                visual_cursor = max(visual_cursor, scene.end_ms)
+                continue
+            if scene.kind == "score":
+                scenes.append(MinigameVisualScene(score_frame, duration))
+                visual_cursor = max(visual_cursor, scene.end_ms)
+                continue
+            if scene.kind == "review_start":
+                scenes.append(MinigameVisualScene(review_start_frame, duration))
+                visual_cursor = max(visual_cursor, scene.end_ms)
+                continue
+            if scene.kind == "cta":
+                if cta_frame is None:
+                    raise PipelineError("theme_scene_invalid", "Thiếu frame CTA của minigame.")
+                scenes.append(MinigameVisualScene(cta_frame, duration, fade_in_ms=220))
+                visual_cursor = max(visual_cursor, scene.end_ms)
+                continue
+            if scene.kind == "review" and custom_background is not None:
+                if review_text_overlay is None:
+                    raise PipelineError("theme_scene_invalid", "Thiếu lớp nền chữ Review của theme.")
+                scenes.append(
+                    MinigameVisualScene(
+                        custom_background, duration, (review_text_overlay,), fade_in_ms=0,
+                        background_is_video=True, crop_focus=(focus_x, focus_y),
+                        background_start_ms=scene.start_ms,
+                    )
+                )
+                visual_cursor = max(visual_cursor, scene.end_ms)
+                continue
+            if scene.kind == "review":
+                scenes.append(MinigameVisualScene(review_frame, duration, fade_in_ms=0))
+                visual_cursor = max(visual_cursor, scene.end_ms)
+                continue
             if custom_background is not None:
                 if theme_text_overlay is None:
                     raise PipelineError("theme_scene_invalid", "Thiếu lớp nền chữ của theme.")
                 scenes.append(
                     MinigameVisualScene(
-                        custom_background,
-                        before_score,
+                        custom_background, duration,
                         (theme_text_overlay,),
                         background_is_video=True,
                         crop_focus=(focus_x, focus_y),
-                        background_start_ms=hook.end_ms,
+                        background_start_ms=scene.start_ms,
                     )
                 )
             elif body_frame is not None:
-                scenes.append(MinigameVisualScene(body_frame, before_score))
+                scenes.append(MinigameVisualScene(body_frame, duration))
             else:
                 raise PipelineError("theme_scene_invalid", "Thiếu nền phần học của minigame.")
-        scenes.append(MinigameVisualScene(score_frame, score.end_ms - score.start_ms))
-        scenes.append(
-            MinigameVisualScene(review_start_frame, review_start.end_ms - review_start.start_ms)
-        )
-        if custom_background is not None:
-            if review_text_overlay is None:
-                raise PipelineError("theme_scene_invalid", "Thiếu lớp nền chữ Review của theme.")
-            scenes.extend(
-                MinigameVisualScene(
-                    custom_background,
-                    review.end_ms - review.start_ms,
-                    (review_text_overlay,),
-                    fade_in_ms=0,
-                    background_is_video=True,
-                    crop_focus=(focus_x, focus_y),
-                    background_start_ms=review.start_ms,
-                )
-                for review in reviews
-            )
-        else:
-            scenes.extend(
-                MinigameVisualScene(
-                    review_frame,
-                    review.end_ms - review.start_ms,
-                    # Review content itself transitions in ASS. Never fade the whole
-                    # frame here: that produced a black blink between cards.
-                    fade_in_ms=0,
-                )
-                for review in reviews
-            )
-        if cta is not None:
-            if cta_frame is None:
-                raise PipelineError("theme_scene_invalid", "Thiếu frame CTA của minigame.")
-            scenes.append(MinigameVisualScene(cta_frame, cta.end_ms - cta.start_ms, fade_in_ms=220))
+            visual_cursor = max(visual_cursor, scene.end_ms)
         return scenes
 
     def _custom_background_video(self) -> Path | None:
@@ -548,11 +573,14 @@ class MinigameMultipartPipeline:
         for position, (part_number, content) in enumerate(self.content.parts):
             if self._cancelled:
                 raise PipelineError("cancelled", "Đã dừng tạo video minigame nhiều phần.")
+            part_title = f"{self.content.topic} - Part {part_number}"
             part_project = replace(
                 self.project,
-                topic=self.content.topic,
+                # The project topic is rendered into the Hook/cover artwork,
+                # so each multipart output needs its own visible title too.
+                topic=part_title,
                 vocabulary=list(content.words),
-                output_name=f"{self.content.topic} Part {part_number}",
+                output_name=part_title,
             )
             self._current = MinigamePipeline(
                 part_project,

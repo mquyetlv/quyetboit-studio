@@ -23,6 +23,25 @@ class MinigameTtsProvider(StrEnum):
     GOOGLE = "google"
 
 
+class MinigameFlow(StrEnum):
+    """Independently selectable sections of an English mini-game video."""
+
+    HOOK = "hook"
+    QUESTION = "question"
+    ANSWER = "answer"
+    VOICE_LISTEN = "voice_listen"
+    VOICE_SLOW = "voice_slow"
+    VOICE_REPEAT = "voice_repeat"
+    SCORE = "score"
+    REVIEW_START = "review_start"
+    REVIEW = "review"
+    CTA = "cta"
+
+    @classmethod
+    def defaults(cls) -> list[str]:
+        return [item.value for item in cls]
+
+
 class VocabularyLevel(StrEnum):
     EASY = "Dễ"
     MEDIUM = "Trung bình"
@@ -543,7 +562,11 @@ class MinigameProject:
     crop_focus: dict[str, list[float]] = field(
         default_factory=lambda: {"16:9": [0.5, 0.5], "9:16": [0.5, 0.5]}
     )
+    enabled_flows: list[str] = field(default_factory=MinigameFlow.defaults)
     vocabulary: list[VocabularyItem] = field(default_factory=list)
+
+    def flow_enabled(self, flow: MinigameFlow | str) -> bool:
+        return str(flow) in self.enabled_flows
 
     def validate(self) -> None:
         if not self.topic.strip():
@@ -556,6 +579,12 @@ class MinigameProject:
             raise ValueError("Video nền đã chọn không tồn tại hoặc không thể đọc.")
         if not self.vocabulary:
             raise ValueError("Vui lòng nhập ít nhất một từ.")
+        valid_flows = set(MinigameFlow.defaults())
+        unknown_flows = sorted(set(self.enabled_flows) - valid_flows)
+        if unknown_flows:
+            raise ValueError(f"Flow minigame không hợp lệ: {', '.join(unknown_flows)}.")
+        if not self.enabled_flows:
+            raise ValueError("Vui lòng chọn ít nhất một flow để tạo video.")
         for index, item in enumerate(self.vocabulary, 1):
             item.validate(index)
         if self.output_format not in {item.value for item in MinigameFormat}:
@@ -583,6 +612,10 @@ class MinigameProject:
         data.setdefault("schema_version", 1)
         data.setdefault("theme_id", "theme-1")
         data.setdefault("video_theme_id", "video-ocean")
+        flows = data.get("enabled_flows", MinigameFlow.defaults())
+        data["enabled_flows"] = [
+            str(flow) for flow in flows if str(flow) in set(MinigameFlow.defaults())
+        ] if isinstance(flows, list) else MinigameFlow.defaults()
         vocabulary = data.get("vocabulary", [])
         data["vocabulary"] = []
         levels = tuple(VocabularyLevel)
@@ -737,77 +770,107 @@ class MinigameTimelineBuilder:
         durations: dict[Path, int],
         *,
         answer_reveal_duration_ms: int = 0,
+        enabled_flows: set[str] | None = None,
     ) -> MinigameTimeline:
         if not (len(items) == len(word_audio) == len(slow_audio) == len(example_audio)):
             raise ValueError("Số từ và số audio minigame không khớp.")
         timing = self.timing
-        scenes = [MinigameScene("hook", 0, timing.hook_ms)]
+        flows = set(MinigameFlow.defaults()) if enabled_flows is None else enabled_flows
+        enabled = lambda flow: flow.value in flows
+        scenes: list[MinigameScene] = []
         audio_events: list[MinigameAudioEvent] = []
-        cursor = timing.hook_ms
+        cursor = 0
+        if enabled(MinigameFlow.HOOK):
+            scenes.append(MinigameScene("hook", cursor, cursor + timing.hook_ms))
+            cursor += timing.hook_ms
         for index in range(len(items)):
             question_start = cursor
             countdown_start = question_start + timing.question_intro_ms
             reveal = countdown_start + timing.countdown_ms
-            scenes.append(MinigameScene("word", question_start, reveal, index, "question"))
-            scenes.append(
-                MinigameScene("boundary", question_start, question_start, index, "question_start")
-            )
-            scenes.append(
-                MinigameScene("boundary", countdown_start, countdown_start, index, "countdown_bed")
-            )
-            scenes.append(MinigameScene("boundary", reveal, reveal, index, "answer_reveal"))
+            if enabled(MinigameFlow.QUESTION):
+                scenes.append(MinigameScene("word", question_start, reveal, index, "question"))
+                scenes.append(
+                    MinigameScene("boundary", question_start, question_start, index, "question_start")
+                )
+                scenes.append(
+                    MinigameScene("boundary", countdown_start, countdown_start, index, "countdown_bed")
+                )
+                cursor = reveal
+            else:
+                reveal = cursor
             normal = word_audio[index]
             slow = slow_audio[index]
             # The effect duration is inserted by the pipeline; this named gap is
             # retained here so there are no magic voice offsets in the pipeline.
-            normal_start = reveal + answer_reveal_duration_ms + timing.post_reveal_sfx_gap_ms
+            normal_start = cursor + (
+                answer_reveal_duration_ms + timing.post_reveal_sfx_gap_ms
+                if enabled(MinigameFlow.ANSWER)
+                else 0
+            )
             slow_start = normal_start + durations[normal] + timing.between_listen_slow_ms
             final_start = slow_start + durations[slow] + timing.between_slow_repeat_ms
-            cursor = final_start + durations[normal] + timing.after_repeat_ms
-            scenes.append(MinigameScene("word", reveal, cursor, index, "answer"))
-            scenes.extend(
-                [
-                    # Phase captions deliberately extend through their quiet
-                    # hold.  They only change at the next phase boundary (or
-                    # when the next word begins), rather than disappearing as
-                    # soon as the corresponding TTS clip finishes.
-                    MinigameScene("voice", normal_start, slow_start, index, "listen"),
-                    MinigameScene("voice", slow_start, final_start, index, "slow"),
-                    MinigameScene("voice", final_start, cursor, index, "repeat"),
-                ]
+            voice_end = final_start + durations[normal] + timing.after_repeat_ms
+            has_voice = any(
+                enabled(flow)
+                for flow in (
+                    MinigameFlow.VOICE_LISTEN,
+                    MinigameFlow.VOICE_SLOW,
+                    MinigameFlow.VOICE_REPEAT,
+                )
             )
-            audio_events.extend(
-                [
-                    MinigameAudioEvent(normal_start, normal, "voice_listen"),
-                    MinigameAudioEvent(slow_start, slow, "voice_slow"),
-                    MinigameAudioEvent(final_start, normal, "voice_repeat"),
-                ]
-            )
-        scenes.append(MinigameScene("score", cursor, cursor + timing.score_ms))
-        scenes.append(MinigameScene("boundary", cursor + 150, cursor + 150, -1, "score_win"))
-        cursor += timing.score_ms
-        scenes.append(MinigameScene("review_start", cursor, cursor + timing.review_start_ms))
-        cursor += timing.review_start_ms
-        for index in range(len(items)):
-            normal = word_audio[index]
-            example = example_audio[index]
-            start = cursor
-            word_start = start + timing.review_lead_ms
-            example_start = word_start + durations[normal] + timing.review_word_to_example_ms
-            cursor = (
-                example_start
-                + durations[example]
-                + timing.review_hold_ms(items[index], durations[example])
-            )
-            scenes.append(MinigameScene("review", start, cursor, index))
-            audio_events.extend(
-                [
-                    MinigameAudioEvent(word_start, normal, "review_word"),
-                    MinigameAudioEvent(example_start, example, "review_example"),
-                ]
-            )
-        scenes.append(MinigameScene("cta", cursor, cursor + timing.cta_ms))
-        cursor += timing.cta_ms
+            answer_end = voice_end if has_voice else normal_start
+            if enabled(MinigameFlow.ANSWER):
+                scenes.append(MinigameScene("boundary", cursor, cursor, index, "answer_reveal"))
+                scenes.append(MinigameScene("word", cursor, answer_end, index, "answer"))
+            voice_scenes = [
+                MinigameScene("voice", normal_start, slow_start, index, "listen"),
+                MinigameScene("voice", slow_start, final_start, index, "slow"),
+                MinigameScene("voice", final_start, voice_end, index, "repeat"),
+            ]
+            flow_for_phase = {
+                "listen": MinigameFlow.VOICE_LISTEN,
+                "slow": MinigameFlow.VOICE_SLOW,
+                "repeat": MinigameFlow.VOICE_REPEAT,
+            }
+            scenes.extend(scene for scene in voice_scenes if enabled(flow_for_phase[scene.phase]))
+            if enabled(MinigameFlow.VOICE_LISTEN):
+                audio_events.append(MinigameAudioEvent(normal_start, normal, "voice_listen"))
+            if enabled(MinigameFlow.VOICE_SLOW):
+                audio_events.append(MinigameAudioEvent(slow_start, slow, "voice_slow"))
+            if enabled(MinigameFlow.VOICE_REPEAT):
+                audio_events.append(MinigameAudioEvent(final_start, normal, "voice_repeat"))
+            cursor = max(cursor, answer_end if enabled(MinigameFlow.ANSWER) else 0)
+            if has_voice:
+                cursor = max(cursor, voice_end)
+        if enabled(MinigameFlow.SCORE):
+            scenes.append(MinigameScene("score", cursor, cursor + timing.score_ms))
+            scenes.append(MinigameScene("boundary", cursor + 150, cursor + 150, -1, "score_win"))
+            cursor += timing.score_ms
+        if enabled(MinigameFlow.REVIEW_START):
+            scenes.append(MinigameScene("review_start", cursor, cursor + timing.review_start_ms))
+            cursor += timing.review_start_ms
+        if enabled(MinigameFlow.REVIEW):
+            for index in range(len(items)):
+                normal = word_audio[index]
+                example = example_audio[index]
+                start = cursor
+                word_start = start + timing.review_lead_ms
+                example_start = word_start + durations[normal] + timing.review_word_to_example_ms
+                cursor = (
+                    example_start
+                    + durations[example]
+                    + timing.review_hold_ms(items[index], durations[example])
+                )
+                scenes.append(MinigameScene("review", start, cursor, index))
+                audio_events.extend(
+                    [
+                        MinigameAudioEvent(word_start, normal, "review_word"),
+                        MinigameAudioEvent(example_start, example, "review_example"),
+                    ]
+                )
+        if enabled(MinigameFlow.CTA):
+            scenes.append(MinigameScene("cta", cursor, cursor + timing.cta_ms))
+            cursor += timing.cta_ms
         return MinigameTimeline(scenes, audio_events, cursor)
 
 

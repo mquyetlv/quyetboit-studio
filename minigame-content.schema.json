@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://quyetboit.local/schemas/minigame-content.schema.json",
   "title": "QuyetBoIT Studio English Minigame Content",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schemaVersion", "topic", "words"],
-  "properties": {
+  "oneOf": [{
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schemaVersion", "topic", "words"],
+    "properties": {
     "schemaVersion": {
       "const": 1
     },
@@ -42,5 +43,39 @@
         }
       }
     }
-  }
+    }
+  }, {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schemaVersion", "topic", "totalParts", "totalWords", "parts"],
+    "properties": {
+      "schemaVersion": { "const": 1 },
+      "topic": { "type": "string", "minLength": 1 },
+      "totalParts": { "type": "integer", "minimum": 1, "maximum": 50 },
+      "totalWords": { "type": "integer", "minimum": 1 },
+      "parts": {
+        "type": "array", "minItems": 1, "maxItems": 50,
+        "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["partNumber", "words"],
+          "properties": {
+            "partNumber": { "type": "integer", "minimum": 1 },
+            "words": {
+              "type": "array", "minItems": 1, "maxItems": 50,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["vietnamese", "english", "ipa", "wordType", "example", "exampleVietnamese", "level"],
+                "properties": {
+                  "vietnamese": { "type": "string" }, "english": { "type": "string" },
+                  "ipa": { "type": "string" }, "wordType": { "type": "string" },
+                  "example": { "type": "string" }, "exampleVietnamese": { "type": "string" },
+                  "level": { "type": "string", "enum": ["Dễ", "Trung bình", "Khó"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }]
 }

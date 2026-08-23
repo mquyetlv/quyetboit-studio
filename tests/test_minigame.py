@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QDialogButtonBox, QLabel
 from quyetboit_studio.core.minigame import (
     MinigameAudioEvent,
     MinigameContent,
+    MinigameMultipartContent,
     MinigameProject,
     MinigameScene,
     MinigameTimeline,
@@ -33,7 +34,11 @@ from quyetboit_studio.core.minigame import (
 from quyetboit_studio.core.models import CancellationToken, PipelineError
 from quyetboit_studio.minigame import MinigamePage
 from quyetboit_studio.minigame_voice import MinigameVoiceDialog
-from quyetboit_studio.pipeline.minigame import MinigamePipeline
+from quyetboit_studio.pipeline.minigame import (
+    MinigameMultipartPipeline,
+    MinigamePipeline,
+    MinigameResult,
+)
 from quyetboit_studio.services.media import FFmpegRunner
 from quyetboit_studio.services.media.minigame import (
     MinigameAudioCueManifest,
@@ -70,14 +75,22 @@ def _item(index: int = 1) -> VocabularyItem:
 VNEXT_AB_FIXTURES = (
     VocabularyItem("mèo", "cat", "/kæt/", "The cat sleeps.", "Noun", "Con mèo ngủ.", "Dễ"),
     VocabularyItem(
-        "trách nhiệm", "responsibility", "/rɪˌspɒn.səˈbɪl.ə.ti/",
-        "Responsibility helps us make careful choices every day.", "Noun",
-        "Trách nhiệm giúp chúng ta đưa ra lựa chọn cẩn thận mỗi ngày.", "Trung bình",
+        "trách nhiệm",
+        "responsibility",
+        "/rɪˌspɒn.səˈbɪl.ə.ti/",
+        "Responsibility helps us make careful choices every day.",
+        "Noun",
+        "Trách nhiệm giúp chúng ta đưa ra lựa chọn cẩn thận mỗi ngày.",
+        "Trung bình",
     ),
     VocabularyItem(
-        "kiên trì", "perseverance", "/ˌpɜː.səˈvɪə.rəns/",
+        "kiên trì",
+        "perseverance",
+        "/ˌpɜː.səˈvɪə.rəns/",
         "With perseverance, she continued practicing even when the assignment became difficult.",
-        "Noun", "Nhờ sự kiên trì, cô ấy vẫn tiếp tục luyện tập dù bài tập trở nên khó khăn.", "Khó",
+        "Noun",
+        "Nhờ sự kiên trì, cô ấy vẫn tiếp tục luyện tập dù bài tập trở nên khó khăn.",
+        "Khó",
     ),
 )
 
@@ -109,6 +122,65 @@ def _content_json(count: int = 1, topic: str = "Hospital") -> str:
     ).to_json()
 
 
+def _multipart_content_json() -> str:
+    first = MinigameContent("Greetings & Introductions", [_item(1), _item(2)])
+    second = MinigameContent("Greetings & Introductions", [_item(3)])
+    return MinigameMultipartContent(
+        "Greetings & Introductions", [(1, first), (2, second)]
+    ).to_json()
+
+
+def test_multipart_content_requires_consistent_totals_and_consecutive_parts() -> None:
+    content = MinigameMultipartContent.from_json(_multipart_content_json())
+
+    assert content.total_words == 3
+    assert [number for number, _part in content.parts] == [1, 2]
+    invalid = content.to_dict()
+    invalid["totalWords"] = 4
+    with pytest.raises(ValueError, match="totalWords"):
+        MinigameMultipartContent.from_dict(invalid)
+    invalid = content.to_dict()
+    invalid["parts"][1]["partNumber"] = 3  # type: ignore[index]
+    with pytest.raises(ValueError, match="partNumber"):
+        MinigameMultipartContent.from_dict(invalid)
+
+
+def test_multipart_pipeline_reuses_single_pipeline_with_part_output_names(
+    tmp_path: Path, monkeypatch
+) -> None:
+    content = MinigameMultipartContent.from_json(_multipart_content_json())
+    created: list[MinigameProject] = []
+
+    class FakePipeline:
+        def __init__(self, project, **_kwargs) -> None:
+            self.project = project
+            created.append(project)
+
+        def cancel_run(self) -> None:
+            pass
+
+        def run(self, progress) -> MinigameResult:
+            progress(SimpleNamespace(fraction=1.0, message="done"))
+            output = tmp_path / f"{self.project.output_name}.mp4"
+            return MinigameResult([output], [], 100, len(self.project.vocabulary))
+
+    monkeypatch.setattr("quyetboit_studio.pipeline.minigame.MinigamePipeline", FakePipeline)
+    result = MinigameMultipartPipeline(
+        MinigameProject(topic="ignored", vocabulary=[_item()], tts_provider="capcut"),
+        content,
+        workspace=tmp_path / "workspace",
+    ).run()
+
+    assert [project.output_name for project in created] == [
+        "Greetings & Introductions Part 1",
+        "Greetings & Introductions Part 2",
+    ]
+    assert [path.name for path in result.outputs] == [
+        "Greetings & Introductions Part 1.mp4",
+        "Greetings & Introductions Part 2.mp4",
+    ]
+
+
 def test_vnext_timing_profile_builds_semantic_boundaries_and_full_reveal_gap(
     tmp_path: Path,
 ) -> None:
@@ -134,13 +206,21 @@ def test_vnext_timing_profile_builds_semantic_boundaries_and_full_reveal_gap(
     assert listen.start_ms - boundaries["answer_reveal"] == 1_858 + profile.post_reveal_sfx_gap_ms
     voice_scenes = [scene for scene in timeline.scenes if scene.kind == "voice"]
     assert [(scene.phase, scene.start_ms, scene.end_ms) for scene in voice_scenes] == [
-        ("listen", listen.start_ms, next(scene.start_ms for scene in voice_scenes if scene.phase == "slow")),
+        (
+            "listen",
+            listen.start_ms,
+            next(scene.start_ms for scene in voice_scenes if scene.phase == "slow"),
+        ),
         (
             "slow",
             next(scene.start_ms for scene in voice_scenes if scene.phase == "slow"),
             next(scene.start_ms for scene in voice_scenes if scene.phase == "repeat"),
         ),
-        ("repeat", next(scene.start_ms for scene in voice_scenes if scene.phase == "repeat"), timeline.scenes[5].end_ms),
+        (
+            "repeat",
+            next(scene.start_ms for scene in voice_scenes if scene.phase == "repeat"),
+            timeline.scenes[5].end_ms,
+        ),
     ]
     assert (
         profile.review_after_example_min_ms
@@ -188,7 +268,9 @@ def test_hook_and_review_start_have_a_silent_hold_after_music_fades() -> None:
 )
 def test_transition_music_is_trimmed_and_faded_to_its_scene(tmp_path: Path) -> None:
     service = MinigameAudioService(FFmpegRunner())
-    artifact = service.normalize_cue(MinigameAudioCueManifest(), "hook_bed", tmp_path, duration_ms=3_200)
+    artifact = service.normalize_cue(
+        MinigameAudioCueManifest(), "hook_bed", tmp_path, duration_ms=3_200
+    )
 
     assert abs(artifact.duration_ms - 3_200) <= 40
     with wave.open(str(artifact.path), "rb") as source:
@@ -232,7 +314,7 @@ def test_review_cards_keep_the_background_stable_between_items(tmp_path: Path) -
     assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
 
 
-def test_custom_background_video_replaces_only_the_theme_body_background(tmp_path: Path) -> None:
+def test_custom_background_video_runs_under_body_and_review_theme_layers(tmp_path: Path) -> None:
     timeline = MinigameTimeline(
         [
             MinigameScene("hook", 0, 100),
@@ -243,11 +325,17 @@ def test_custom_background_video_replaces_only_the_theme_body_background(tmp_pat
         [],
         800,
     )
-    hook, body, score, review_start, review, custom_video, theme_text = (
+    hook, body, score, review_start, review, custom_video, theme_text, review_text = (
         tmp_path / name
         for name in (
-            "hook.png", "body.png", "score.png", "review-start.png", "review.png",
-            "custom.mp4", "theme-text.png",
+            "hook.png",
+            "body.png",
+            "score.png",
+            "review-start.png",
+            "review.png",
+            "custom.mp4",
+            "theme-text.png",
+            "review-text.png",
         )
     )
 
@@ -260,6 +348,7 @@ def test_custom_background_video_replaces_only_the_theme_body_background(tmp_pat
         review,
         custom_background=custom_video,
         theme_text_overlay=theme_text,
+        review_text_overlay=review_text,
         crop_focus=[0.2, 0.8],
     )
 
@@ -268,48 +357,14 @@ def test_custom_background_video_replaces_only_the_theme_body_background(tmp_pat
     assert body_scene.overlays == (theme_text,)
     assert body_scene.background_is_video
     assert body_scene.crop_focus == (0.2, 0.8)
+    assert body_scene.background_start_ms == 100
     assert scenes[0].background == hook
     assert scenes[2].background == score
-
-
-def test_video_background_flow_covers_every_scene_with_continuous_offsets(tmp_path: Path) -> None:
-    timeline = MinigameTimeline(
-        [
-            MinigameScene("hook", 0, 100),
-            MinigameScene("word", 100, 300, 0, "question"),
-            MinigameScene("score", 300, 400),
-            MinigameScene("review_start", 400, 500),
-            MinigameScene("review", 500, 700, 0),
-            MinigameScene("cta", 700, 800),
-        ],
-        [],
-        800,
-    )
-    background = tmp_path / "background.mp4"
-    surfaces = {kind: tmp_path / f"{kind}.png" for kind in (
-        "hook", "body", "score", "review_start", "review", "cta"
-    )}
-    hook_text = tmp_path / "hook-text.png"
-    review_start_text = tmp_path / "review-start-text.png"
-    cta_text = tmp_path / "cta-text.png"
-
-    scenes = MinigamePipeline._video_visual_scenes(
-        timeline,
-        background,
-        surfaces,
-        hook_text,
-        review_start_text,
-        cta_text,
-        [0.25, 0.75],
-    )
-
-    assert [scene.background for scene in scenes] == [background] * 6
-    assert [scene.background_start_ms for scene in scenes] == [0, 100, 300, 400, 500, 700]
-    assert all(scene.background_is_video for scene in scenes)
-    assert all(scene.crop_focus == (0.25, 0.75) for scene in scenes)
-    assert scenes[0].overlays == (surfaces["hook"], hook_text)
-    assert scenes[-1].overlays == (surfaces["cta"], cta_text)
-    assert sum(scene.duration_ms for scene in scenes) == timeline.duration_ms
+    review_scene = scenes[4]
+    assert review_scene.background == custom_video
+    assert review_scene.overlays == (review_text,)
+    assert review_scene.background_is_video
+    assert review_scene.background_start_ms == 700
 
 
 def test_answer_word_reveal_and_review_transition_use_motion(tmp_path: Path) -> None:
@@ -323,9 +378,11 @@ def test_answer_word_reveal_and_review_transition_use_motion(tmp_path: Path) -> 
         [],
         2_000,
     )
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "motion.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "motion.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     assert r"\fscx0\fscy0\t(0,240,\alpha&H00&\fscx100\fscy100)" in content
     assert r"\move(540,1175,540,1147,0,240)" in content
@@ -411,8 +468,13 @@ def test_countdown_progress_bar_frames_shrink_monotonically(tmp_path: Path) -> N
     audio_path = tmp_path / "countdown.wav"
     runner.run(
         [
-            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1",
-            "-c:a", "pcm_s16le", str(audio_path),
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono:d=1",
+            "-c:a",
+            "pcm_s16le",
+            str(audio_path),
         ]
     )
     audio = runner.probe.audio_artifact(audio_path)
@@ -430,18 +492,29 @@ def test_countdown_progress_bar_frames_shrink_monotonically(tmp_path: Path) -> N
         1_000,
     )
     subtitles = MinigameSubtitleBuilder().build(
-        MinigameProject(topic="Test", vocabulary=[_item()]), timeline, tmp_path / "countdown.ass",
-        "9:16", manifest,
+        MinigameProject(topic="Test", vocabulary=[_item()]),
+        timeline,
+        tmp_path / "countdown.ass",
+        "9:16",
+        manifest,
     )
     video = MinigameVideoRenderer(runner).render(
-        None, audio, subtitles, tmp_path / "countdown.mp4", "9:16", [0.5, 0.5],
-        theme_background=manifest.background_video, theme_overlay=mask,
+        None,
+        audio,
+        subtitles,
+        tmp_path / "countdown.mp4",
+        "9:16",
+        [0.5, 0.5],
+        theme_background=manifest.background_video,
+        theme_overlay=mask,
         visual_scenes=[MinigameVisualScene(body, 1_000)],
     )
     widths: list[int] = []
     for index, timestamp in enumerate((0.05, 0.25, 0.50, 0.75, 0.95)):
         frame_path = tmp_path / f"countdown-{index}.png"
-        runner.run(["-ss", str(timestamp), "-i", str(video.path), "-frames:v", "1", str(frame_path)])
+        runner.run(
+            ["-ss", str(timestamp), "-i", str(video.path), "-frames:v", "1", str(frame_path)]
+        )
         with Image.open(frame_path) as frame:
             x1, y1, x2, y2 = manifest.slots["countdown_bar"].bounds
             pixels = np.asarray(frame.convert("RGB"))[y1:y2, x1:x2]
@@ -464,9 +537,11 @@ def test_countdown_bar_uses_each_theme_measured_divider_slot(tmp_path: Path) -> 
     )
     positions = set()
     for theme_id, manifest in MinigameThemeService().discover().items():
-        content = MinigameSubtitleBuilder().build(
-            project, timeline, tmp_path / f"{theme_id}.ass", "9:16", manifest
-        ).read_text(encoding="utf-8-sig")
+        content = (
+            MinigameSubtitleBuilder()
+            .build(project, timeline, tmp_path / f"{theme_id}.ass", "9:16", manifest)
+            .read_text(encoding="utf-8-sig")
+        )
         x1, y1, _x2, _y2 = manifest.slots["countdown_bar"].bounds
         positions.add((x1, y1))
         assert rf"\pos({x1},{y1})" in content
@@ -541,9 +616,7 @@ def test_video_theme_selection_round_trips_in_project_v2() -> None:
 
 
 @pytest.mark.parametrize("video_theme_id", ["video-ocean", "video-violet", "video-emerald"])
-def test_video_theme_profiles_build_all_rgba_surfaces(
-    tmp_path: Path, video_theme_id: str
-) -> None:
+def test_video_theme_profiles_build_all_rgba_surfaces(tmp_path: Path, video_theme_id: str) -> None:
     service = MinigameVideoThemeService()
     manifest = service.manifest(video_theme_id)
 
@@ -796,6 +869,25 @@ def test_alpha_masks_have_expected_coverage_feather_and_detail_for_all_themes(
         assert np.all(alpha[:, -1] == 0), theme_id
 
 
+@pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])
+def test_review_mask_keeps_original_card_pixels_and_removes_photo_border(
+    tmp_path: Path, theme_id: str
+) -> None:
+    manifest = MinigameThemeService().get(theme_id)
+    overlay_path = MinigameAlphaMaskService().build_review(manifest, tmp_path / theme_id)
+    with Image.open(manifest.review_screen) as source_image:
+        source = np.asarray(
+            source_image.convert("RGB").resize((1080, 1920), Image.Resampling.LANCZOS)
+        )
+    with Image.open(overlay_path) as overlay_image:
+        overlay = np.asarray(overlay_image.convert("RGBA"))
+
+    assert tuple(overlay[960, 540, :3]) == tuple(source[960, 540])
+    assert overlay[960, 540, 3] == 255
+    assert overlay[0, 0, 3] == 0
+    assert overlay[1919, 1079, 3] == 0
+
+
 def test_alpha_mask_cache_key_changes_with_profile_or_asset_checksum(tmp_path: Path) -> None:
     service = MinigameAlphaMaskService()
     manifest = MinigameThemeService().get("theme-1")
@@ -983,9 +1075,11 @@ def test_voice_phase_helper_uses_large_mobile_readable_style(tmp_path: Path) -> 
     manifest = MinigameThemeService().get("theme-1")
     project = MinigameProject(topic="Hospital", vocabulary=[_item()])
     timeline = MinigameTimeline([MinigameScene("voice", 0, 1_000, 0, "repeat")], [], 1_000)
-    content = MinigameSubtitleBuilder().build(
-        project, timeline, tmp_path / "voice-helper.ass", "9:16", manifest
-    ).read_text(encoding="utf-8-sig")
+    content = (
+        MinigameSubtitleBuilder()
+        .build(project, timeline, tmp_path / "voice-helper.ass", "9:16", manifest)
+        .read_text(encoding="utf-8-sig")
+    )
 
     style = manifest.styles["voice_helper"]
     assert (style.min_size, style.max_size, style.bold) == (26, 42, True)
@@ -1206,12 +1300,14 @@ def test_digit_atlas_has_ten_isolated_rgba_cells(theme_id: str) -> None:
         hashes = []
         for digit in range(10):
             column, row = digit % spec.columns, digit // spec.columns
-            cell = atlas.crop((
-                round(column * atlas.width / spec.columns),
-                round(row * atlas.height / spec.rows),
-                round((column + 1) * atlas.width / spec.columns),
-                round((row + 1) * atlas.height / spec.rows),
-            ))
+            cell = atlas.crop(
+                (
+                    round(column * atlas.width / spec.columns),
+                    round(row * atlas.height / spec.rows),
+                    round((column + 1) * atlas.width / spec.columns),
+                    round((row + 1) * atlas.height / spec.rows),
+                )
+            )
             alpha = cell.getchannel("A").point(
                 lambda value: 255 if value >= spec.alpha_threshold else 0
             )
@@ -1229,12 +1325,18 @@ def test_dynamic_hook_review_and_cta_layers_stay_inside_declared_slots(
     project = MinigameProject(topic="Hospital", vocabulary=[_item()] * count)
     service = MinigameTextLayerService()
     outputs = (
-        (service.build_hook(project, manifest, tmp_path / theme_id / "hook"),
-         ("start_topic", "hook_first", "hook_second")),
-        (service.build_review_start(project, manifest, tmp_path / theme_id / "review"),
-         ("review_sentence", "review_badge")),
-        (service.build_cta(project, manifest, tmp_path / theme_id / "cta"),
-         ("cta_eyebrow", "cta_headline", "cta_primary", "cta_secondary")),
+        (
+            service.build_hook(project, manifest, tmp_path / theme_id / "hook"),
+            ("start_topic", "hook_first", "hook_second"),
+        ),
+        (
+            service.build_review_start(project, manifest, tmp_path / theme_id / "review"),
+            ("review_sentence", "review_badge"),
+        ),
+        (
+            service.build_cta(project, manifest, tmp_path / theme_id / "cta"),
+            ("cta_eyebrow", "cta_headline", "cta_primary", "cta_secondary"),
+        ),
     )
     for output, slot_names in outputs:
         with Image.open(output) as image:
@@ -1289,23 +1391,37 @@ def test_question_meaning_and_placeholder_short_long_matrix_fits(theme_id: str) 
     placeholder_style = manifest.styles["question_placeholder"]
 
     short_meaning = service.fit_size(
-        "Bác sĩ", meaning.bounds, meaning_style.max_size, meaning_style.min_size,
-        max_lines=meaning.max_lines, font_file=meaning_style.font_file,
+        "Bác sĩ",
+        meaning.bounds,
+        meaning_style.max_size,
+        meaning_style.min_size,
+        max_lines=meaning.max_lines,
+        font_file=meaning_style.font_file,
     )
     long_meaning = service.fit_size(
         "Chăm sóc sức khỏe và giao tiếp chuyên nghiệp tại bệnh viện",
-        meaning.bounds, meaning_style.max_size, meaning_style.min_size,
-        max_lines=meaning.max_lines, font_file=meaning_style.font_file,
+        meaning.bounds,
+        meaning_style.max_size,
+        meaning_style.min_size,
+        max_lines=meaning.max_lines,
+        font_file=meaning_style.font_file,
     )
     short_placeholder = service.fit_size(
-        "___", placeholder.bounds, placeholder_style.max_size, placeholder_style.min_size,
-        max_lines=placeholder.max_lines, font_file=placeholder_style.font_file,
+        "___",
+        placeholder.bounds,
+        placeholder_style.max_size,
+        placeholder_style.min_size,
+        max_lines=placeholder.max_lines,
+        font_file=placeholder_style.font_file,
         tracking=placeholder_style.spacing,
     )
     long_placeholder = service.fit_size(
-        "____________-__________-____________", placeholder.bounds,
-        placeholder_style.max_size, placeholder_style.min_size,
-        max_lines=placeholder.max_lines, font_file=placeholder_style.font_file,
+        "____________-__________-____________",
+        placeholder.bounds,
+        placeholder_style.max_size,
+        placeholder_style.min_size,
+        max_lines=placeholder.max_lines,
+        font_file=placeholder_style.font_file,
         tracking=placeholder_style.spacing,
     )
 
@@ -1325,7 +1441,9 @@ def test_clean_hook_base_replaces_both_baked_number_regions(theme_id: str) -> No
 
     for slot_name in ("hook_first", "hook_second"):
         x1, y1, x2, y2 = manifest.slots[slot_name].bounds
-        changed = np.any(original[y1 : y2 + 1, x1 : x2 + 1] != clean[y1 : y2 + 1, x1 : x2 + 1], axis=2)
+        changed = np.any(
+            original[y1 : y2 + 1, x1 : x2 + 1] != clean[y1 : y2 + 1, x1 : x2 + 1], axis=2
+        )
         assert changed.mean() >= 0.20, (theme_id, slot_name, changed.mean())
 
 
@@ -1602,7 +1720,12 @@ def test_review_visual_scene_sequence_matches_timeline_boundaries(tmp_path: Path
     paths = [
         tmp_path / name
         for name in (
-            "hook.png", "body.png", "score.png", "review-start.png", "review.png", "cta.png"
+            "hook.png",
+            "body.png",
+            "score.png",
+            "review-start.png",
+            "review.png",
+            "cta.png",
         )
     ]
 
@@ -1763,7 +1886,9 @@ def test_minigame_page_orders_voice_and_export_before_required_content(qtbot) ->
     page = MinigamePage()
     qtbot.addWidget(page)
 
-    titles = [label.text() for label in page.findChildren(QLabel) if label.objectName() == "SectionTitle"]
+    titles = [
+        label.text() for label in page.findChildren(QLabel) if label.objectName() == "SectionTitle"
+    ]
 
     assert titles.index("3. Cấu hình giọng đọc") < titles.index("4. Xuất video")
     assert titles.index("4. Xuất video") < titles.index("5. Nội dung bắt buộc")
@@ -2026,12 +2151,8 @@ def test_google_voice_catalog_uses_disk_cache_until_explicit_refresh(
                 ]
             )
 
-    module = SimpleNamespace(
-        SsmlVoiceGender=lambda _value: SimpleNamespace(name="FEMALE")
-    )
-    service = GoogleVoiceCatalogService(
-        tmp_path / "account.json", cache_path=cache_path
-    )
+    module = SimpleNamespace(SsmlVoiceGender=lambda _value: SimpleNamespace(name="FEMALE"))
+    service = GoogleVoiceCatalogService(tmp_path / "account.json", cache_path=cache_path)
     monkeypatch.setattr(service, "_module_and_client", lambda: (module, FakeClient()))
 
     assert service.list_voices()[0].voice_id == "en-US-Neural2-A"
@@ -2066,12 +2187,8 @@ def test_google_voice_catalog_recovers_from_invalid_cache(tmp_path: Path, monkey
             ]
         )
     )
-    module = SimpleNamespace(
-        SsmlVoiceGender=lambda _value: SimpleNamespace(name="FEMALE")
-    )
-    service = GoogleVoiceCatalogService(
-        tmp_path / "account.json", cache_path=cache_path
-    )
+    module = SimpleNamespace(SsmlVoiceGender=lambda _value: SimpleNamespace(name="FEMALE"))
+    service = GoogleVoiceCatalogService(tmp_path / "account.json", cache_path=cache_path)
     monkeypatch.setattr(service, "_module_and_client", lambda: (module, client))
 
     assert service.list_voices()[0].voice_id == "vi-VN-Standard-A"
@@ -2199,14 +2316,26 @@ def test_theme_renderer_composites_theme_text_over_custom_background_video(tmp_p
     audio_path = tmp_path / "timeline.wav"
     runner.run(
         [
-            "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=0.25",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=30:duration=0.25",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
         ]
     )
     runner.run(
         [
-            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=0.25",
-            "-c:a", "pcm_s16le", str(audio_path),
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono:d=0.25",
+            "-c:a",
+            "pcm_s16le",
+            str(audio_path),
         ]
     )
     audio = runner.probe.audio_artifact(audio_path)
@@ -2247,20 +2376,32 @@ def test_theme_renderer_composites_theme_text_over_custom_background_video(tmp_p
     not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
     reason="FFmpeg/ffprobe không có trong PATH",
 )
-def test_real_video_theme_runs_under_full_flow_and_exports_matching_cover(tmp_path: Path) -> None:
+def test_real_selected_video_runs_beneath_unchanged_theme_text_layer(tmp_path: Path) -> None:
     runner = FFmpegRunner()
     source = tmp_path / "full-flow-background.mp4"
     audio_path = tmp_path / "full-flow.wav"
     runner.run(
         [
-            "-f", "lavfi", "-i", "testsrc2=size=480x854:rate=30:duration=0.4",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=480x854:rate=30:duration=0.4",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
         ]
     )
     runner.run(
         [
-            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=1.2",
-            "-c:a", "pcm_s16le", str(audio_path),
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono:d=1.2",
+            "-c:a",
+            "pcm_s16le",
+            str(audio_path),
         ]
     )
     audio = runner.probe.audio_artifact(audio_path)
@@ -2277,24 +2418,35 @@ def test_real_video_theme_runs_under_full_flow_and_exports_matching_cover(tmp_pa
         1_200,
     )
     project = MinigameProject(topic="Travel", vocabulary=[_item()])
-    video_themes = MinigameVideoThemeService()
-    manifest = video_themes.manifest("video-violet")
-    surfaces = video_themes.build_surfaces("video-violet", manifest, tmp_path / "surfaces")
+    manifest = MinigameThemeService().get("theme-3")
+    mask = MinigameAlphaMaskService().build(manifest, tmp_path / "mask")
+    review_mask = MinigameAlphaMaskService().build_review(manifest, tmp_path / "mask")
     text_layers = MinigameTextLayerService()
     hook_text = text_layers.build_hook(project, manifest, tmp_path / "text")
     review_start_text = text_layers.build_review_start(project, manifest, tmp_path / "text")
-    cta_text = text_layers.build_cta(project, manifest, tmp_path / "text")
+    frames = MinigameVisualFrameService()
+    hook_frame = frames.build(manifest.start_base, (hook_text,), tmp_path / "frames", layout_key={})
+    review_start_frame = frames.build(
+        manifest.review_start_base,
+        (review_start_text,),
+        tmp_path / "frames",
+        layout_key={},
+    )
     subtitles = MinigameSubtitleBuilder().build(
         project, timeline, tmp_path / "full-flow.ass", "9:16", manifest
     )
-    scenes = MinigamePipeline._video_visual_scenes(
+    scenes = MinigamePipeline._visual_scenes(
         timeline,
-        source,
-        surfaces,
-        hook_text,
-        review_start_text,
-        cta_text,
-        [0.5, 0.5],
+        hook_frame,
+        manifest.background_video,
+        manifest.score_screen,
+        review_start_frame,
+        manifest.review_screen,
+        manifest.cta_screen,
+        custom_background=source,
+        theme_text_overlay=mask,
+        review_text_overlay=review_mask,
+        crop_focus=[0.5, 0.5],
     )
     progress: list[float] = []
 
@@ -2309,16 +2461,26 @@ def test_real_video_theme_runs_under_full_flow_and_exports_matching_cover(tmp_pa
         visual_scenes=scenes,
         progress=lambda event: progress.append(event.fraction),
     )
-    cover = MinigamePipeline(project, workspace=tmp_path / "workspace", runner=runner)._write_video_cover(
-        output.path
+    cover = MinigamePipeline(project, workspace=tmp_path / "workspace", runner=runner)._write_cover(
+        hook_frame, output.path
     )
 
+    assert scenes[0].background == hook_frame
+    assert scenes[1].background == source
+    assert scenes[1].overlays == (mask,)
+    assert scenes[1].background_is_video
+    assert not scenes[2].background_is_video
+    assert not scenes[3].background_is_video
+    assert scenes[4].background_is_video
+    assert scenes[4].overlays == (review_mask,)
+    assert not scenes[5].background_is_video
     assert (output.width, output.height) == (1080, 1920)
     assert abs(output.duration_ms - timeline.duration_ms) <= 100
     assert progress[-1] == 1.0
     with Image.open(cover) as image:
         assert image.size == (1080, 1920)
-        assert np.asarray(image.convert("RGB")).std() > 10
+        with Image.open(hook_frame) as expected:
+            assert np.array_equal(np.asarray(image), np.asarray(expected))
     assert not list(tmp_path.glob(".*.scene-*.mp4"))
     assert not list(tmp_path.glob(".*.partial*"))
 

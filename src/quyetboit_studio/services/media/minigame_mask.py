@@ -5,7 +5,7 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from ...core.minigame import MinigameThemeManifest
 from ...core.models import PipelineError, stable_hash
@@ -13,6 +13,8 @@ from ...core.models import PipelineError, stable_hash
 
 class MinigameAlphaMaskService:
     """Builds a cached RGBA text-panel overlay without ever mutating source assets."""
+
+    REVIEW_MASK_VERSION = 1
 
     def build(self, manifest: MinigameThemeManifest, cache_dir: Path) -> Path:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -44,6 +46,49 @@ class MinigameAlphaMaskService:
                 raise PipelineError("theme_mask_invalid", "Không thể tạo alpha mask của theme.")
         os.replace(partial, output)
         return output
+
+    def build_review(self, manifest: MinigameThemeManifest, cache_dir: Path) -> Path:
+        """Lift the unchanged central Review card off its bundled photo background."""
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        key = stable_hash(
+            {
+                "theme": manifest.checksum,
+                "review_mask": self.REVIEW_MASK_VERSION,
+                "bounds": (78, 78, 1002, 1858),
+                "radius": 76,
+            }
+        )[:20]
+        output = cache_dir / f"{manifest.theme_id}-review-{key}.png"
+        if output.is_file():
+            with Image.open(output) as image:
+                if image.mode == "RGBA" and image.size == (1080, 1920):
+                    return output
+
+        with Image.open(manifest.review_screen) as source:
+            rgb = source.convert("RGB").resize((1080, 1920), Image.Resampling.LANCZOS)
+        scale = 4
+        alpha_large = Image.new("L", (1080 * scale, 1920 * scale), 0)
+        ImageDraw.Draw(alpha_large).rounded_rectangle(
+            tuple(value * scale for value in (78, 78, 1002, 1858)),
+            radius=76 * scale,
+            fill=255,
+        )
+        alpha = alpha_large.resize((1080, 1920), Image.Resampling.LANCZOS)
+        rgba = rgb.convert("RGBA")
+        rgba.putalpha(alpha)
+        partial = output.with_name(f".{output.stem}.partial{output.suffix}")
+        try:
+            rgba.save(partial, "PNG")
+            with Image.open(partial) as result:
+                if result.mode != "RGBA" or result.size != (1080, 1920):
+                    raise PipelineError(
+                        "theme_review_mask_invalid",
+                        "Không thể tạo alpha mask Review của theme.",
+                    )
+            os.replace(partial, output)
+            return output
+        finally:
+            partial.unlink(missing_ok=True)
 
     @staticmethod
     def _border_matte(rgb: np.ndarray, threshold: int) -> np.ndarray:

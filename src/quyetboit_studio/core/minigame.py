@@ -359,6 +359,168 @@ class MinigameContent:
 
 
 @dataclass(slots=True)
+class MinigameMultipartContent:
+    """One topic split into independently rendered mini-game videos."""
+
+    topic: str
+    parts: list[tuple[int, MinigameContent]]
+    schema_version: int = 1
+
+    _ROOT_KEYS = frozenset({"schemaVersion", "topic", "totalParts", "totalWords", "parts"})
+    _PART_KEYS = frozenset({"partNumber", "words"})
+
+    @classmethod
+    def example(cls) -> MinigameMultipartContent:
+        return cls(
+            "Greetings & Introductions",
+            [
+                (
+                    1,
+                    MinigameContent(
+                        "Greetings & Introductions",
+                        [
+                            VocabularyItem(
+                                "chào hỏi",
+                                "greet",
+                                "/ɡriːt/",
+                                "She greeted us with a warm smile.",
+                                "verb",
+                                "Cô ấy chào chúng tôi bằng một nụ cười ấm áp.",
+                                "Dễ",
+                            ),
+                            VocabularyItem(
+                                "giới thiệu",
+                                "introduce",
+                                "/ˌɪntrəˈdjuːs/",
+                                "Let me introduce you to my colleague.",
+                                "verb",
+                                "Để tôi giới thiệu bạn với đồng nghiệp của tôi.",
+                                "Dễ",
+                            ),
+                            VocabularyItem(
+                                "cái bắt tay",
+                                "handshake",
+                                "/ˈhændʃeɪk/",
+                                "He gave a firm handshake at the meeting.",
+                                "noun",
+                                "Anh ấy bắt tay chắc chắn trong buổi họp.",
+                                "Trung bình",
+                            ),
+                            VocabularyItem(
+                                "biệt danh",
+                                "nickname",
+                                "/ˈnɪkneɪm/",
+                                "Everyone at school calls her by a nickname.",
+                                "noun",
+                                "Mọi người ở trường gọi cô ấy bằng biệt danh.",
+                                "Trung bình",
+                            ),
+                            VocabularyItem(
+                                "người quen sơ giao",
+                                "acquaintance",
+                                "/əˈkweɪntəns/",
+                                "He's just an acquaintance, not a close friend.",
+                                "noun",
+                                "Anh ấy chỉ là người quen sơ giao, không phải bạn thân.",
+                                "Khó",
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+    @classmethod
+    def from_json(cls, value: str) -> MinigameMultipartContent:
+        try:
+            payload = json.loads(value.lstrip("\ufeff"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"JSON không hợp lệ tại dòng {exc.lineno}, cột {exc.colno}: {exc.msg}."
+            ) from exc
+        try:
+            return cls.from_dict(payload)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @classmethod
+    def from_dict(cls, payload: object) -> MinigameMultipartContent:
+        if not isinstance(payload, dict):
+            raise TypeError("JSON gốc phải là một object.")
+        unknown = sorted(set(payload) - cls._ROOT_KEYS)
+        if unknown:
+            raise ValueError(f"JSON có trường gốc không hỗ trợ: {', '.join(unknown)}.")
+        missing = sorted(cls._ROOT_KEYS - set(payload))
+        if missing:
+            raise ValueError(f"JSON thiếu trường gốc: {', '.join(missing)}.")
+        if payload["schemaVersion"] != 1:
+            raise ValueError("schemaVersion phải bằng 1.")
+        if not isinstance(payload["topic"], str) or not payload["topic"].strip():
+            raise ValueError("topic phải là chuỗi không rỗng.")
+        parts = payload["parts"]
+        if not isinstance(parts, list) or not 1 <= len(parts) <= 50:
+            raise ValueError("parts phải là array có từ 1 đến 50 phần tử.")
+        if not isinstance(payload["totalParts"], int) or isinstance(payload["totalParts"], bool):
+            raise TypeError("totalParts phải là số nguyên.")
+        if payload["totalParts"] != len(parts):
+            raise ValueError("totalParts phải khớp số phần tử trong parts.")
+        parsed: list[tuple[int, MinigameContent]] = []
+        for index, part in enumerate(parts):
+            path = f"parts[{index}]"
+            if not isinstance(part, dict):
+                raise TypeError(f"{path} phải là một object.")
+            unknown = sorted(set(part) - cls._PART_KEYS)
+            if unknown:
+                raise ValueError(f"{path} có trường không hỗ trợ: {', '.join(unknown)}.")
+            missing = sorted(cls._PART_KEYS - set(part))
+            if missing:
+                raise ValueError(f"{path} thiếu trường: {', '.join(missing)}.")
+            number = part["partNumber"]
+            if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+                raise ValueError(f"{path}.partNumber phải là số nguyên dương.")
+            parsed.append(
+                (
+                    number,
+                    MinigameContent.from_dict(
+                        {
+                            "schemaVersion": 1,
+                            "topic": payload["topic"],
+                            "words": part["words"],
+                        }
+                    ),
+                )
+            )
+        numbers = [number for number, _content in parsed]
+        if sorted(numbers) != list(range(1, len(parts) + 1)):
+            raise ValueError("partNumber phải liên tiếp từ 1 đến totalParts.")
+        if not isinstance(payload["totalWords"], int) or isinstance(payload["totalWords"], bool):
+            raise TypeError("totalWords phải là số nguyên.")
+        word_count = sum(len(content.words) for _number, content in parsed)
+        if payload["totalWords"] != word_count:
+            raise ValueError("totalWords phải khớp tổng số từ trong các parts.")
+        return cls(payload["topic"].strip(), sorted(parsed))
+
+    @property
+    def total_words(self) -> int:
+        return sum(len(content.words) for _number, content in self.parts)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schemaVersion": self.schema_version,
+            "topic": self.topic,
+            "totalParts": len(self.parts),
+            "totalWords": self.total_words,
+            "parts": [
+                {"partNumber": number, "words": [word.to_content_dict() for word in content.words]}
+                for number, content in self.parts
+            ],
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2) + "\n"
+
+
+@dataclass(slots=True)
 class MinigameProject:
     schema_version: int = 2
     project_uuid: str = field(default_factory=lambda: str(uuid4()))
@@ -525,7 +687,9 @@ class MinigameTimingProfile:
         if self.hook_bed_ms + self.hook_tail_hold_ms > self.hook_ms:
             raise ValueError("Hook music và thời gian giữ màn hình vượt quá duration Hook.")
         if self.review_start_bed_ms + self.review_start_tail_hold_ms > self.review_start_ms:
-            raise ValueError("Review Start music và thời gian giữ màn hình vượt quá duration scene.")
+            raise ValueError(
+                "Review Start music và thời gian giữ màn hình vượt quá duration scene."
+            )
 
     def transition_bed_duration_ms(self, scene_kind: str, scene_duration_ms: int) -> int:
         """Return the audible part of a transition scene, never its silent hold."""

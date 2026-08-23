@@ -44,7 +44,11 @@ access token hay nội dung JSON vào log.
 ## English Mini game
 
 1. Chọn `16:9`, `9:16` hoặc **Xuất cả hai**.
-2. Mở **Cấu hình theme…**: không chọn video để dùng flow theme ảnh cũ; chọn video để dùng flow nền video xuyên suốt Hook → Question/Answer → Score → Review → CTA và chọn một bộ màu video-theme. Âm thanh gốc luôn tắt. Chỉnh crop X/Y cho khung 9:16 tại phần Định dạng.
+2. Mở **Cấu hình theme…**: không chọn video để dùng nguyên flow theme ảnh. Khi chọn video, phần
+   Question/Answer dùng video đó thay cho `background-video.png`, còn nguyên lớp nền chữ lấy từ
+   `background-text.png`, màu, font, vị trí và nội dung chữ của theme. Mỗi card Review cũng dùng
+   video phía dưới nguyên card foreground lấy từ `review.png`. Hook, Score, Review Start và CTA vẫn
+   dùng nguyên artwork tĩnh của theme. Âm thanh video gốc luôn tắt.
 3. Nhập/dán JSON nội dung theo schema bên dưới hoặc mở file `.json`; UI có nút định dạng và sao chép
    JSON mẫu.
 4. Bấm **Cấu hình Voice…**, chọn Google Cloud TTS hoặc CapCut TTS rồi lọc theo ngôn ngữ, loại
@@ -57,11 +61,12 @@ access token hay nội dung JSON vào log.
 Output luôn được render vào file `.partial`, kiểm tra bằng ffprobe rồi mới đổi tên. Nếu tên file đã
 tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
 
-Mini game theme hiện xuất 9:16. Flow tĩnh dùng asset PNG đóng gói như trước. Flow nền video loop/crop
-video theo timestamp xuyên suốt và dựng panel RGBA theo ba art direction kế thừa Theme 2
-(Medical Blue), Theme 3 (Scrapbook) hoặc Theme 5 (Garden); không quay lại artwork full-frame ở các
-scene chuyển tiếp/review/CTA. Mỗi video vẫn xuất ảnh
-cover 1080×1920 tương ứng với Hook và đúng nền đã chọn. Montserrat và Bebas Neue cùng
+Mini game theme hiện xuất 9:16. Flow tĩnh dùng asset PNG đóng gói như trước. Khi chọn video nền,
+renderer loop/crop video rồi composite trực tiếp alpha mask sinh từ `background-text.png` của theme;
+mỗi card Review composite alpha cutout của panel trung tâm từ nguyên `review.png`. Không recolor,
+không dựng panel mới và không đổi typography/layout. Các scene chuyển tiếp, Score, Review Start,
+CTA cùng cover tiếp tục dùng nguyên artwork theme tĩnh. Mỗi video vẫn xuất ảnh cover
+1080×1920 tương ứng với Hook. Montserrat và Bebas Neue cùng
 license OFL được kèm trong `assets/fonts/`; renderer theme truyền thư mục này cho FFmpeg/libass nên không
 phụ thuộc font hệ thống để vẽ chữ tiếng Việt/IPA và title.
 Hook composite `start-base.png` với hai số `N = tổng số từ` và Topic động. Tên Topic được tự co chữ, xuống tối đa ba dòng và căn giữa theo cả hai
@@ -96,6 +101,24 @@ Tên chuẩn là `wordType`; parser cũng nhận `workType` và chuẩn hóa l�
 dải điểm Beginner, Good và Perfect; dải chỉ có một mốc được ghi dạng `3/5 correct`.
 Không đặt credential, API key hoặc đường dẫn service-account trong JSON nội dung. Schema máy đọc nằm
 tại `minigame-content.schema.json`.
+
+Tab **Nhiều phần** nhận một topic và mảng `parts`; mỗi phần được đưa nguyên vẹn qua luồng tạo video
+mini-game hiện có, theo thứ tự `partNumber`. `totalParts` và `totalWords` phải đúng với dữ liệu thực,
+`partNumber` phải liên tiếp từ 1. Tên video được đặt cố định là `<topic> Part <partNumber>` (ví dụ
+`Greetings & Introductions Part 1`) và hệ thống vẫn tự thêm suffix nếu file đã tồn tại.
+
+```json
+{
+  "schemaVersion": 1,
+  "topic": "Greetings & Introductions",
+  "totalParts": 2,
+  "totalWords": 2,
+  "parts": [
+    { "partNumber": 1, "words": [{ "vietnamese": "chào hỏi", "english": "greet", "ipa": "/ɡriːt/", "wordType": "verb", "example": "She greeted us with a warm smile.", "exampleVietnamese": "Cô ấy chào chúng tôi bằng một nụ cười ấm áp.", "level": "Dễ" }] },
+    { "partNumber": 2, "words": [{ "vietnamese": "giới thiệu", "english": "introduce", "ipa": "/ˌɪntrəˈdjuːs/", "wordType": "verb", "example": "Let me introduce you to my colleague.", "exampleVietnamese": "Để tôi giới thiệu bạn với đồng nghiệp của tôi.", "level": "Dễ" }] }
+  ]
+}
+```
 
 Sau vòng đoán từ, video hiển thị màn score theo theme, tiếp theo là màn mở đầu review có câu/badge
 động theo tổng số từ rồi dùng nền

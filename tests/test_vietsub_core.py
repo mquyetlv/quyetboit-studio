@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -43,7 +44,7 @@ from quyetboit_studio.services.media import (
     VideoConcatenator,
     atempo_chain,
 )
-from quyetboit_studio.services.media.ffmpeg import SplitConfig
+from quyetboit_studio.services.media.ffmpeg import MediaProbe, SplitConfig
 from quyetboit_studio.services.subtitles import (
     find_untranslated,
     merge_chunk_cues,
@@ -60,14 +61,68 @@ def test_studio_renderer_version_invalidates_legacy_cache_key():
     assert studio_config_hash(changed) != studio_config_hash(settings)
 
 
+def test_ffprobe_output_is_always_decoded_as_utf8(monkeypatch) -> None:
+    received: list[dict[str, object]] = []
+
+    def fake_run(_command, **kwargs):
+        received.append(kwargs)
+        return SimpleNamespace(stdout='{"streams": [], "format": {}}')
+
+    monkeypatch.setattr("quyetboit_studio.services.media.ffmpeg.subprocess.run", fake_run)
+
+    assert MediaProbe("ffprobe").inspect("video.mp4") == {"streams": [], "format": {}}
+    assert received == [
+        {
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "check": True,
+        }
+    ]
+
+
+def test_ffmpeg_preflight_output_is_always_decoded_as_utf8(monkeypatch) -> None:
+    received: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        received.append(kwargs)
+        output = "ffmpeg version test" if "-version" in command else "libx264"
+        return SimpleNamespace(stdout=output)
+
+    monkeypatch.setattr("quyetboit_studio.services.media.ffmpeg.shutil.which", lambda value: value)
+    monkeypatch.setattr("quyetboit_studio.services.media.ffmpeg.subprocess.run", fake_run)
+
+    preflight = FFmpegRunner().preflight()
+
+    assert preflight["encoder"] == "libx264"
+    assert len(received) == 3
+    assert all(
+        options
+        == {
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "check": True,
+        }
+        for options in received
+    )
+
+
 def test_douyin_url_is_https_and_domain_bounded():
     assert validate_douyin_url("https://v.douyin.com/abc") == "https://v.douyin.com/abc"
-    for invalid in ("http://douyin.com/x", "https://evil-douyin.com/x", "https://douyin.com@evil.test/x"):
+    for invalid in (
+        "http://douyin.com/x",
+        "https://evil-douyin.com/x",
+        "https://douyin.com@evil.test/x",
+    ):
         with pytest.raises(PipelineError):
             validate_douyin_url(invalid)
-    assert validate_douyin_url(
-        "https://www.douyin.com/jingxuan?modal_id=7660401665056558388"
-    ) == "https://www.douyin.com/video/7660401665056558388"
+    assert (
+        validate_douyin_url("https://www.douyin.com/jingxuan?modal_id=7660401665056558388")
+        == "https://www.douyin.com/video/7660401665056558388"
+    )
 
 
 def test_chrome_display_name_maps_to_profile_directory(tmp_path):
@@ -86,7 +141,7 @@ def test_cookie_extension_json_converts_to_netscape_and_filters_domains(tmp_path
         '{"url":"https://www.douyin.com","cookies":['
         '{"domain":".douyin.com","hostOnly":false,"httpOnly":true,"secure":true,'
         '"path":"/","expirationDate":1800000000,"name":"sessionid","value":"secret"},'
-        '{"domain":"evil.test","name":"other","value":"leak"}]}' ,
+        '{"domain":"evil.test","name":"other","value":"leak"}]}',
         encoding="utf-8",
     )
     output = tmp_path / "cookies.txt"
@@ -101,16 +156,22 @@ def test_douyin_series_resolves_mix_from_episode_and_paginates_in_order():
     class FakeExtractor:
         def _download_json(self, endpoint, _video_id, _message, query):
             if endpoint.endswith("/aweme/detail/"):
-                return {"aweme_detail": {"mix_info": {
-                    "mix_id": "900", "mix_name": "Bộ phim",
-                }}}
+                return {
+                    "aweme_detail": {
+                        "mix_info": {
+                            "mix_id": "900",
+                            "mix_name": "Bộ phim",
+                        }
+                    }
+                }
             if query["cursor"] == 0:
                 return {
                     "aweme_list": [
                         {"aweme_id": "101", "desc": "Tập 1", "duration": 12_000},
                         {"aweme_id": "102", "desc": "Tập 2", "duration": 13_000},
                     ],
-                    "has_more": True, "cursor": 2,
+                    "has_more": True,
+                    "cursor": 2,
                 }
             return {
                 "aweme_list": [
@@ -133,7 +194,9 @@ def test_douyin_series_resolves_mix_from_episode_and_paginates_in_order():
         def extract_info(self, _url, download=False):
             assert download is False
             return {
-                "id": "102", "title": "Tập 2", "duration": 13,
+                "id": "102",
+                "title": "Tập 2",
+                "duration": 13,
                 "webpage_url": "https://www.douyin.com/video/102",
             }
 
@@ -184,7 +247,9 @@ def test_multi_source_pipeline_downloads_in_order_and_concatenates(tmp_path):
         def probe(self, url, _auth, _cookies):
             video_id = url.rsplit("/", 1)[-1]
             return VideoMetadata(
-                video_id, f"Video {video_id}", 1,
+                video_id,
+                f"Video {video_id}",
+                1,
                 f"https://www.douyin.com/video/{video_id}",
             )
 
@@ -195,7 +260,11 @@ def test_multi_source_pipeline_downloads_in_order_and_concatenates(tmp_path):
             path.write_bytes(video_id.encode())
             progress(ProgressEvent(0, 1, "done"))
             return VideoArtifact(
-                path, duration_ms=1000, width=1080, height=1920, fps=30,
+                path,
+                duration_ms=1000,
+                width=1080,
+                height=1920,
+                fps=30,
             ).refresh()
 
     class FakeConcatenator:
@@ -207,7 +276,11 @@ def test_multi_source_pipeline_downloads_in_order_and_concatenates(tmp_path):
             output.write_bytes(b"combined")
             progress(ProgressEvent(0, 1, "combined"))
             return VideoArtifact(
-                output, duration_ms=2000, width=1080, height=1920, fps=30,
+                output,
+                duration_ms=2000,
+                width=1080,
+                height=1920,
+                fps=30,
             ).refresh()
 
     concatenator = FakeConcatenator()
@@ -220,7 +293,8 @@ def test_multi_source_pipeline_downloads_in_order_and_concatenates(tmp_path):
         workspace_path=str(tmp_path),
     )
     pipeline = VietSubPipeline(
-        project, workspace=tmp_path,
+        project,
+        workspace=tmp_path,
         dependencies=PipelineDependencies(
             downloader=FakeDownloader(),  # type: ignore[arg-type]
             concatenator=concatenator,  # type: ignore[arg-type]
@@ -240,17 +314,33 @@ def test_video_concatenator_normalizes_and_validates_real_ffmpeg_output(tmp_path
     except PipelineError:
         pytest.skip("FFmpeg/ffprobe không có trong PATH")
     monkeypatch.setattr(
-        runner, "preflight", lambda: {"encoder": "libx264", "rubberband": False},
+        runner,
+        "preflight",
+        lambda: {"encoder": "libx264", "rubberband": False},
     )
     inputs = []
     for index, size in enumerate(("320x240", "240x320")):
         path = tmp_path / f"input-{index}.mp4"
-        runner.run([
-            "-f", "lavfi", "-i", f"color=c=black:s={size}:d=0.45",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=0.45",
-            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            str(path),
-        ])
+        runner.run(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={size}:d=0.45",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.45",
+                "-shortest",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                str(path),
+            ]
+        )
         inputs.append(runner.probe.video_artifact(path))
 
     output = tmp_path / "combined.mp4"
@@ -268,11 +358,13 @@ def test_video_concatenator_normalizes_and_validates_real_ffmpeg_output(tmp_path
 def test_srt_roundtrip_merge_overlap_and_validation():
     cues = parse_srt("\ufeff1\n00:00:00,000 --> 00:00:01,000\n你好\n")
     assert serialize_srt(cues, bom=True).startswith("\ufeff1")
-    merged = merge_chunk_cues([
-        (0, cues),
-        (500, [SrtCue(1, 0, 600, "你好")]),
-        (1000, [SrtCue(1, 0, 500, "不同")]),
-    ])
+    merged = merge_chunk_cues(
+        [
+            (0, cues),
+            (500, [SrtCue(1, 0, 600, "你好")]),
+            (1000, [SrtCue(1, 0, 500, "不同")]),
+        ]
+    )
     assert [cue.text for cue in merged] == ["你好", "不同"]
     cues[0].translated_text = "你好"
     assert find_untranslated(cues) == cues
@@ -293,8 +385,10 @@ def test_atempo_chain_supports_out_of_range_values():
 
 def test_artifact_cache_checks_checksum_and_invalidates_downstream(tmp_path):
     cache = ArtifactCache(tmp_path)
-    first = tmp_path / "first.txt"; first.write_text("first", encoding="utf-8")
-    second = tmp_path / "second.txt"; second.write_text("second", encoding="utf-8")
+    first = tmp_path / "first.txt"
+    first.write_text("first", encoding="utf-8")
+    second = tmp_path / "second.txt"
+    second.write_text("second", encoding="utf-8")
     cache.put(1, Artifact(first, input_hash="a", config_hash="b"))
     cache.put(2, Artifact(second, input_hash="c", config_hash="d"))
     assert cache.get(1, "a", "b") is not None
@@ -308,8 +402,12 @@ def test_artifact_cache_restores_typed_chunks_and_pipeline_dependency(tmp_path):
     chunk_path = tmp_path / "audio_001.m4a"
     chunk_path.write_bytes(b"audio")
     chunk = AudioChunk(
-        chunk_path, input_hash="audio", config_hash="split", index=0,
-        source_start_ms=0, source_end_ms=1000,
+        chunk_path,
+        input_hash="audio",
+        config_hash="split",
+        index=0,
+        source_start_ms=0,
+        source_end_ms=1000,
     )
     cache.put(1, chunk, item_id="chunk-0")
     mixed_path = tmp_path / "mixed.mp4"
@@ -406,10 +504,7 @@ class FakeBatchTtsService(CapCutTtsService):
 def test_capcut_tts_batch_uses_bounded_concurrency_and_preserves_order(tmp_path):
     service = FakeBatchTtsService()
     voice = Voice("Test", "speaker")
-    requests = [
-        (str(index), voice, tmp_path / f"{index}.audio", 1.0, 100)
-        for index in range(6)
-    ]
+    requests = [(str(index), voice, tmp_path / f"{index}.audio", 1.0, 100) for index in range(6)]
     results = service.synthesize_batch(requests, concurrency=3)
     assert service.max_active == 3
     assert [item.path.read_text() for item in results] == [str(index) for index in range(6)]
@@ -428,10 +523,7 @@ def test_capcut_tts_batch_keeps_successes_when_one_item_fails(tmp_path):
 
     service = OneFailure()
     voice = Voice("Test", "speaker")
-    requests = [
-        (str(index), voice, tmp_path / f"{index}.audio", 1.0, 100)
-        for index in range(5)
-    ]
+    requests = [(str(index), voice, tmp_path / f"{index}.audio", 1.0, 100) for index in range(5)]
     checkpointed = []
 
     with pytest.raises(PartialFailureError) as failure:
@@ -449,12 +541,15 @@ def test_capcut_tts_batch_keeps_successes_when_one_item_fails(tmp_path):
 def test_capcut_sign_crc_obfuscation_and_sigv4_are_deterministic():
     assert xor5_hex("A") == "44"
     assert crc32_hex(b"abc") == "352441c2"
-    assert make_sign("/lv/v1/caption/query", "8.4.0", 1)["sign"] == make_sign(
-        "/lv/v1/caption/query", "8.4.0", 1
-    )["sign"]
+    assert (
+        make_sign("/lv/v1/caption/query", "8.4.0", 1)["sign"]
+        == make_sign("/lv/v1/caption/query", "8.4.0", 1)["sign"]
+    )
     signer = AwsV4Signer()
     headers = signer.sign(
-        "GET", "https://example.com/?Version=1&Action=Apply", StsCredentials("AK", "SK", "TOKEN"),
+        "GET",
+        "https://example.com/?Version=1&Action=Apply",
+        StsCredentials("AK", "SK", "TOKEN"),
         now=datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC),
     )
     assert headers["X-Amz-Date"] == "20250102T030405Z"

@@ -50,16 +50,36 @@ class MediaProbe:
 
     def inspect(self, path: str | Path) -> dict[str, Any]:
         command = [
-            self.executable, "-v", "error", "-show_streams", "-show_format",
-            "-of", "json", str(path),
+            self.executable,
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_format",
+            "-of",
+            "json",
+            str(path),
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+            )
             return json.loads(result.stdout)
-        except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            subprocess.CalledProcessError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
             raise PipelineError(
-                "media_probe_failed", "Không thể đọc file media bằng ffprobe.",
-                provider="ffmpeg", debug_detail=str(exc),
+                "media_probe_failed",
+                "Không thể đọc file media bằng ffprobe.",
+                provider="ffmpeg",
+                debug_detail=str(exc),
             ) from exc
 
     @staticmethod
@@ -72,24 +92,35 @@ class MediaProbe:
 
     def video_artifact(self, path: str | Path) -> VideoArtifact:
         info = self.inspect(path)
-        stream = next((item for item in info.get("streams", []) if item.get("codec_type") == "video"), None)
+        stream = next(
+            (item for item in info.get("streams", []) if item.get("codec_type") == "video"), None
+        )
         if not stream or self.duration_ms(info) <= 0:
-            raise PipelineError("invalid_video", "File tải về không có video hợp lệ.", provider="ffmpeg")
+            raise PipelineError(
+                "invalid_video", "File tải về không có video hợp lệ.", provider="ffmpeg"
+            )
         numerator, _, denominator = str(stream.get("avg_frame_rate", "0/1")).partition("/")
         fps = float(numerator or 0) / max(1.0, float(denominator or 1))
         return VideoArtifact(
-            Path(path), duration_ms=self.duration_ms(info), width=int(stream.get("width", 0)),
-            height=int(stream.get("height", 0)), fps=fps,
+            Path(path),
+            duration_ms=self.duration_ms(info),
+            width=int(stream.get("width", 0)),
+            height=int(stream.get("height", 0)),
+            fps=fps,
         ).refresh()
 
     def audio_artifact(self, path: str | Path) -> AudioArtifact:
         info = self.inspect(path)
-        stream = next((item for item in info.get("streams", []) if item.get("codec_type") == "audio"), None)
+        stream = next(
+            (item for item in info.get("streams", []) if item.get("codec_type") == "audio"), None
+        )
         if not stream or self.duration_ms(info) <= 0:
             raise PipelineError("invalid_audio", "File audio không hợp lệ.", provider="ffmpeg")
         return AudioArtifact(
-            Path(path), duration_ms=self.duration_ms(info),
-            sample_rate=int(stream.get("sample_rate", 0)), channels=int(stream.get("channels", 0)),
+            Path(path),
+            duration_ms=self.duration_ms(info),
+            sample_rate=int(stream.get("sample_rate", 0)),
+            channels=int(stream.get("channels", 0)),
         ).refresh()
 
 
@@ -106,18 +137,38 @@ class FFmpegRunner:
                 "ffmpeg_missing", "Không tìm thấy FFmpeg/ffprobe trong PATH.", provider="ffmpeg"
             )
         version = subprocess.run(
-            [self.ffmpeg, "-version"], capture_output=True, text=True, check=True
+            [self.ffmpeg, "-version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
         ).stdout.splitlines()[0]
         encoders = subprocess.run(
-            [self.ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, check=True
+            [self.ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
         ).stdout
         filters = subprocess.run(
-            [self.ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True, check=True
+            [self.ffmpeg, "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
         ).stdout
-        available = [name for name in ("h264_nvenc", "h264_qsv", "h264_amf", "libx264") if name in encoders]
+        available = [
+            name for name in ("h264_nvenc", "h264_qsv", "h264_amf", "libx264") if name in encoders
+        ]
         return {
-            "ffmpeg": shutil.which(self.ffmpeg), "ffprobe": shutil.which(self.probe.executable),
-            "version": version, "encoders": available, "encoder": available[0] if available else "",
+            "ffmpeg": shutil.which(self.ffmpeg),
+            "ffprobe": shutil.which(self.probe.executable),
+            "version": version,
+            "encoders": available,
+            "encoder": available[0] if available else "",
             "rubberband": "rubberband" in filters,
         }
 
@@ -134,11 +185,14 @@ class FFmpegRunner:
         if progress:
             command[-1:-1] = ["-progress", "pipe:1", "-nostats"]
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE if progress else subprocess.DEVNULL,
+            command,
+            stdout=subprocess.PIPE if progress else subprocess.DEVNULL,
             # FFmpeg can emit enough subtitle/font diagnostics to fill stderr's pipe and deadlock
             # while the caller is reading progress from stdout. Merge both streams and drain them.
             stderr=subprocess.STDOUT if progress else subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace",
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         diagnostics: deque[str] = deque(maxlen=120)
@@ -152,9 +206,7 @@ class FFmpegRunner:
                     return
 
         if cancel:
-            threading.Thread(
-                target=cancellation_watcher, name="ffmpeg-cancel", daemon=True
-            ).start()
+            threading.Thread(target=cancellation_watcher, name="ffmpeg-cancel", daemon=True).start()
         try:
             if progress and process.stdout:
                 for line in process.stdout:
@@ -180,8 +232,11 @@ class FFmpegRunner:
             if process.returncode:
                 detail = "\n".join(diagnostics)[-4000:] or (stderr or stdout or "")[-4000:]
                 raise PipelineError(
-                    "ffmpeg_failed", "FFmpeg không thể xử lý media.", provider="ffmpeg",
-                    retryable=False, debug_detail=detail,
+                    "ffmpeg_failed",
+                    "FFmpeg không thể xử lý media.",
+                    provider="ffmpeg",
+                    retryable=False,
+                    debug_detail=detail,
                 )
             if progress:
                 progress(ProgressEvent(step, 1.0, "FFmpeg — 100%"))
@@ -198,8 +253,12 @@ class VideoConcatenator:
         self.runner = runner or FFmpegRunner()
 
     def concatenate(
-        self, videos: Iterable[VideoArtifact], output: str | Path, *,
-        progress: ProgressCallback | None = None, cancel: CancellationToken | None = None,
+        self,
+        videos: Iterable[VideoArtifact],
+        output: str | Path,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: CancellationToken | None = None,
     ) -> VideoArtifact:
         sources = list(videos)
         if not sources:
@@ -237,9 +296,7 @@ class VideoConcatenator:
                     f",asetpts=PTS-STARTPTS[a{index}]"
                 )
             labels.append(f"[v{index}][a{index}]")
-        filters.append(
-            f"{''.join(labels)}concat=n={len(sources)}:v=1:a=1[vout][aout]"
-        )
+        filters.append(f"{''.join(labels)}concat=n={len(sources)}:v=1:a=1[vout][aout]")
         script.write_text(";".join(filters), encoding="utf-8")
         preflight = self.runner.preflight()
         encoder = preflight.get("encoder") or "libx264"
@@ -247,21 +304,40 @@ class VideoConcatenator:
         for video in sources:
             args += ["-i", str(video.path)]
         args += [
-            "-filter_complex_script", str(script), "-map", "[vout]", "-map", "[aout]",
-            "-c:v", encoder, "-c:a", "aac", "-movflags", "+faststart", str(partial),
+            "-filter_complex_script",
+            str(script),
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            encoder,
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(partial),
         ]
         duration_ms = sum(video.duration_ms for video in sources)
         try:
             try:
                 self.runner.run(
-                    args, duration_ms=duration_ms, progress=progress, cancel=cancel, step=0,
+                    args,
+                    duration_ms=duration_ms,
+                    progress=progress,
+                    cancel=cancel,
+                    step=0,
                 )
             except PipelineError:
                 if encoder == "libx264":
                     raise
                 args[args.index(encoder)] = "libx264"
                 self.runner.run(
-                    args, duration_ms=duration_ms, progress=progress, cancel=cancel, step=0,
+                    args,
+                    duration_ms=duration_ms,
+                    progress=progress,
+                    cancel=cancel,
+                    step=0,
                 )
             result = self.runner.probe.video_artifact(partial)
             os.replace(partial, target)
@@ -290,15 +366,35 @@ class AudioProcessor:
         self.runner = runner or FFmpegRunner()
 
     def extract(
-        self, video: Artifact, output: str | Path, *, progress: ProgressCallback | None = None,
+        self,
+        video: Artifact,
+        output: str | Path,
+        *,
+        progress: ProgressCallback | None = None,
         cancel: CancellationToken | None = None,
     ) -> AudioArtifact:
         target = Path(output)
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(f".{target.stem}.partial{target.suffix}")
         self.runner.run(
-            ["-i", str(video.path), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "96k", str(partial)],
-            duration_ms=int(video.metadata.get("duration_ms", 0)), progress=progress, cancel=cancel, step=1,
+            [
+                "-i",
+                str(video.path),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                str(partial),
+            ],
+            duration_ms=int(video.metadata.get("duration_ms", 0)),
+            progress=progress,
+            cancel=cancel,
+            step=1,
         )
         artifact = self.runner.probe.audio_artifact(partial)
         os.replace(partial, target)
@@ -308,14 +404,26 @@ class AudioProcessor:
     def silence_points(self, audio: str | Path, config: SplitConfig | None = None) -> list[int]:
         config = config or SplitConfig()
         command = [
-            self.runner.ffmpeg, "-hide_banner", "-nostdin", "-i", str(audio), "-af",
-            f"silencedetect=noise={config.silence_db}dB:d={config.silence_duration}", "-f", "null", "-",
+            self.runner.ffmpeg,
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            str(audio),
+            "-af",
+            f"silencedetect=noise={config.silence_db}dB:d={config.silence_duration}",
+            "-f",
+            "null",
+            "-",
         ]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
+        )
         return [round(float(value) * 1000) for value in self.SILENCE_END.findall(result.stderr)]
 
     @staticmethod
-    def boundaries(duration_ms: int, silences: Iterable[int], config: SplitConfig | None = None) -> list[tuple[int, int]]:
+    def boundaries(
+        duration_ms: int, silences: Iterable[int], config: SplitConfig | None = None
+    ) -> list[tuple[int, int]]:
         config = config or SplitConfig()
         if duration_ms <= config.max_seconds * 1000:
             return [(0, duration_ms)]
@@ -326,7 +434,8 @@ class AudioProcessor:
         while duration_ms - start > config.max_seconds * 1000:
             ideal = start + target
             candidates = [
-                point for point in points
+                point
+                for point in points
                 if start + config.min_seconds * 1000 <= point <= start + config.max_seconds * 1000
                 and abs(point - ideal) <= config.search_seconds * 1000
             ]
@@ -337,8 +446,13 @@ class AudioProcessor:
         return output
 
     def split_on_silence(
-        self, audio: AudioArtifact, directory: str | Path, config: SplitConfig | None = None,
-        *, progress: ProgressCallback | None = None, cancel: CancellationToken | None = None,
+        self,
+        audio: AudioArtifact,
+        directory: str | Path,
+        config: SplitConfig | None = None,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: CancellationToken | None = None,
     ) -> list[AudioChunk]:
         config = config or SplitConfig()
         directory = Path(directory)
@@ -350,29 +464,61 @@ class AudioProcessor:
             if cancel:
                 cancel.raise_if_cancelled()
             start = max(0, source_start - (config.overlap_ms if index else 0))
-            end = min(audio.duration_ms, source_end + (config.overlap_ms if index < len(bounds) - 1 else 0))
+            end = min(
+                audio.duration_ms,
+                source_end + (config.overlap_ms if index < len(bounds) - 1 else 0),
+            )
             target = directory / f"audio_{index + 1:03d}.m4a"
             partial = target.with_name(f".{target.stem}.partial{target.suffix}")
-            self.runner.run([
-                "-ss", f"{start / 1000:.3f}", "-to", f"{end / 1000:.3f}", "-i", str(audio.path),
-                "-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "96k", str(partial),
-            ], cancel=cancel)
+            self.runner.run(
+                [
+                    "-ss",
+                    f"{start / 1000:.3f}",
+                    "-to",
+                    f"{end / 1000:.3f}",
+                    "-i",
+                    str(audio.path),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "96k",
+                    str(partial),
+                ],
+                cancel=cancel,
+            )
             probed = self.runner.probe.audio_artifact(partial)
             os.replace(partial, target)
             chunk = AudioChunk(
-                path=target, duration_ms=probed.duration_ms, sample_rate=probed.sample_rate,
-                channels=probed.channels, index=index, source_start_ms=start, source_end_ms=end,
+                path=target,
+                duration_ms=probed.duration_ms,
+                sample_rate=probed.sample_rate,
+                channels=probed.channels,
+                index=index,
+                source_start_ms=start,
+                source_end_ms=end,
             ).refresh()
             chunks.append(chunk)
             if progress:
-                progress(ProgressEvent(1, source_end / max(1, audio.duration_ms), "Chia audio", item_id=str(index)))
+                progress(
+                    ProgressEvent(
+                        1, source_end / max(1, audio.duration_ms), "Chia audio", item_id=str(index)
+                    )
+                )
         return chunks
 
 
 class TimelineAudioAssembler:
     def assemble(
-        self, cues: list[SrtCue], clips: list[AudioArtifact], output: str | Path,
-        *, video_duration_ms: int,
+        self,
+        cues: list[SrtCue],
+        clips: list[AudioArtifact],
+        output: str | Path,
+        *,
+        video_duration_ms: int,
     ) -> AudioArtifact:
         if len(cues) != len(clips):
             raise ValueError("Số cue và clip voice phải bằng nhau.")
@@ -380,13 +526,26 @@ class TimelineAudioAssembler:
         timeline = np.zeros(math.ceil(video_duration_ms * rate / 1000), dtype=np.float32)
         for cue, clip in zip(cues, clips, strict=True):
             with wave.open(str(clip.path), "rb") as source:
-                if source.getframerate() != rate or source.getnchannels() != 1 or source.getsampwidth() != 2:
-                    raise PipelineError("invalid_voice_pcm", "Clip voice phải là PCM mono 48 kHz.", provider="ffmpeg")
-                samples = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").astype(np.float32) / 32768
+                if (
+                    source.getframerate() != rate
+                    or source.getnchannels() != 1
+                    or source.getsampwidth() != 2
+                ):
+                    raise PipelineError(
+                        "invalid_voice_pcm",
+                        "Clip voice phải là PCM mono 48 kHz.",
+                        provider="ffmpeg",
+                    )
+                samples = (
+                    np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").astype(
+                        np.float32
+                    )
+                    / 32768
+                )
             offset = round(cue.start_ms * rate / 1000)
             available = min(len(samples), len(timeline) - offset)
             if available > 0:
-                timeline[offset:offset + available] += samples[:available]
+                timeline[offset : offset + available] += samples[:available]
         peak = float(np.max(np.abs(timeline), initial=0))
         if peak > 0.98:
             timeline *= 0.98 / peak
@@ -394,10 +553,14 @@ class TimelineAudioAssembler:
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(f".{target.stem}.partial{target.suffix}")
         with wave.open(str(partial), "wb") as destination:
-            destination.setnchannels(1); destination.setsampwidth(2); destination.setframerate(rate)
+            destination.setnchannels(1)
+            destination.setsampwidth(2)
+            destination.setframerate(rate)
             destination.writeframes((timeline * 32767).astype("<i2").tobytes())
         os.replace(partial, target)
-        return AudioArtifact(target, duration_ms=video_duration_ms, sample_rate=rate, channels=1).refresh()
+        return AudioArtifact(
+            target, duration_ms=video_duration_ms, sample_rate=rate, channels=1
+        ).refresh()
 
 
 @dataclass(slots=True)
@@ -413,8 +576,11 @@ class FilterGraphBuilder:
     @staticmethod
     def escape_path(value: str) -> str:
         return (
-            value.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-            .replace("[", "\\[").replace("]", "\\]")
+            value.replace("\\", "/")
+            .replace(":", "\\:")
+            .replace("'", "\\'")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
         )
 
     @staticmethod
@@ -462,8 +628,12 @@ class FilterGraphBuilder:
     @staticmethod
     def _ass_color(value: str) -> str:
         named = {
-            "white": "FFFFFF", "black": "000000", "red": "FF0000",
-            "green": "00FF00", "blue": "0000FF", "yellow": "FFFF00",
+            "white": "FFFFFF",
+            "black": "000000",
+            "red": "FF0000",
+            "green": "00FF00",
+            "blue": "0000FF",
+            "yellow": "FFFF00",
         }
         raw = value.strip().lstrip("#")
         rgb = raw if re.fullmatch(r"[0-9a-fA-F]{6}", raw) else named.get(raw.lower(), "FFFFFF")
@@ -486,8 +656,13 @@ class FilterGraphBuilder:
         return str(margin) if position == "top" else f"ih-{height}-{margin}"
 
     def build(
-        self, settings: dict[str, Any], *, subtitle: str | Path | None = None,
-        rubberband: bool = False, frame_width: int = 1920, frame_height: int = 1080,
+        self,
+        settings: dict[str, Any],
+        *,
+        subtitle: str | Path | None = None,
+        rubberband: bool = False,
+        frame_width: int = 1920,
+        frame_height: int = 1080,
     ) -> RenderGraph:
         settings = normalize_studio_settings(settings)
         layers = [layer for layer in settings["layers"] if layer.get("enabled", True)]
@@ -545,7 +720,9 @@ class FilterGraphBuilder:
             requested_size = int(layer.get("font_size", 48))
             # Keep even long text inside the frame; drawtext's fix_bounds provides the final guard.
             estimated_glyphs = max(1.0, len(text) * 0.62)
-            font_size = max(1, min(requested_size, frame_height, int(frame_width / estimated_glyphs)))
+            font_size = max(
+                1, min(requested_size, frame_height, int(frame_width / estimated_glyphs))
+            )
             if kind == "scroll_text":
                 scroll_speed = max(0.1, min(10.0, float(layer.get("speed", 1.0))))
                 x_range = "max(1\\,w-text_w)"
@@ -607,12 +784,8 @@ class FilterGraphBuilder:
                 script_parts.append(
                     f"[{index}:v]format=rgba,colorchannelmixer=aa={opacity:.4g}[{raw}]"
                 )
-                script_parts.append(
-                    f"[{raw}]scale=-1:{height}[{asset}]"
-                )
-                script_parts.append(
-                    f"[{current}][{asset}]overlay=x={x}:y={y}[{output}]"
-                )
+                script_parts.append(f"[{raw}]scale=-1:{height}[{asset}]")
+                script_parts.append(f"[{current}][{asset}]overlay=x={x}:y={y}[{output}]")
                 current = output
                 visual = True
             video_output = current
@@ -626,16 +799,23 @@ class FilterGraphBuilder:
             if rubberband:
                 audio_filters.append(f"rubberband=pitch={ratio:.8g}")
             else:
-                audio_filters.extend([
-                    f"asetrate=48000*{ratio:.8g}", "aresample=48000", atempo_chain(1 / ratio),
-                ])
+                audio_filters.extend(
+                    [
+                        f"asetrate=48000*{ratio:.8g}",
+                        "aresample=48000",
+                        atempo_chain(1 / ratio),
+                    ]
+                )
         if timeline_speed != 1:
             audio_filters.append(atempo_chain(timeline_speed))
         if audio_filters:
             script_parts.append(f"[0:a]{','.join(audio_filters)}[aout]")
         return RenderGraph(
-            ";".join(script_parts), image_inputs, video_output,
-            "aout" if audio_filters else None, visual,
+            ";".join(script_parts),
+            image_inputs,
+            video_output,
+            "aout" if audio_filters else None,
+            visual,
         )
 
 
@@ -645,42 +825,72 @@ class VideoRenderer:
 
     @staticmethod
     def requires_render(
-        studio: dict[str, Any], *, subtitle: str | Path | None = None,
+        studio: dict[str, Any],
+        *,
+        subtitle: str | Path | None = None,
     ) -> bool:
         graph = FilterGraphBuilder().build(studio, subtitle=subtitle, rubberband=False)
         return bool(graph.script)
 
     def mix_audio(
-        self, video: VideoArtifact, voice: AudioArtifact, output: str | Path, settings: dict[str, Any],
-        *, cancel: CancellationToken | None = None, progress: ProgressCallback | None = None,
+        self,
+        video: VideoArtifact,
+        voice: AudioArtifact,
+        output: str | Path,
+        settings: dict[str, Any],
+        *,
+        cancel: CancellationToken | None = None,
+        progress: ProgressCallback | None = None,
     ) -> VideoArtifact:
-        target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)
+        target = Path(output)
+        target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(f".{target.stem}.partial{target.suffix}")
         keep = bool(settings.get("keep_original", True))
         if keep:
             original = float(settings.get("original_volume", 25)) / 100
             voice_gain = float(settings.get("voice_volume", 100)) / 100
-            args = ["-i", str(video.path), "-i", str(voice.path), "-filter_complex",
-                    f"[0:a]volume={original}[a0];[1:a]volume={voice_gain}[a1];[a0][a1]amix=inputs=2:duration=first,alimiter=limit=0.98[a]",
-                    "-map", "0:v:0", "-map", "[a]"]
+            args = [
+                "-i",
+                str(video.path),
+                "-i",
+                str(voice.path),
+                "-filter_complex",
+                f"[0:a]volume={original}[a0];[1:a]volume={voice_gain}[a1];[a0][a1]amix=inputs=2:duration=first,alimiter=limit=0.98[a]",
+                "-map",
+                "0:v:0",
+                "-map",
+                "[a]",
+            ]
         else:
             args = ["-i", str(video.path), "-i", str(voice.path), "-map", "0:v:0", "-map", "1:a:0"]
         args += ["-c:v", "copy", "-c:a", "aac", "-shortest", str(partial)]
-        self.runner.run(args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=5)
+        self.runner.run(
+            args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=5
+        )
         result = self.runner.probe.video_artifact(partial)
-        os.replace(partial, target); result.path = target
+        os.replace(partial, target)
+        result.path = target
         return result.refresh()
 
     def render(
-        self, video: VideoArtifact, output: str | Path, studio: dict[str, Any], export: dict[str, Any],
-        *, subtitle: str | Path | None = None, cancel: CancellationToken | None = None,
+        self,
+        video: VideoArtifact,
+        output: str | Path,
+        studio: dict[str, Any],
+        export: dict[str, Any],
+        *,
+        subtitle: str | Path | None = None,
+        cancel: CancellationToken | None = None,
         progress: ProgressCallback | None = None,
     ) -> VideoArtifact:
-        target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)
+        target = Path(output)
+        target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(f".{target.stem}.partial{target.suffix}")
         preflight = self.runner.preflight()
         graph = FilterGraphBuilder().build(
-            studio, subtitle=subtitle, rubberband=preflight["rubberband"],
+            studio,
+            subtitle=subtitle,
+            rubberband=preflight["rubberband"],
             frame_width=video.width or 1920,
             frame_height=video.height or 1080,
         )
@@ -696,23 +906,31 @@ class VideoRenderer:
         args += ["-map", f"[{graph.video_output}]" if graph.video_output else "0:v:0"]
         args += ["-map", f"[{graph.audio_output}]" if graph.audio_output else "0:a?"]
         args += [
-            "-c:v", encoder if graph.visual else "copy",
-            "-c:a", "aac" if graph.audio_output else "copy",
-            "-movflags", "+faststart",
+            "-c:v",
+            encoder if graph.visual else "copy",
+            "-c:a",
+            "aac" if graph.audio_output else "copy",
+            "-movflags",
+            "+faststart",
         ]
         if graph.image_inputs:
             args.append("-shortest")
         args.append(str(partial))
         try:
-            self.runner.run(args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=7)
+            self.runner.run(
+                args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=7
+            )
         except PipelineError:
             if encoder == "libx264" or not graph.visual:
                 raise
             args[args.index(encoder)] = "libx264"
-            self.runner.run(args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=7)
+            self.runner.run(
+                args, duration_ms=video.duration_ms, progress=progress, cancel=cancel, step=7
+            )
         finally:
             if script:
                 script.unlink(missing_ok=True)
         result = self.runner.probe.video_artifact(partial)
-        os.replace(partial, target); result.path = target
+        os.replace(partial, target)
+        result.path = target
         return result.refresh()

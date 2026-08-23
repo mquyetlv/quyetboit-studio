@@ -1,7 +1,7 @@
 # Đặc tả luồng video English Mini game
 
 > Trạng thái: **Baseline vNext + dynamic challenge/CTA đã triển khai và nghiệm thu visual**
-> — cập nhật ngày 2026-08-19.
+> — cập nhật ngày 2026-08-22.
 >
 > File này là nguồn tra cứu cho mọi thay đổi về flow, timing, visual scene và sound effect của
 > menu `Tiếng Anh → Mini game`. Khi code và tài liệu khác nhau, phải cập nhật file này cùng thay đổi
@@ -27,8 +27,8 @@ dịch hoặc sửa nội dung.
 | Normalize, mix, loudness | `src/quyetboit_studio/services/media/minigame.py` — `MinigameAudioService` | Thêm import asset, gain/fade/ducking và chống overlap không chủ đích |
 | Countdown/voice/score text | `src/quyetboit_studio/services/media/minigame.py` — `MinigameSubtitleBuilder._build_theme()` | Thay ba số countdown bằng remaining-time progress bar và giữ phase hold |
 | Tọa độ/style theme | `src/quyetboit_studio/services/media/minigame_theme.py` | Thêm track/fill slot cho progress bar trong safe box từng theme |
-| Ghép visual scene/nền tùy chọn | `src/quyetboit_studio/pipeline/minigame.py` — `_visual_scenes()`/`_video_visual_scenes()` và `services/media/minigame.py` — `_render_theme()` | Static flow dùng artwork cũ; video flow dùng cùng video nền xuyên suốt mọi scene với timestamp liên tục |
-| Art direction và panel video flow | `services/media/minigame_video_theme.py` | Giữ ID `video-ocean`, `video-violet`, `video-emerald` để tương thích project; lần lượt kế thừa ngôn ngữ hình ảnh Theme 2/3/5 và sinh RGBA surface riêng cho Hook/Body/Score/Review Start/Review/CTA |
+| Ghép visual scene/nền tùy chọn | `src/quyetboit_studio/pipeline/minigame.py` — `_visual_scenes()` và `services/media/minigame.py` — `_render_theme()` | Không có video: dùng frame theme như cũ. Có video: Question/Answer dùng mask `background-text.png`; từng Review card dùng alpha cutout nguyên panel `review.png` trên cùng video |
+| Video-theme cũ | `services/media/minigame_video_theme.py` | Giữ để tương thích code/project cũ; production không dùng surface sinh bằng code khi người dùng chọn video nền |
 | Preview và thời lượng dự kiến | `src/quyetboit_studio/minigame.py` | Dùng cùng timing profile, không tự tính một bộ số khác |
 | Hook/Review Start động; CTA tĩnh | `services/media/minigame_text.py`, `services/media/minigame_theme.py` | Hook dùng digit atlas 0–9 riêng từng theme; Review Start dựng RGBA theo `N`; CTA dùng artwork hoàn chỉnh `cta-new.png` riêng từng theme |
 | Regression/integration | `tests/test_minigame.py` | Kiểm tra timestamp, asset mapping, mix, frame animation và render thật |
@@ -38,15 +38,14 @@ dịch hoặc sửa nội dung.
 
 - **Theme tĩnh:** khi không có `background_video`, toàn bộ Hook, Question/Answer, Score, Review Start,
   Review và CTA dùng artwork PNG của `theme-1`…`theme-5` như baseline cũ.
-- **Nền video:** khi có `background_video`, toàn bộ flow dùng video người dùng chọn làm lớp dưới.
-  Không scene nào quay lại artwork full-frame của theme tĩnh. Panel, scrim, border và màu chữ được
-  lấy từ `video_theme_id`; hiện có `Theme 2 · Medical Blue` (glass/medical),
-  `Theme 3 · Scrapbook` (paper/tape/stitch) và `Theme 5 · Garden` (glass/wood/leaf/flower).
-  Ba bộ dùng bố cục, chất liệu và chi tiết trang trí riêng, không phải một template chỉ đổi màu.
-- Video nền bị tắt audio, loop khi ngắn hơn timeline và tiếp tục theo global timestamp giữa các scene;
-  crop focus 9:16 được áp dụng thống nhất.
-- Timeline, TTS, sound effect, subtitle content và timing dùng chung giữa hai flow; chỉ visual manifest,
-  surface và scene renderer được tách.
+- **Nền video:** khi có `background_video`, Question/Answer dùng video người dùng chọn làm lớp dưới,
+  sau đó composite nguyên alpha mask sinh từ `background-text.png`; mỗi Review card dùng cùng video
+  dưới alpha cutout lấy trực tiếp từ panel trung tâm của `review.png`. ASS text vẫn lấy nguyên từ
+  `theme_id`. Không recolor, không tạo glass/panel mới, không đổi slot/font/cỡ chữ. Hook, Score,
+  Review Start và CTA tiếp tục dùng đúng artwork PNG tĩnh của theme.
+- Video nền bị tắt audio, loop khi ngắn hơn phần học và crop focus 9:16 được áp dụng thống nhất.
+- Timeline, TTS, sound effect, subtitle content và timing dùng chung giữa hai flow; khác biệt duy nhất
+  ở phần học là nguồn nền ảnh hay video trước khi composite cùng một mask/text theme.
 
 ### Asset âm thanh chuẩn
 
@@ -95,15 +94,13 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 ### 4.1. Hook
 
-1. Static flow composite `start-base.png` với hai số động `N`, Topic và artwork tĩnh. Video flow
-   đặt surface Hook sinh từ bộ màu lên video nền rồi composite cùng hai số/Topic động. Nội dung tương
+1. Cả hai flow composite `start-base.png` với hai số động `N`, Topic và artwork tĩnh. Nội dung tương
    đương `CAN YOU GET N OUT OF N?`, với `N = len(project.vocabulary)` trong miền 1–50.
 2. Phát `hook_bed` trong 3,2 giây (gain -18 dB, fade out 450 ms), rồi giữ nguyên Hook thêm 650 ms
    không nhạc trước Question. Nhạc nền chỉ nằm trong scene không có TTS; không dùng asset semantic
    khác sai vai trò.
-3. Topic dài và số hai chữ số vẫn auto-fit theo manifest. Cover static là byte-for-byte Hook frame;
-   cover video flow được trích từ frame Hook đã render tại 100 ms nên chứa đúng video nền, crop,
-   surface màu và chữ tương ứng. Đổi N, asset, font hoặc layout phải invalid cache frame.
+3. Topic dài và số hai chữ số vẫn auto-fit theo manifest. Cover của cả hai flow là byte-for-byte
+   Hook frame tĩnh đã composite. Đổi N, asset, font hoặc layout phải invalid cache frame.
 4. Mỗi theme có `digit-atlas.png` RGBA gồm lưới 5×2 cho số 0–9. Manifest lưu typed grid metrics,
    alpha threshold, tracking, padding và algorithm version. Renderer crop theo alpha bbox, ghép glyph
    trên baseline chung rồi scale đồng đều cả hai chiều; không dùng font phẳng hoặc kéo méo chữ số.
@@ -112,8 +109,9 @@ estimated_reading_ms - example_audio_duration_ms)`, với tốc độ đọc mà
 
 ### 4.2. Mỗi từ — Question và countdown
 
-Static flow dùng `background-video.png` và alpha sinh từ `background-text.png`. Video flow dùng video
-nền cùng surface Body sinh bằng code; không dùng hai ảnh nền tĩnh này.
+Static flow dùng `background-video.png` và alpha sinh từ `background-text.png`. Video flow chỉ thay
+`background-video.png` bằng video đã chọn; dùng lại đúng alpha mask `background-text.png` và cùng
+ASS text, không sinh hoặc chỉnh sửa surface khác.
 
 1. Bắt đầu `question_start`; header đổi sang `QUESTION i/N`, nghĩa Việt dùng style semantic
    `question_meaning` (baseline 44–104 px) rồi transition/fade vào.
@@ -153,16 +151,14 @@ nền cùng surface Body sinh bằng code; không dùng hai ảnh nền tĩnh n�
 
 ### 4.4. Score
 
-1. Sau từ cuối, static flow hiện `score.png`; video flow giữ video nền và hiện ba score card sinh từ
-   bộ màu. Cả hai giữ scene tối thiểu 6 giây.
+1. Sau từ cuối, cả hai flow hiện nguyên `score.png` và giữ scene tối thiểu 6 giây.
 2. Phát `Cartoon Big Win.mp3` sau 120–180 ms để frame score đã ổn định trước transient đầu.
 3. Ba score range và CTA phải đọc được trong toàn scene. Không cắt effect 4,340 giây.
 4. 1,2 giây cuối giảm motion và audio tail để người xem có khoảng suy ngẫm trước Review.
 
 ### 4.5. Review
 
-1. Static flow composite `review-start-base.png`; video flow dùng video nền + surface Review Start.
-   Cả hai hiển thị hai chuỗi động trong 3,2 giây:
+1. Cả hai flow composite nguyên `review-start-base.png` và hiển thị hai chuỗi động trong 3,2 giây:
    `Let's review the N words you just learned` và `N/N completed`. Cả hai cùng lấy N từ project;
    badge auto-fit cả cụm trong vùng bên phải icon check của từng theme. Score dùng Montserrat
    ExtraBold với dạng gọn `N/N` (cỡ 40–62px trên canvas 1080×1920), label `COMPLETE` dùng
@@ -172,15 +168,15 @@ nền cùng surface Body sinh bằng code; không dùng hai ảnh nền tĩnh n�
 3. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
 4. Phát voice của từ, chờ 1.800 ms, rồi phát voice example để người xem kịp đọc toàn bộ card.
 5. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
-6. Static flow giữ `review.png`; video flow tiếp tục video nền với surface Review sinh từ bộ màu.
-   Nội dung card mới fade/slide nhẹ 180–240 ms; không
-   fade toàn frame (tránh chớp đen) và không thêm sound effect ở mọi card để tránh mệt tai.
+6. Static flow giữ nguyên `review.png`. Video flow giữ cùng video nền và composite alpha cutout của
+   panel trung tâm từ nguyên `review.png`; pixel, label, border và footer của card không bị vẽ lại.
+   Nội dung card mới fade/slide nhẹ 180–240 ms; không fade toàn frame (tránh chớp đen) và không thêm
+   sound effect ở mọi card để tránh mệt tai.
 
 ### 4.6. CTA kết thúc
 
 1. Sau Review cuối, thêm scene `cta` đúng 6,5 giây; visual/audio timeline cùng kết thúc tại cuối CTA.
-2. Static flow dùng trực tiếp `cta-new.png`. Video flow giữ video nền, dùng surface CTA cùng lớp chữ
-   động `GREAT WORK`, tổng số từ, Follow/Save/Review/Share; không dùng artwork CTA full-frame.
+2. Cả hai flow dùng trực tiếp `cta-new.png`; không dựng lại CTA bằng surface sinh từ code.
 3. Scene fade-in 220 ms và phát `cta_bed` (gain -18 dB, fade 180 ms); nhạc được trim đúng 6,5 giây
    scene. CTA không có TTS nên không cần ducking.
 4. Nội dung nằm trong safe margin của canvas dọc và không phụ thuộc tên tài khoản.
@@ -254,11 +250,12 @@ nền cùng surface Body sinh bằng code; không dùng hai ảnh nền tĩnh n�
 - Cache cũ bị invalidate khi timing/audio processing/asset checksum thay đổi, nhưng không synthesize
   lại TTS nếu text/provider/voice không đổi.
 - Hook và Review Start phải cùng dùng `len(project.vocabulary)`; production không chứa literal `5`
-  cho tổng số câu. CTA static dùng artwork riêng; CTA video dùng surface/lớp chữ theo `video_theme_id`.
-- Khi có video nền, mọi visual scene phải có `background_is_video=True`, cùng source path và
-  `background_start_ms` bằng global scene start; không được rơi về PNG theme ở bất kỳ scene nào.
-- Mỗi video output luôn có cover 1080×1920 tương ứng: static copy Hook frame, video flow trích frame
-  Hook từ output đã render.
+  cho tổng số câu. CTA luôn dùng artwork riêng của theme.
+- Khi có video, scene Question/Answer và từng Review card có `background_is_video=True`. Overlay
+  Question/Answer phải là mask `background-text.png`; overlay Review phải giữ nguyên RGB của panel
+  `review.png` và chỉ thay alpha vùng nền ngoài. Không được dùng surface video-theme sinh bằng code,
+  recolor hoặc đổi style ASS.
+- Mỗi video output luôn có cover 1080×1920 là bản copy đúng Hook frame của theme.
 - Atlas số của đúng theme phải có đủ 10 cell alpha, hai cụm số nằm trọn safe box với N=1/5/10/50;
   clean base không còn giữ nguyên pixel của hai vùng số `5` nguồn.
 - Preview và output dùng cùng timing profile.

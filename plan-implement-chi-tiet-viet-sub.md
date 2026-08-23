@@ -20,13 +20,13 @@ Douyin URL
 
 Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[!]` bị chặn.
 
-### Tiến độ cập nhật ngày 2026-08-22
+### Tiến độ cập nhật ngày 2026-08-23
 
 - Hoàn thành: **152/205 task (74,15%)**.
 - Đang làm/đã có một phần: **40 task (19,51%)**.
 - Chưa triển khai: **8 task (3,90%)**.
 - Chờ credential/live test hoặc nghiệm thu: **5 task (2,44%)**.
-- Unit/lint hiện tại: **231 test pass**, Ruff pass.
+- Unit/lint hiện tại: **234 test pass**, Ruff pass.
 - Luồng thật đã chạy qua bước 1–7 trên video Douyin 7,2 phút; bước 7 đã sửa deadlock FFmpeg và được render kiểm chứng 0→100%. Nút chạy tự động hiện điều phối đủ bước 1–8; bước 8/output cuối vẫn cần live-test để nghiệm thu chính thức.
 
 ### Cấu trúc module tái sử dụng
@@ -299,8 +299,8 @@ Quy ước checklist: `[ ]` chưa làm, `[-]` đang làm, `[x]` hoàn thành, `[
 - [x] Hỗ trợ 16:9, 9:16 và xuất cả hai; crop kiểu cover theo focus X/Y riêng từng tỷ lệ, loop video
   ngắn và luôn bỏ audio nền. Với flow theme dọc, video chỉ thay lớp `background-video.png` trong
   Question/Answer và nền ngoài panel ở từng Review card; renderer giữ nguyên alpha mask
-  `background-text.png`, nguyên RGB panel `review.png`, ASS style/text và toàn bộ artwork
-  Hook/Score/Review Start/CTA của theme.
+  `background-text.png`, nguyên RGB panel `review.png` và alpha bằng 0 ngoài silhouette card,
+  ASS style/text cùng toàn bộ artwork Hook/Score/Review Start/CTA của theme.
 - [x] Timeline động theo số từ gồm hook, countdown, ding, đáp án và ba lượt phát âm tự nhiên → chậm
   → tự nhiên.
 - [x] Phần ôn tập đọc từ và câu ví dụ; phần chấm điểm tính range theo tổng số từ và có CTA comment.

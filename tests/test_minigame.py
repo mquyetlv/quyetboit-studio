@@ -882,10 +882,16 @@ def test_review_mask_keeps_original_card_pixels_and_removes_photo_border(
     with Image.open(overlay_path) as overlay_image:
         overlay = np.asarray(overlay_image.convert("RGBA"))
 
+    bounds, _radius = MinigameAlphaMaskService._REVIEW_CARD_SILHOUETTES[theme_id]
+    left, top, right, bottom = bounds
     assert tuple(overlay[960, 540, :3]) == tuple(source[960, 540])
     assert overlay[960, 540, 3] == 255
     assert overlay[0, 0, 3] == 0
     assert overlay[1919, 1079, 3] == 0
+    assert np.all(overlay[:, : left - 2, 3] == 0)
+    assert np.all(overlay[:, right + 3 :, 3] == 0)
+    assert np.all(overlay[: top - 2, :, 3] == 0)
+    assert np.all(overlay[bottom + 3 :, :, 3] == 0)
 
 
 def test_alpha_mask_cache_key_changes_with_profile_or_asset_checksum(tmp_path: Path) -> None:
@@ -1379,6 +1385,16 @@ def test_theme_three_review_badge_reserves_space_for_its_wider_check_icon() -> N
     assert theme_three.slots["review_sentence"].max_lines == 1
     assert theme_three.slots["review_badge"].bounds == (463, 817, 733, 891)
     assert theme_three.slots["review_badge"].bounds[0] > shared_badge_left
+
+
+def test_themes_two_and_four_review_time_use_their_measured_layouts() -> None:
+    theme_two = MinigameThemeService().get("theme-2")
+    theme_four = MinigameThemeService().get("theme-4")
+
+    assert theme_two.slots["review_sentence"].bounds == (145, 678, 935, 785)
+    assert theme_two.slots["review_badge"].bounds == (460, 814, 722, 886)
+    assert theme_four.slots["review_sentence"].bounds == (145, 640, 935, 740)
+    assert theme_four.slots["review_badge"].bounds == (460, 782, 722, 854)
 
 
 @pytest.mark.parametrize("theme_id", [f"theme-{index}" for index in range(1, 6)])

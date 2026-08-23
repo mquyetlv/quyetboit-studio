@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections import deque
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
@@ -14,7 +15,20 @@ from ...core.models import PipelineError, stable_hash
 class MinigameAlphaMaskService:
     """Builds a cached RGBA text-panel overlay without ever mutating source assets."""
 
-    REVIEW_MASK_VERSION = 1
+    REVIEW_MASK_VERSION: ClassVar[int] = 3
+    # Measured from the canonical 1080x1920 review artwork. These silhouettes
+    # deliberately sit inside the outer glow of the card: the source artwork
+    # blends that glow into its baked photo background, so keeping it exposes a
+    # thin strip of the original theme when a user video is underneath.
+    _REVIEW_CARD_SILHOUETTES: ClassVar[
+        dict[str, tuple[tuple[int, int, int, int], int]]
+    ] = {
+        "theme-1": ((98, 104, 982, 1858), 78),
+        "theme-2": ((114, 104, 966, 1858), 76),
+        "theme-3": ((90, 94, 990, 1854), 76),
+        "theme-4": ((96, 94, 984, 1858), 84),
+        "theme-5": ((90, 99, 990, 1858), 76),
+    }
 
     def build(self, manifest: MinigameThemeManifest, cache_dir: Path) -> Path:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -50,12 +64,18 @@ class MinigameAlphaMaskService:
     def build_review(self, manifest: MinigameThemeManifest, cache_dir: Path) -> Path:
         """Lift the unchanged central Review card off its bundled photo background."""
         cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            bounds, radius = self._REVIEW_CARD_SILHOUETTES[manifest.theme_id]
+        except KeyError as exc:
+            raise PipelineError(
+                "theme_review_mask_invalid", "Theme không có silhouette Review hợp lệ."
+            ) from exc
         key = stable_hash(
             {
                 "theme": manifest.checksum,
                 "review_mask": self.REVIEW_MASK_VERSION,
-                "bounds": (78, 78, 1002, 1858),
-                "radius": 76,
+                "bounds": bounds,
+                "radius": radius,
             }
         )[:20]
         output = cache_dir / f"{manifest.theme_id}-review-{key}.png"
@@ -69,11 +89,17 @@ class MinigameAlphaMaskService:
         scale = 4
         alpha_large = Image.new("L", (1080 * scale, 1920 * scale), 0)
         ImageDraw.Draw(alpha_large).rounded_rectangle(
-            tuple(value * scale for value in (78, 78, 1002, 1858)),
-            radius=76 * scale,
+            tuple(value * scale for value in bounds),
+            radius=radius * scale,
             fill=255,
         )
         alpha = alpha_large.resize((1080, 1920), Image.Resampling.LANCZOS)
+        # LANCZOS leaves a one-value halo a few pixels outside the silhouette.
+        # Remove it so the selected video is fully visible outside the original
+        # Review card, while the genuine card edge remains anti-aliased.
+        alpha_values = np.asarray(alpha, dtype=np.uint8).copy()
+        alpha_values[alpha_values < 8] = 0
+        alpha = Image.fromarray(alpha_values)
         rgba = rgb.convert("RGBA")
         rgba.putalpha(alpha)
         partial = output.with_name(f".{output.stem}.partial{output.suffix}")

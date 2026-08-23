@@ -1,7 +1,7 @@
 # Đặc tả luồng video English Mini game
 
 > Trạng thái: **Baseline vNext + dynamic challenge/CTA đã triển khai và nghiệm thu visual**
-> — cập nhật ngày 2026-08-22.
+> — cập nhật ngày 2026-08-23.
 >
 > File này là nguồn tra cứu cho mọi thay đổi về flow, timing, visual scene và sound effect của
 > menu `Tiếng Anh → Mini game`. Khi code và tài liệu khác nhau, phải cập nhật file này cùng thay đổi
@@ -40,7 +40,8 @@ dịch hoặc sửa nội dung.
   Review và CTA dùng artwork PNG của `theme-1`…`theme-5` như baseline cũ.
 - **Nền video:** khi có `background_video`, Question/Answer dùng video người dùng chọn làm lớp dưới,
   sau đó composite nguyên alpha mask sinh từ `background-text.png`; mỗi Review card dùng cùng video
-  dưới alpha cutout lấy trực tiếp từ panel trung tâm của `review.png`. ASS text vẫn lấy nguyên từ
+  dưới alpha silhouette theo đúng card của từng theme, lấy trực tiếp từ `review.png`. Phần ngoài card
+  có alpha bằng 0 nên video gốc hiển thị hoàn toàn, như phần Question. ASS text vẫn lấy nguyên từ
   `theme_id`. Không recolor, không tạo glass/panel mới, không đổi slot/font/cỡ chữ. Hook, Score,
   Review Start và CTA tiếp tục dùng đúng artwork PNG tĩnh của theme.
 - Video nền bị tắt audio, loop khi ngắn hơn phần học và crop focus 9:16 được áp dụng thống nhất.
@@ -168,8 +169,9 @@ ASS text, không sinh hoặc chỉnh sửa surface khác.
 3. Với mỗi từ, hiện toàn bộ English/IPA/meaning/example trước voice 650 ms.
 4. Phát voice của từ, chờ 1.800 ms, rồi phát voice example để người xem kịp đọc toàn bộ card.
 5. Sau example, tiếp tục giữ nguyên text 1,6–3,5 giây theo thời gian đọc động.
-6. Static flow giữ nguyên `review.png`. Video flow giữ cùng video nền và composite alpha cutout của
-   panel trung tâm từ nguyên `review.png`; pixel, label, border và footer của card không bị vẽ lại.
+6. Static flow giữ nguyên `review.png`. Video flow giữ cùng video nền và composite alpha silhouette
+   khít theo panel trung tâm của nguyên `review.png`; pixel, label, border và footer của card không
+   bị vẽ lại, còn mọi pixel nền ngoài silhouette phải trong suốt hoàn toàn.
    Nội dung card mới fade/slide nhẹ 180–240 ms; không fade toàn frame (tránh chớp đen) và không thêm
    sound effect ở mọi card để tránh mệt tai.
 
@@ -253,7 +255,7 @@ ASS text, không sinh hoặc chỉnh sửa surface khác.
   cho tổng số câu. CTA luôn dùng artwork riêng của theme.
 - Khi có video, scene Question/Answer và từng Review card có `background_is_video=True`. Overlay
   Question/Answer phải là mask `background-text.png`; overlay Review phải giữ nguyên RGB của panel
-  `review.png` và chỉ thay alpha vùng nền ngoài. Không được dùng surface video-theme sinh bằng code,
+  `review.png` và alpha phải bằng 0 ở mọi pixel ngoài silhouette card. Không được dùng surface video-theme sinh bằng code,
   recolor hoặc đổi style ASS.
 - Mỗi video output luôn có cover 1080×1920 là bản copy đúng Hook frame của theme.
 - Atlas số của đúng theme phải có đủ 10 cell alpha, hai cụm số nằm trọn safe box với N=1/5/10/50;

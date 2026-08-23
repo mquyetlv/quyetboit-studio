@@ -63,7 +63,8 @@ tồn tại, ứng dụng tăng suffix thay vì ghi đè output cũ.
 
 Mini game theme hiện xuất 9:16. Flow tĩnh dùng asset PNG đóng gói như trước. Khi chọn video nền,
 renderer loop/crop video rồi composite trực tiếp alpha mask sinh từ `background-text.png` của theme;
-mỗi card Review composite alpha cutout của panel trung tâm từ nguyên `review.png`. Không recolor,
+mỗi card Review composite alpha silhouette khít theo panel trung tâm từ nguyên `review.png`; toàn bộ
+nền ngoài card trong suốt để video hiển thị. Không recolor,
 không dựng panel mới và không đổi typography/layout. Các scene chuyển tiếp, Score, Review Start,
 CTA cùng cover tiếp tục dùng nguyên artwork theme tĩnh. Mỗi video vẫn xuất ảnh cover
 1080×1920 tương ứng với Hook. Montserrat và Bebas Neue cùng

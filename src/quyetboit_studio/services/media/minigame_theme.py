@@ -83,6 +83,14 @@ class MinigameThemeService:
     # check mark), not in the full pill.  The shared centre left Theme 3's
     # `3/3 COMPLETE` visibly pulled to the right.
     _DYNAMIC_BOUNDS["theme-3"]["review_badge"] = (463, 817, 733, 891)
+    # Theme 4's Review Time title extends lower than the shared artwork. Lift
+    # its two-line sentence so it has a clear gap to the title and status pill.
+    _DYNAMIC_BOUNDS["theme-4"]["review_sentence"] = (145, 640, 935, 740)
+    # The two base assets put their pills at different vertical centres.  The
+    # shared score slot left Theme 2 16 px too high and Theme 4 16 px too low.
+    # Keep this correction scoped to those two affected themes.
+    _DYNAMIC_BOUNDS["theme-2"]["review_badge"] = (460, 814, 722, 886)
+    _DYNAMIC_BOUNDS["theme-4"]["review_badge"] = (460, 782, 722, 854)
     _CTA_BOUNDS: ClassVar[dict[str, dict[str, tuple[int, int, int, int]]]] = {
         "theme-1": {
             "cta_primary": (145, 1330, 935, 1470),

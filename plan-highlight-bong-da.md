@@ -2,10 +2,10 @@
 
 ## Tiến độ cập nhật ngày 2026-09-02
 
-- Hoàn thành: **9/14 task (64,29%)**.
-- Đang làm/đã có một phần: **5/14 task (35,71%)**.
-- Chưa triển khai: **0/14 task (0,00%)**.
-- Chờ credential/live test: **0/14 task (0,00%)**.
+- Hoàn thành: **10/15 task (66,67%)**.
+- Đang làm/đã có một phần: **5/15 task (33,33%)**.
+- Chưa triển khai: **0/15 task (0,00%)**.
+- Chờ credential/live test: **0/15 task (0,00%)**.
 
 ## Mốc 1 — Nền tảng UI và dữ liệu
 
@@ -29,3 +29,4 @@
 - [-] Stop hủy FFmpeg đang chạy qua `CancellationToken`; yt-dlp/TTS và cleanup toàn bộ `.partial` còn cần tăng cường.
 - [-] Có unit test parser và integration FFmpeg fixture với output audio/video 1920×1080/crossfade; chưa kiểm tra đầy đủ cancel/process mồ côi.
 - [x] Live-test URL YouTube + CapCut TTS: source tải bằng Android player fallback, render 11 segment, output 1920×1080 có audio/video, ffprobe hợp lệ và không còn `.partial`.
+- [x] Tạo handoff kỹ thuật `feature/hightlight-bong-da.md`: kiến trúc, contract, pipeline, media filter, workspace, persistence, an toàn, test và playbook mở rộng.

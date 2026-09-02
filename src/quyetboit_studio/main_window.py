@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from .core.minigame import MinigameProject
 from .core.preferences import LastUsedSettingsStore
 from .english import EnglishPlaceholderPage
+from .football import HighlightFootballPage
 from .minigame import MinigamePage
 from .persistence import ProjectStore
 from .vietsub import VietSubPage
@@ -54,8 +55,9 @@ class MainWindow(QMainWindow):
         self.brand_name = QLabel("Quyết Bồ IT Studio"); self.brand_name.setObjectName("SectionTitle")
         self.toggle = QPushButton("☰"); self.toggle.setFixedWidth(34); self.toggle.clicked.connect(self.toggle_sidebar)
         brand.addWidget(self.logo); brand.addWidget(self.brand_name, 1); brand.addWidget(self.toggle); nav.addLayout(brand); nav.addSpacing(18)
+        self.highlight_nav = self._nav_button("⚽  Highlight bóng đá", "Highlight bóng đá")
         self.vietsub_nav = self._nav_button("🎬  VietSub", "VietSub"); self.audio_nav = self._nav_button("♫  Audio Creator", "Audio Creator")
-        self.vietsub_nav.setChecked(True); self.vietsub_nav.clicked.connect(lambda: self._set_page(0)); self.audio_nav.clicked.connect(lambda: self._set_page(1))
+        self.highlight_nav.setChecked(True); self.highlight_nav.clicked.connect(lambda: self._set_page(0)); self.vietsub_nav.clicked.connect(lambda: self._set_page(1)); self.audio_nav.clicked.connect(lambda: self._set_page(2))
         self.english_expanded = False
         self.english_nav = self._nav_button("🌐  Tiếng Anh  ▸", "Tiếng Anh")
         self.english_nav.clicked.connect(self._toggle_english_menu)
@@ -63,9 +65,9 @@ class MainWindow(QMainWindow):
         english_submenu_layout = QVBoxLayout(self.english_submenu)
         english_submenu_layout.setContentsMargins(18, 0, 0, 0)
         english_submenu_layout.setSpacing(4)
-        self.mini_game_nav = self._subnav_button("🎮  Mini game", "Mini game", 2)
-        self.vocabulary_nav = self._subnav_button("📖  Học từ mới", "Học từ mới", 3)
-        self.conversation_nav = self._subnav_button("💬  Hội thoại", "Hội thoại", 4)
+        self.mini_game_nav = self._subnav_button("🎮  Mini game", "Mini game", 3)
+        self.vocabulary_nav = self._subnav_button("📖  Học từ mới", "Học từ mới", 4)
+        self.conversation_nav = self._subnav_button("💬  Hội thoại", "Hội thoại", 5)
         self.english_subnav_buttons = (
             self.mini_game_nav,
             self.vocabulary_nav,
@@ -74,11 +76,12 @@ class MainWindow(QMainWindow):
         for subnav_button in self.english_subnav_buttons:
             english_submenu_layout.addWidget(subnav_button)
         self.english_submenu.hide()
-        nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addWidget(self.english_nav)
+        nav.addWidget(self.highlight_nav); nav.addWidget(self.vietsub_nav); nav.addWidget(self.audio_nav); nav.addWidget(self.english_nav)
         nav.addWidget(self.english_submenu); nav.addStretch()
         version = QLabel("VietSub v0.2"); version.setObjectName("Subtitle"); version.setAlignment(Qt.AlignmentFlag.AlignCenter); nav.addWidget(version); self.version_label = version
         root.addWidget(self.sidebar)
-        self.pages = QStackedWidget(); self.vietsub = VietSubPage(self.project, self.settings_store); self.vietsub.dirty_changed.connect(self.set_dirty)
+        self.pages = QStackedWidget(); self.highlight = HighlightFootballPage(); self.highlight.set_settings(self.project.highlight_football_settings, self.project.project_uuid); self.highlight.dirty_changed.connect(self.set_dirty); self.pages.addWidget(self.highlight)
+        self.vietsub = VietSubPage(self.project, self.settings_store); self.vietsub.dirty_changed.connect(self.set_dirty)
         self.vietsub.request_new.connect(self.new_project); self.vietsub.request_open.connect(self.open_project); self.vietsub.request_save.connect(self.save_project)
         self.pages.addWidget(self.vietsub)
         self.pages.addWidget(self._audio_placeholder())
@@ -115,10 +118,11 @@ class MainWindow(QMainWindow):
         card_layout.addWidget(icon); card_layout.addWidget(title); card_layout.addWidget(sub); layout.addStretch(); layout.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter); layout.addStretch(); return page
 
     def _set_page(self, index: int) -> None:
-        self.pages.setCurrentIndex(index); self.vietsub_nav.setChecked(index == 0); self.audio_nav.setChecked(index == 1)
-        english_page = 2 <= index <= 4
+        self.pages.setCurrentIndex(index)
+        self.highlight_nav.setChecked(index == 0); self.vietsub_nav.setChecked(index == 1); self.audio_nav.setChecked(index == 2)
+        english_page = 3 <= index <= 5
         self.english_nav.setChecked(english_page)
-        for page_index, button in enumerate(self.english_subnav_buttons, start=2):
+        for page_index, button in enumerate(self.english_subnav_buttons, start=3):
             button.setChecked(index == page_index)
         if english_page:
             self._set_english_menu_expanded(True)
@@ -127,7 +131,7 @@ class MainWindow(QMainWindow):
         if self.sidebar.width() <= 100:
             self.toggle_sidebar()
         self._set_english_menu_expanded(not self.english_expanded)
-        self.english_nav.setChecked(2 <= self.pages.currentIndex() <= 4)
+        self.english_nav.setChecked(3 <= self.pages.currentIndex() <= 5)
 
     def _set_english_menu_expanded(self, expanded: bool) -> None:
         self.english_expanded = expanded
@@ -137,8 +141,8 @@ class MainWindow(QMainWindow):
     def toggle_sidebar(self) -> None:
         collapsed = self.sidebar.width() > 100
         self.sidebar.setFixedWidth(76 if collapsed else 236); self.brand_name.setVisible(not collapsed); self.version_label.setVisible(not collapsed)
-        self.vietsub_nav.setText("🎬" if collapsed else "🎬  VietSub"); self.audio_nav.setText("♫" if collapsed else "♫  Audio Creator")
-        self.vietsub_nav.setStyleSheet("text-align:center;" if collapsed else ""); self.audio_nav.setStyleSheet("text-align:center;" if collapsed else "")
+        self.highlight_nav.setText("⚽" if collapsed else "⚽  Highlight bóng đá"); self.vietsub_nav.setText("🎬" if collapsed else "🎬  VietSub"); self.audio_nav.setText("♫" if collapsed else "♫  Audio Creator")
+        self.highlight_nav.setStyleSheet("text-align:center;" if collapsed else ""); self.vietsub_nav.setStyleSheet("text-align:center;" if collapsed else ""); self.audio_nav.setStyleSheet("text-align:center;" if collapsed else "")
         self.english_nav.setText("🌐" if collapsed else ("🌐  Tiếng Anh  ▾" if self.english_expanded else "🌐  Tiếng Anh  ▸"))
         self.english_nav.setStyleSheet("text-align:center;" if collapsed else "")
         self.english_submenu.setVisible(not collapsed and self.english_expanded)
@@ -156,7 +160,7 @@ class MainWindow(QMainWindow):
 
     def new_project(self) -> None:
         if not self._confirm_discard(): return
-        self.project = self.settings_store.new_project(); self.project_path = None; self.vietsub.set_project(self.project); self.minigame.set_project(MinigameProject.from_dict(self.project.minigame_settings)); self.set_dirty(False)
+        self.project = self.settings_store.new_project(); self.project_path = None; self.highlight.set_settings(self.project.highlight_football_settings, self.project.project_uuid); self.vietsub.set_project(self.project); self.minigame.set_project(MinigameProject.from_dict(self.project.minigame_settings)); self.set_dirty(False)
 
     def open_project(self) -> None:
         if not self._confirm_discard(): return
@@ -168,7 +172,7 @@ class MainWindow(QMainWindow):
         self.project = project; self.project_path = Path(path)
         if not project.workspace_path:
             project.workspace_path = str(self.project_path.parent / ".qbstudio-work" / project.project_uuid)
-        self.vietsub.set_project(project); self.minigame.set_project(MinigameProject.from_dict(project.minigame_settings)); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
+        self.highlight.set_settings(project.highlight_football_settings, project.project_uuid); self.vietsub.set_project(project); self.minigame.set_project(MinigameProject.from_dict(project.minigame_settings)); self.set_dirty(False); self.statusBar().showMessage(f"Đã mở {path}", 5000)
 
     def save_project(self) -> bool:
         if self.project_path is None: return self.save_project_as()
@@ -202,21 +206,22 @@ class MainWindow(QMainWindow):
         try: project = self.store.load(self.autosave_path)
         except ValueError as exc:
             QMessageBox.critical(self, "Autosave bị lỗi", str(exc)); return
-        self.project = project; self.project_path = None; self.vietsub.set_project(project); self.minigame.set_project(MinigameProject.from_dict(project.minigame_settings)); self.set_dirty(True)
+        self.project = project; self.project_path = None; self.highlight.set_settings(project.highlight_football_settings, project.project_uuid); self.vietsub.set_project(project); self.minigame.set_project(MinigameProject.from_dict(project.minigame_settings)); self.set_dirty(True)
         self.statusBar().showMessage("Đã khôi phục phiên autosave", 5000)
 
     def _sync_minigame_project(self) -> None:
         self.project.minigame_settings = self.minigame._collect_project().to_safe_dict()
+        self.project.highlight_football_settings = self.highlight.to_safe_dict()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._confirm_discard():
-            if self.minigame.shutdown():
+            if self.highlight.shutdown() and self.minigame.shutdown():
                 event.accept()
             else:
                 QMessageBox.warning(
                     self,
-                    "Đang dừng Minigame",
-                    "Tác vụ TTS/render chưa dừng xong. Hãy chờ một chút rồi đóng ứng dụng lại.",
+                    "Đang dừng tác vụ",
+                    "Tác vụ render chưa dừng xong. Hãy chờ một chút rồi đóng ứng dụng lại.",
                 )
                 event.ignore()
         else: event.ignore()

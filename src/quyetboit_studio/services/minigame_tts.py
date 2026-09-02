@@ -344,7 +344,9 @@ class GoogleCloudSpeechService:
 
 
 class CapCutEnglishSpeechService:
-    def __init__(self, voice_name: str, *, volume: int = 100) -> None:
+    def __init__(
+        self, voice_name: str, *, volume: int = 100, categories: tuple[str, ...] = ("english",)
+    ) -> None:
         store = CapCutSessionStore()
         session = store.load()
         if not session:
@@ -355,7 +357,7 @@ class CapCutEnglishSpeechService:
             )
         client = CapCutEditClient(session, session_store=store)
         client.ensure_session()
-        self.service = CapCutTtsService(client, categories=("english",))
+        self.service = CapCutTtsService(client, categories=categories)
         voices = self.service.list_voices()
         self.voice = self._select_voice(voices, voice_name)
         self.volume = max(0, min(150, int(volume)))

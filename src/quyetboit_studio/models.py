@@ -126,6 +126,7 @@ class ProjectModel:
     output: dict = field(default_factory=dict)
     partial_failures: dict = field(default_factory=dict)
     minigame_settings: dict = field(default_factory=dict)
+    highlight_football_settings: dict = field(default_factory=dict)
     step_statuses: list[str] = field(default_factory=lambda: [
         StepStatus.READY.value, *([StepStatus.PENDING.value] * 7)
     ])

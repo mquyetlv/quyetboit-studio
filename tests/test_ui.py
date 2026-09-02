@@ -13,12 +13,47 @@ def test_shell_sidebar_and_pages(qtbot, tmp_path):
     window = MainWindow(LastUsedSettingsStore(tmp_path / "settings.json"))
     qtbot.addWidget(window)
     assert window.minimumWidth() == 1100
-    assert window.pages.count() == 5
+    assert window.pages.count() == 6
     window.toggle_sidebar()
     assert window.sidebar.width() == 76
     assert window.vietsub_nav.toolTip() == "VietSub"
     qtbot.mouseClick(window.audio_nav, Qt.MouseButton.LeftButton)
-    assert window.pages.currentIndex() == 1
+    assert window.pages.currentIndex() == 2
+
+
+def test_highlight_football_menu_and_json_validation(qtbot, tmp_path):
+    window = MainWindow(LastUsedSettingsStore(tmp_path / "settings.json"))
+    qtbot.addWidget(window)
+    qtbot.mouseClick(window.highlight_nav, Qt.MouseButton.LeftButton)
+    assert window.pages.currentIndex() == 0
+    assert window.highlight.start_button.text() == "▶  Tạo video"
+    assert window.highlight.stop_button.isHidden()
+    window.highlight.youtube_url.setText("https://youtu.be/example")
+    assert window.highlight.validate() is not None
+    assert window.minigame.shutdown()
+
+
+def test_highlight_football_keeps_non_sensitive_voice_configuration(qtbot, tmp_path):
+    window = MainWindow(LastUsedSettingsStore(tmp_path / "settings.json"))
+    qtbot.addWidget(window)
+    page = window.highlight
+    page.voice_provider = "google"
+    page.voice_id = "vi-VN-Neural2-A"
+    page.voice_name = "Vietnamese Neural2 A"
+    page.voice_language = "vi-VN"
+    page.voice_volume = 85
+    page.ken_burns_start.setValue(1.00)
+    page.ken_burns_end.setValue(1.15)
+    settings = page.to_safe_dict()
+    assert settings["tts_provider"] == "google"
+    assert settings["voice"] == "vi-VN-Neural2-A"
+    assert "service_account_path" not in settings
+    assert settings["ken_burns_start_zoom"] == 1.00
+    assert settings["ken_burns_end_zoom"] == 1.15
+    page.set_settings({"ken_burns_start_zoom": 1.02, "ken_burns_end_zoom": 1.20})
+    assert page.ken_burns_start.value() == 1.02
+    assert page.ken_burns_end.value() == 1.20
+    assert window.minigame.shutdown()
 
 
 def test_english_menu_has_three_placeholder_pages(qtbot, tmp_path):
@@ -28,7 +63,7 @@ def test_english_menu_has_three_placeholder_pages(qtbot, tmp_path):
     assert window.english_submenu.isHidden()
     qtbot.mouseClick(window.english_nav, Qt.MouseButton.LeftButton)
     assert not window.english_submenu.isHidden()
-    assert window.vietsub_nav.isChecked()
+    assert window.highlight_nav.isChecked()
     assert not window.english_nav.isChecked()
     assert [button.toolTip() for button in window.english_subnav_buttons] == [
         "Mini game", "Học từ mới", "Hội thoại",

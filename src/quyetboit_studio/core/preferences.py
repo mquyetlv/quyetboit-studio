@@ -20,7 +20,7 @@ class LastUsedSettingsStore:
         "translation_batch_size", "translation_concurrency", "capcut_voice",
     )
     DICT_FIELDS = (
-        "audio_settings", "tts_settings", "mix_settings", "studio_settings", "export_settings",
+        "audio_settings", "tts_settings", "mix_settings", "studio_settings", "export_settings", "highlight_football_settings",
     )
 
     def __init__(self, path: str | Path | None = None) -> None:

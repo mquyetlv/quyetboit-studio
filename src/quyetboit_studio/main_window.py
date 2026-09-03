@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
     def _sync_minigame_project(self) -> None:
         self.project.minigame_settings = self.minigame._collect_project().to_safe_dict()
         self.project.highlight_football_settings = self.highlight.to_safe_dict()
+        # Reuse credential-free football choices when the user starts a new project.
+        self.settings_store.save(self.project)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._confirm_discard():

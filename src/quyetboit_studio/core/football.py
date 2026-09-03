@@ -22,10 +22,33 @@ class FootballRenderConfig:
 
     ken_burns_start_zoom: float = 1.00
     ken_burns_end_zoom: float = 1.15
+    top_text: str = ""
+    top_font_size: int = 48
+    top_margin: int = 24
+    top_font_color: str = "#FFFFFF"
+    top_background_color: str = "#000000"
+    top_background_opacity: int = 60
+    subtitle_position: str = "bottom"
+    subtitle_font_size: int = 44
+    subtitle_margin: int = 56
+    subtitle_font_color: str = "#FFFFFF"
+    subtitle_background_color: str = "#000000"
+    subtitle_background_opacity: int = 60
 
     def __post_init__(self) -> None:
         if not 1.0 <= self.ken_burns_start_zoom < self.ken_burns_end_zoom <= 1.30:
             raise ValueError("Zoom Ken Burns phải nằm trong 1.00–1.30 và zoom kết thúc phải lớn hơn zoom bắt đầu.")
+        if self.subtitle_position not in {"top", "bottom"}:
+            raise ValueError("Vị trí phụ đề chỉ có thể là trên hoặc dưới.")
+        for name in ("top_font_size", "subtitle_font_size"):
+            if not 12 <= getattr(self, name) <= 200:
+                raise ValueError("Cỡ chữ phải nằm trong 12–200 px.")
+        for name in ("top_margin", "subtitle_margin"):
+            if not 0 <= getattr(self, name) <= 1000:
+                raise ValueError("Margin phải nằm trong 0–1000 px.")
+        for name in ("top_background_opacity", "subtitle_background_opacity"):
+            if not 0 <= getattr(self, name) <= 100:
+                raise ValueError("Opacity nền phải nằm trong 0–100%.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +56,7 @@ class FootballSegment:
     match_minute: str
     situation_type: str
     frames: dict[str, str | list[str]]
+    content: str
     tts_text: str
 
     def timestamps(self) -> list[str]:
@@ -71,7 +95,7 @@ class FootballHighlightInput:
         if not isinstance(payload, list) or not payload:
             raise ValueError("JSON Highlight phải là một mảng có ít nhất một phân đoạn.")
         segments: list[FootballSegment] = []
-        required = {"match_minute", "situation_type", "frames", "tts_text"}
+        required = {"match_minute", "situation_type", "frames", "content", "tts_text"}
         for index, row in enumerate(payload, 1):
             label = f"Phân đoạn #{index}"
             if not isinstance(row, dict):
@@ -79,8 +103,8 @@ class FootballHighlightInput:
             missing = sorted(required - set(row))
             if missing:
                 raise ValueError(f"{label} thiếu trường: {', '.join(missing)}.")
-            if not all(isinstance(row[key], str) for key in ("match_minute", "situation_type", "tts_text")):
-                raise ValueError(f"{label}: match_minute, situation_type và tts_text phải là chuỗi.")
+            if not all(isinstance(row[key], str) for key in ("match_minute", "situation_type", "content", "tts_text")):
+                raise ValueError(f"{label}: match_minute, situation_type, content và tts_text phải là chuỗi.")
             frames = row["frames"]
             if not isinstance(frames, dict) or not frames:
                 raise ValueError(f"{label}.frames phải là object không rỗng.")
@@ -96,9 +120,11 @@ class FootballHighlightInput:
                     if normalized.casefold() not in _SKIP_FRAME and not _TIMESTAMP.fullmatch(normalized):
                         raise ValueError(f"{label}.frames.{key} có timestamp không hợp lệ: {normalized!r}.")
                 clean_frames[key] = [item.strip() for item in candidates] if isinstance(frame_value, list) else frame_value.strip()
+            if not row["content"].strip():
+                raise ValueError(f"{label}.content không được để trống.")
             if not row["tts_text"].strip():
                 raise ValueError(f"{label}.tts_text không được để trống.")
-            segments.append(FootballSegment(row["match_minute"].strip(), row["situation_type"].strip(), clean_frames, row["tts_text"].strip()))
+            segments.append(FootballSegment(row["match_minute"].strip(), row["situation_type"].strip(), clean_frames, row["content"].strip(), row["tts_text"].strip()))
         return cls(source, tuple(segments))
 
     def to_dict(self) -> dict[str, object]:
@@ -109,5 +135,6 @@ class FootballHighlightInput:
         return json.dumps([{
             "match_minute": "12:34", "situation_type": "Bàn thắng",
             "frames": {"setup": "12:28", "finish": ["12:32", "12:34"]},
-            "tts_text": "Một tình huống phối hợp đẹp mắt và bàn thắng được ghi.",
+            "content": "Một tình huống phối hợp đẹp mắt của Manchester United và bàn thắng được ghi.",
+            "tts_text": "Một tình huống phối hợp đẹp mắt của Man-chét-tơ Yu-nai-tịt và bàn thắng được ghi.",
         }], ensure_ascii=False, indent=2) + "\n"

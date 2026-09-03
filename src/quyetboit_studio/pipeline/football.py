@@ -18,8 +18,8 @@ from ..core.models import (
     VideoArtifact,
     stable_hash,
 )
-from ..services.media.ffmpeg import FFmpegRunner
-from ..services.youtube import YouTubeDownloader
+from ..services.media.ffmpeg import FFmpegRunner, FilterGraphBuilder
+from ..services.youtube import YouTubeDownload, YouTubeDownloader
 
 
 class FootballSpeechService(Protocol):
@@ -57,7 +57,14 @@ class FootballHighlightPipeline:
         self.cancel.raise_if_cancelled()
         self.workspace.mkdir(parents=True, exist_ok=True); self.output_folder.mkdir(parents=True, exist_ok=True)
         self._emit(progress, .02, "Đang tải video YouTube")
-        title, source = self.downloader.download(self.content.youtube_url, self.workspace / "source", cancel=self.cancel)
+        downloaded = self.downloader.download(self.content.youtube_url, self.workspace / "source", cancel=self.cancel)
+        # Compatibility with narrow test/provider doubles retained during the public API transition.
+        if isinstance(downloaded, tuple):
+            title, source = downloaded
+            downloaded = YouTubeDownload(title, source)
+        title, source = downloaded.title, downloaded.source
+        output_directory = self._available_output_directory(title)
+        self._copy_thumbnail(downloaded.thumbnail, output_directory)
         speech = self.speech_factory(); rendered: list[Path] = []
         total = len(self.content.segments)
         for index, segment in enumerate(self.content.segments):
@@ -73,7 +80,12 @@ class FootballHighlightPipeline:
             audio_artifact = self.runner.probe.audio_artifact(audio)
             frames = self._extract_frames(source, segment, index)
             ass = (
-                self._write_ass(segment.tts_text, index, audio_artifact.duration_ms)
+                self._write_ass(
+                    segment.content,
+                    index,
+                    audio_artifact.duration_ms,
+                    timing_text=segment.tts_text,
+                )
                 if self.burn_subtitles
                 else None
             )
@@ -81,7 +93,7 @@ class FootballHighlightPipeline:
             self._render_segment(frames, audio, ass, target, progress, base, .76 / total)
             rendered.append(target)
         self._emit(progress, .90, "Đang ghép các phân đoạn")
-        output = self._available_output(title)
+        output = self._available_output(output_directory)
         self._concat(rendered, output, progress)
         artifact = self.runner.probe.video_artifact(output)
         self._emit(progress, 1, "Đã tạo video Highlight bóng đá")
@@ -147,8 +159,11 @@ class FootballHighlightPipeline:
             chains.append(f"{label}[v{i}]xfade=transition=fade:duration={fade:.3f}:offset={offset:.3f}[x{i}]")
             label = f"[x{i}]"
         if ass:
+            label = self._subtitle_background_filter(chains, label)
             escaped = str(ass.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
             chains.append(f"{label}subtitles='{escaped}'[outv]"); label = "[outv]"
+        if self.render_config.top_text.strip():
+            chains.append(self._top_text_filter(label)); label = "[title]"
         # libass/JPEG inputs can otherwise leave the final MP4 tagged yuvj444p,
         # which Windows Media Player does not decode on many installations.
         chains.append(f"{label}scale=in_range=full:out_range=tv,format=yuv420p[compat]")
@@ -203,23 +218,32 @@ class FootballHighlightPipeline:
             self.runner.probe.video_artifact(partial); os.replace(partial, output)
         finally: partial.unlink(missing_ok=True)
 
-    def _write_ass(self, text: str, index: int, duration_ms: int) -> Path:
+    def _write_ass(
+        self,
+        text: str,
+        index: int,
+        duration_ms: int,
+        *,
+        timing_text: str | None = None,
+    ) -> Path:
         path = self.workspace / "subtitles" / f"segment-{index + 1:03d}.ass"; path.parent.mkdir(parents=True, exist_ok=True)
-        cues = self._subtitle_cues(text, duration_ms)
+        cues = self._subtitle_cues(text, duration_ms, timing_text=timing_text)
         dialogues = "".join(
             "Dialogue: 0,"
             f"{self._ass_time(start_ms)},{self._ass_time(end_ms)},Default,,0,0,0,,"
-            f"{self._escape_ass(cue)}\n"
+            f"{{\\an5\\pos(960,{self._subtitle_box_center_y()})}}{self._escape_ass(cue)}\n"
             for start_ms, end_ms, cue in cues
         )
+        font_name = FilterGraphBuilder._font_family(self._font_path())
         path.write_text(
             "[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\n"
             "WrapStyle: 0\nScaledBorderAndShadow: yes\n[V4+ Styles]\n"
             "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,"
             "BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
             "BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
-            "Style: Default,Arial,44,&H00FFFFFF,&H000000FF,&H00101010,&H80000000,"
-            "-1,0,0,0,100,100,0,0,1,3,1,2,90,90,56,1\n[Events]\n"
+            f"Style: Default,{font_name},{self.render_config.subtitle_font_size},&H{self._ass_color(self.render_config.subtitle_font_color)},&H000000FF,&H00101010,&HFF000000,"
+            # Spacing -0.5 tightens the otherwise visibly loose libass tracking.
+            "-1,0,0,0,100,100,-0.5,0,1,2,1,5,90,90,0,1\n[Events]\n"
             "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
             + dialogues,
             encoding="utf-8-sig",
@@ -238,8 +262,40 @@ class FootballHighlightPipeline:
         return value.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
     @classmethod
-    def _subtitle_cues(cls, text: str, duration_ms: int, limit: int = 42) -> list[tuple[int, int, str]]:
-        """Split narration into SRT-like single-line cues, timed by text weight."""
+    def _subtitle_cues(
+        cls,
+        text: str,
+        duration_ms: int,
+        limit: int = 42,
+        *,
+        timing_text: str | None = None,
+    ) -> list[tuple[int, int, str]]:
+        """Display content while deriving cue timing weights from the spoken TTS text."""
+        chunks = cls._subtitle_chunks(text, limit)
+        timing_chunks = cls._subtitle_chunks(timing_text or text, limit)
+        if not chunks:
+            return [(0, max(1, duration_ms), "")]
+        weights = (
+            [max(1, len(chunk)) for chunk in timing_chunks]
+            if len(timing_chunks) == len(chunks)
+            else [max(1, len(chunk)) for chunk in chunks]
+        )
+        total_weight = sum(weights)
+        cursor, output = 0, []
+        for index, chunk in enumerate(chunks):
+            remaining = max(1, duration_ms - cursor)
+            allocated = remaining if index == len(chunks) - 1 else max(
+                500, round(duration_ms * weights[index] / total_weight)
+            )
+            end = min(duration_ms, cursor + allocated)
+            if end <= cursor:
+                end = cursor + 1
+            output.append((cursor, end, chunk))
+            cursor = end
+        return output
+
+    @staticmethod
+    def _subtitle_chunks(text: str, limit: int) -> list[str]:
         sentences = [item.strip() for item in re.split(r"(?<=[.!?…])\s+", text.replace("\n", " ")) if item.strip()]
         chunks: list[str] = []
         for sentence in sentences or [text.strip()]:
@@ -255,26 +311,77 @@ class FootballHighlightPipeline:
                         current = candidate
                 if current:
                     chunks.append(current)
-        if not chunks:
-            return [(0, max(1, duration_ms), "")]
-        total_weight = sum(max(1, len(chunk)) for chunk in chunks)
-        cursor, output = 0, []
-        for index, chunk in enumerate(chunks):
-            remaining = max(1, duration_ms - cursor)
-            allocated = remaining if index == len(chunks) - 1 else max(
-                500, round(duration_ms * len(chunk) / total_weight)
-            )
-            end = min(duration_ms, cursor + allocated)
-            if end <= cursor:
-                end = cursor + 1
-            output.append((cursor, end, chunk))
-            cursor = end
-        return output
+        return chunks
 
-    def _available_output(self, title: str) -> Path:
-        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .") or "football_highlight"; target = self.output_folder / f"{safe}.mp4"; n = 2
-        while target.exists(): target = self.output_folder / f"{safe}_{n}.mp4"; n += 1
+    def _available_output_directory(self, title: str) -> Path:
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .") or "football_highlight"
+        target = self.output_folder / safe; n = 2
+        while target.exists() and (not target.is_dir() or any(target.iterdir())):
+            target = self.output_folder / f"{safe}_{n}"; n += 1
+        target.mkdir(parents=True, exist_ok=True)
         return target
+
+    @staticmethod
+    def _copy_thumbnail(thumbnail: Path | None, directory: Path) -> None:
+        if not thumbnail or not thumbnail.is_file():
+            return
+        target = directory / f"thumbnail{thumbnail.suffix.lower()}"
+        if target.exists():
+            return
+        # A direct byte copy preserves yt-dlp's selected highest quality artwork.
+        target.write_bytes(thumbnail.read_bytes())
+
+    def _available_output(self, directory: Path) -> Path:
+        target = directory / "highlight.mp4"; n = 2
+        while target.exists(): target = directory / f"highlight_{n}.mp4"; n += 1
+        return target
+
+    @staticmethod
+    def _ass_color(value: str) -> str:
+        clean = value.strip().lstrip("#")
+        if len(clean) != 6 or not all(char in "0123456789abcdefABCDEF" for char in clean):
+            clean = "FFFFFF"
+        return f"00{clean[4:6]}{clean[2:4]}{clean[:2]}"
+
+    def _subtitle_background_filter(self, chains: list[str], label: str) -> str:
+        config = self.render_config
+        if config.subtitle_background_opacity <= 0:
+            return label
+        height = round(config.subtitle_font_size * 1.5)
+        y = config.subtitle_margin if config.subtitle_position == "top" else 1080 - config.subtitle_margin - height
+        color = config.subtitle_background_color.strip() or "#000000"
+        chains.append(f"{label}drawbox=x=0:y={y}:w=iw:h={height}:color={color}@{config.subtitle_background_opacity / 100:.4g}:t=fill[subbg]")
+        return "[subbg]"
+
+    def _subtitle_box_center_y(self) -> int:
+        config = self.render_config
+        height = round(config.subtitle_font_size * 1.5)
+        y = config.subtitle_margin if config.subtitle_position == "top" else 1080 - config.subtitle_margin - height
+        return y + height // 2
+
+    @staticmethod
+    def _font_path() -> Path | None:
+        """One font source for the title drawtext and subtitle libass style."""
+        return FilterGraphBuilder._font_path(False)
+
+    def _top_text_filter(self, label: str) -> str:
+        config = self.render_config
+        height = round(config.top_font_size * 1.5); y = config.top_margin
+        color = config.top_background_color.strip() or "#000000"
+        escaped = self._escape_drawtext(config.top_text.strip())
+        font = self._font_path()
+        font_option = (
+            f"fontfile='{FilterGraphBuilder.escape_path(str(font))}':" if font else ""
+        )
+        return (
+            f"{label}drawbox=x=0:y={y}:w=iw:h={height}:color={color}@{config.top_background_opacity / 100:.4g}:t=fill[titlebg];"
+            f"[titlebg]drawtext={font_option}text='{escaped}':fontsize={config.top_font_size}:fontcolor={config.top_font_color}:"
+            f"x=(w-text_w)/2:y={y}+({height}-text_h)/2:fix_bounds=1[title]"
+        )
+
+    @staticmethod
+    def _escape_drawtext(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "\\%").replace("\n", " ")
 
     @staticmethod
     def _emit(callback: ProgressCallback | None, fraction: float, message: str) -> None:

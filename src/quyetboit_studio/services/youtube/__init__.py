@@ -1,3 +1,3 @@
-from .downloader import YouTubeDownloader
+from .downloader import YouTubeDownload, YouTubeDownloader
 
-__all__ = ["YouTubeDownloader"]
+__all__ = ["YouTubeDownload", "YouTubeDownloader"]

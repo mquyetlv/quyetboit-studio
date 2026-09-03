@@ -44,12 +44,16 @@ def test_highlight_football_keeps_non_sensitive_voice_configuration(qtbot, tmp_p
     page.voice_volume = 85
     page.ken_burns_start.setValue(1.00)
     page.ken_burns_end.setValue(1.15)
+    page.top_text.setText("Highlight mới")
+    page.subtitle_background_opacity.setValue(75)
     settings = page.to_safe_dict()
     assert settings["tts_provider"] == "google"
     assert settings["voice"] == "vi-VN-Neural2-A"
     assert "service_account_path" not in settings
     assert settings["ken_burns_start_zoom"] == 1.00
     assert settings["ken_burns_end_zoom"] == 1.15
+    assert settings["top_text"] == "Highlight mới"
+    assert settings["subtitle_background_opacity"] == 75
     page.set_settings({"ken_burns_start_zoom": 1.02, "ken_burns_end_zoom": 1.20})
     assert page.ken_burns_start.value() == 1.02
     assert page.ken_burns_end.value() == 1.20

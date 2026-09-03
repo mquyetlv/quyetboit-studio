@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from ...core.models import CancellationToken, PipelineError, VideoArtifact
 from ..media.ffmpeg import FFmpegRunner
+
+
+@dataclass(frozen=True, slots=True)
+class YouTubeDownload:
+    title: str
+    source: VideoArtifact
+    thumbnail: Path | None = None
 
 
 class YouTubeDownloader:
@@ -12,7 +20,7 @@ class YouTubeDownloader:
     def __init__(self, runner: FFmpegRunner | None = None) -> None:
         self.runner = runner or FFmpegRunner()
 
-    def download(self, url: str, directory: Path, *, cancel: CancellationToken | None = None) -> tuple[str, VideoArtifact]:
+    def download(self, url: str, directory: Path, *, cancel: CancellationToken | None = None) -> YouTubeDownload:
         if cancel:
             cancel.raise_if_cancelled()
         try:
@@ -35,6 +43,7 @@ class YouTubeDownloader:
                 "merge_output_format": "mp4",
                 "quiet": True,
                 "no_warnings": True,
+                "writethumbnail": True,
                 "extractor_args": {"youtube": {"player_client": [player_client]}},
             }
             try:
@@ -46,7 +55,8 @@ class YouTubeDownloader:
                     mp4 = source.with_suffix(".mp4")
                     if mp4.is_file():
                         source = mp4
-                    return str(info.get("title") or "football_highlight"), self.runner.probe.video_artifact(source)
+                    thumbnail = self._find_thumbnail(directory, source)
+                    return YouTubeDownload(str(info.get("title") or "football_highlight"), self.runner.probe.video_artifact(source), thumbnail)
             except PipelineError:
                 raise
             except Exception as exc:  # noqa: BLE001 - yt-dlp exposes several download exception types.
@@ -58,3 +68,9 @@ class YouTubeDownloader:
             provider="youtube",
             debug_detail=type(last_error).__name__ if last_error else "unknown",
         ) from last_error
+
+    @staticmethod
+    def _find_thumbnail(directory: Path, source: Path) -> Path | None:
+        """yt-dlp writes a thumbnail beside the source; accept image formats only."""
+        candidates = sorted(directory.glob(f"{source.stem}.*")) + sorted(directory.glob("*.jpg")) + sorted(directory.glob("*.webp"))
+        return next((path for path in candidates if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and path != source), None)

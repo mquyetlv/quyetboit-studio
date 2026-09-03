@@ -7,7 +7,9 @@
 
 Menu **Highlight bóng đá** tạo video ngang 16:9 từ một video YouTube, một mảng JSON mô tả các tình huống và TTS tiếng Việt/Google. Video nguồn chỉ dùng để trích **ảnh** tại timestamp; output không tái sử dụng clip động hoặc audio gốc.
 
-Mỗi tình huống được render thành một segment gồm ảnh trích xuất + hiệu ứng Ken Burns + voice + phụ đề tùy chọn. Các segment có `xfade` video và `acrossfade` audio, sau đó được xuất MP4 tương thích Windows Media Player.
+Mỗi tình huống được render thành một segment gồm ảnh trích xuất + hiệu ứng Ken Burns + voice + phụ đề tùy chọn. Các segment có `xfade` video và `acrossfade` audio, sau đó được xuất MP4 tương thích Windows Media Player. yt-dlp cũng tải thumbnail của video nguồn.
+
+Kết quả của mỗi lần chạy nằm trong `<Thư mục xuất>/<tiêu đề YouTube đã sanitize>/`: `highlight.mp4` và `thumbnail.<ext>`. Nếu thư mục tiêu đề đã có dữ liệu, pipeline tạo thư mục có suffix tăng dần; không ghi đè output cũ.
 
 Không thuộc phạm vi hiện tại:
 
@@ -68,15 +70,19 @@ Tuyệt đối không gọi HTTP, yt-dlp hoặc FFmpeg trực tiếp từ widget
 | Đốt phụ đề | `burn_subtitles` | Mặc định `true`. |
 | Zoom ảnh (Ken Burns) | `ken_burns_start_zoom`, `ken_burns_end_zoom` | Mặc định `1.00` → `1.15`. |
 | Thư mục xuất | `output_folder` | Không xóa output cũ. |
+| Chữ đầu video | `top_text`, `top_font_size`, `top_margin`, `top_font_color`, `top_background_color`, `top_background_opacity` | Thanh nền toàn chiều rộng ở đầu video, cùng semantics với layer `intro_text` của VietSub. |
+| Kiểu phụ đề | `subtitle_position`, `subtitle_font_size`, `subtitle_margin`, `subtitle_font_color`, `subtitle_background_color`, `subtitle_background_opacity` | `top`/`bottom`; nền full-width được render dưới ASS. |
 | Kịch bản JSON | `json` | Toàn bộ text JSON. |
 
-`MainWindow._sync_minigame_project()` cũng đồng bộ `highlight.to_safe_dict()` vào `ProjectModel.highlight_football_settings` trước Save/autosave. Project schema chung hiện là v2. Khi thêm trường không nhạy cảm, thêm vào cả `to_safe_dict()` và `set_settings()`; cần giữ default để project cũ mở được.
+`MainWindow._sync_minigame_project()` cũng đồng bộ `highlight.to_safe_dict()` vào `ProjectModel.highlight_football_settings` trước Save/autosave. `LastUsedSettingsStore` giữ cùng payload không nhạy cảm để project mới khôi phục lựa chọn gần nhất. Project schema chung hiện là v2. Khi thêm trường không nhạy cảm, thêm vào cả `to_safe_dict()` và `set_settings()`; cần giữ default để project cũ mở được.
+
+Typography của hai lớp được cố định đồng bộ: `drawtext` của chữ đầu video và ASS của phụ đề cùng dùng font hệ thống đã chọn (Arial trên Windows, DejaVu Sans khi fallback). ASS đặt `Spacing=-0.5` để giảm tracking. Mỗi cue dùng `\an5\pos(960, y + 0.75 × font_size)` nên tâm chữ nằm đúng tâm dải nền có chiều cao `1.5 × font_size`.
 
 `start_button` và `stop_button` là **exclusive**: chưa chạy chỉ hiện Start; đang chạy chỉ hiện Stop. `stop()` gọi `pipeline.cancel_run()`, vô hiệu hóa Stop và chờ worker tự kết thúc.
 
 ## 5. Contract dữ liệu đầu vào
 
-Parser là `FootballHighlightInput.from_json(youtube_url, text)`. Mảng không rỗng; mỗi item bắt buộc có bốn trường string/object như sau:
+Parser là `FootballHighlightInput.from_json(youtube_url, text)`. Mảng không rỗng; mỗi item bắt buộc có năm trường string/object như sau:
 
 ```json
 [
@@ -87,7 +93,8 @@ Parser là `FootballHighlightInput.from_json(youtube_url, text)`. Mảng không 
       "setup": "12:28",
       "finish": ["12:32", "12:34"]
     },
-    "tts_text": "Một tình huống phối hợp đẹp mắt và bàn thắng được ghi."
+    "content": "Manchester United thực hiện một tình huống phối hợp đẹp mắt và ghi bàn.",
+    "tts_text": "Man-chét-tơ Yu-nai-tịt thực hiện một tình huống phối hợp đẹp mắt và ghi bàn."
   }
 ]
 ```
@@ -97,7 +104,8 @@ Quy tắc quan trọng:
 - Timestamp nhận `MM:SS` hoặc `HH:MM:SS`; phải hợp lệ theo regex `^(?:\d{1,2}:)?[0-5]\d:[0-5]\d$`.
 - `frames` giữ đúng thứ tự key và thứ tự item trong mảng. `FootballSegment.timestamps()` flatten theo thứ tự đó.
 - Các giá trị `""`, `không xuất hiện`, `not found`, `none`, `n/a` được bỏ qua không phân biệt hoa/thường.
-- `tts_text` bắt buộc không rỗng; vừa là nội dung TTS vừa là phụ đề.
+- `content` bắt buộc không rỗng và là nội dung duy nhất được hiển thị trong phụ đề; giữ nguyên cách viết tên nước ngoài.
+- `tts_text` bắt buộc không rỗng, chỉ dùng để tạo voice/cache và làm trọng số phân bổ timeline; có thể Việt hóa tên nước ngoài để provider TTS đọc tự nhiên hơn.
 - `match_minute` và `situation_type` hiện là metadata hợp đồng, chưa được overlay hoặc dùng cho visual/SFX. Đừng giả định chúng đã render.
 
 `FootballRenderConfig` là dataclass immutable. Ràng buộc hiện tại: `1.00 <= start < end <= 1.30`; sai sẽ báo lỗi trước khi job vào worker. Nếu muốn cho phép ảnh tĩnh hoặc zoom out, cần thay ràng buộc này, UI range và test cùng lúc.
@@ -153,7 +161,7 @@ Nếu `burn_subtitles=true`, `_write_ass()` tạo `<workspace>/subtitles/segment
 
 - Tách tại hết câu (`. ! ? …`), ưu tiên tách tiếp tại `, ; :`, cuối cùng tách theo từ.
 - Tối đa 42 ký tự mỗi cue; không ghi `\N`, nên mỗi thời điểm đúng **một dòng**.
-- Phân bổ duration theo độ dài text, tối thiểu 500 ms/cue; cue cuối chiếm phần dư.
+- Tổng duration lấy từ audio thật đã synthesize bằng `tts_text`. Khi số cue tương ứng, phân bổ duration theo độ dài các cue `tts_text`, tối thiểu 500 ms/cue; cue cuối chiếm phần dư. Text ghi vào ASS luôn lấy từ `content`.
 - ASS dùng PlayRes 1920×1080, Arial 44 px, chữ trắng, outline/shadow đậm, căn đáy giữa.
 
 Sửa style hoặc policy tách cue ở `_subtitle_cues()` / `_write_ass()`, đồng thời cập nhật `test_football_ass_uses_timed_single_line_dialogues`.
@@ -250,4 +258,3 @@ Coverage hiện có:
 - UI: menu vị trí đầu sidebar, validate JSON, Start/Stop visibility, persistence voice không nhạy cảm và zoom config.
 
 Live test đã chạy opt-in trên URL YouTube được cung cấp, CapCut TTS và 11 segment. Bản output mới nhất lúc ghi tài liệu được ffprobe: 1920×1080, 30 fps, H.264 High/yuv420p, AAC, duration khoảng 221.8 s, không còn `.partial`. Đây là bằng chứng cho luồng hiện hữu, không thay thế test của tính năng mới.
-

@@ -66,7 +66,7 @@ Tuyệt đối không gọi HTTP, yt-dlp hoặc FFmpeg trực tiếp từ widget
 | Nhãn UI | State / key lưu trong `highlight_football_settings` | Ghi chú |
 |---|---|---|
 | Video YouTube | `youtube_url` | Chỉ chấp nhận HTTPS YouTube/youtu.be/youtube-nocookie. |
-| Giọng đọc | `tts_provider`, `voice`, `voice_name`, `voice_language`, `voice_gender`, `voice_family`, `voice_categories`, `voice_volume` | Chỉ metadata voice, không có credential. |
+| Giọng đọc | `tts_provider`, `voice`, `voice_name`, `voice_language`, `voice_gender`, `voice_family`, `voice_categories`, `voice_volume`, `voice_rate` | Chỉ metadata voice, không có credential; tốc độ đọc 0,50×–2,00×, mặc định 1,00×. |
 | Đốt phụ đề | `burn_subtitles` | Mặc định `true`. |
 | Zoom ảnh (Ken Burns) | `ken_burns_start_zoom`, `ken_burns_end_zoom` | Mặc định `1.00` → `1.15`. |
 | Thư mục xuất | `output_folder` | Không xóa output cũ. |
@@ -126,8 +126,8 @@ Mục tiêu là giảm 403 YouTube. Source tải vào `<workspace>/source/source
 
 `HighlightFootballPage.start()` chọn adapter:
 
-- CapCut: `CapCutEnglishSpeechService(voice_id, volume, categories=("vietnamese",))`;
-- Google: `GoogleCloudSpeechService(Path.cwd()/"services-account.json", voice_id, language_code, volume)`.
+- CapCut: `CapCutEnglishSpeechService(voice_id, volume, rate, categories=("vietnamese",))`;
+- Google: `GoogleCloudSpeechService(Path.cwd()/"services-account.json", voice_id, language_code, volume, speaking_rate)`.
 
 Voice được tạo ở worker. Cache local hiện dùng path:
 
@@ -135,7 +135,7 @@ Voice được tạo ở worker. Cache local hiện dùng path:
 <workspace>/audio/segment-<NNN>-<stable_hash({text, voice_cache_key})[:20]>.wav
 ```
 
-`voice_cache_key` chứa provider, voice, language, volume. Khi cache miss, adapter xuất `.source.mp3` (CapCut) hoặc `.source.wav` (Google), sau đó `_normalize_audio()` đổi atomic sang WAV PCM 48 kHz/stereo. Retry chỉ `PipelineError.retryable`, tối đa 3 lần, backoff cancellation-aware 0.5 s, 1 s.
+`voice_cache_key` chứa provider, voice, language, volume và tốc độ đọc. Khi cache miss, adapter xuất `.source.mp3` (CapCut) hoặc `.source.wav` (Google), sau đó `_normalize_audio()` đổi atomic sang WAV PCM 48 kHz/stereo. Retry chỉ `PipelineError.retryable`, tối đa 3 lần, backoff cancellation-aware 0.5 s, 1 s.
 
 Khi mở rộng TTS, adapter mới phải khớp protocol:
 
@@ -172,13 +172,13 @@ Sửa style hoặc policy tách cue ở `_subtitle_cues()` / `_write_ass()`, đ�
 
 Ken Burns ở `_ken_burns_filter()` có các tính chất cần giữ:
 
-- zoom được nội suy theo **output frame number** `on`, không tăng theo burst input;
+- zoom được nội suy easing cosine theo **output frame number** `on`, không tăng theo burst input; vận tốc bằng 0 ở đầu/cuối mỗi move;
 - `d=1`, input loop `-framerate 30`, output đúng 30 fps;
-- canvas làm việc 3840×2160, `zoompan`, sau đó `scale=1920:1080:flags=lanczos`; việc downsample này giảm bước nhảy pixel;
-- zoom `start` → `end` lấy từ `FootballRenderConfig` (mặc định 1.00 → 1.15);
-- focus pan luân phiên: `(0.25,0.35)`, `(0.75,0.35)`, `(0.70,0.65)`, `(0.30,0.65)` theo index ảnh modulo 4.
+- canvas làm việc đúng 1920×1080; crop tâm nên intermediate 4K/Lanczos không làm chuyển động mượt hơn nhưng tăng mạnh thời gian render;
+- zoom dùng đầy đủ khoảng `ken_burns_start_zoom` → `ken_burns_end_zoom` đã chọn trong `FootballRenderConfig` (mặc định `1.00` → `1.15`), không tự giới hạn thêm ở renderer;
+- crop cố định tại tâm ảnh (`x/y = (input - crop) / 2`), không pan luân phiên. Đây là điều kiện cần để xfade giữa các ảnh không bị cảm giác lắc ngang/dọc.
 
-**Không quay lại `d=<số frame segment>`**: biến thể cũ này phụ thuộc nhịp input và gây cảm giác giật/reset. Khi đổi filter, phải giữ test kiểm tra chuỗi `d=1`, `fps=30`, Lanczos và chạy render FFmpeg fixture.
+**Không quay lại `d=<số frame segment>`**: biến thể cũ này phụ thuộc nhịp input và gây cảm giác giật/reset. Khi đổi filter, phải giữ test kiểm tra chuỗi `d=1`, `fps=30`, easing cosine và chạy render FFmpeg fixture.
 
 Video segment mã hóa `libx264`, `High`, level `4.1`, `yuv420p`, CRF 20, AAC 192 kbps. Filter cuối ép `scale=in_range=full:out_range=tv,format=yuv420p` để không tạo `yuvj444p` / profile 4:4:4 mà Windows Media Player hay từ chối.
 
@@ -254,7 +254,7 @@ git diff --check
 Coverage hiện có:
 
 - Parser: YouTube HTTPS, thứ tự timestamp, validation config Ken Burns.
-- Pipeline fixture: MP4 1920×1080, audio/video, profile High/yuv420p, filter Ken Burns 30 fps + Lanczos, xfade, subtitle một dòng, cancellation sớm, retry TTS, không còn partial.
+- Pipeline fixture: MP4 1920×1080, audio/video, profile High/yuv420p, Ken Burns 30 fps easing cosine/crop tâm, xfade, subtitle một dòng, cancellation sớm, retry TTS, không còn partial.
 - UI: menu vị trí đầu sidebar, validate JSON, Start/Stop visibility, persistence voice không nhạy cảm và zoom config.
 
 Live test đã chạy opt-in trên URL YouTube được cung cấp, CapCut TTS và 11 segment. Bản output mới nhất lúc ghi tài liệu được ffprobe: 1920×1080, 30 fps, H.264 High/yuv420p, AAC, duration khoảng 221.8 s, không còn `.partial`. Đây là bằng chứng cho luồng hiện hữu, không thay thế test của tính năng mới.

@@ -37,6 +37,7 @@ class FootballHighlightPipeline:
     """Background-safe media pipeline.  UI only owns this object through a worker."""
 
     FADE_MS = 450
+    OUTPUT_FPS = 30
     def __init__(self, content: FootballHighlightInput, *, output_folder: Path, workspace: Path,
                  speech_factory: Callable[[], FootballSpeechService], runner: FFmpegRunner | None = None,
                  downloader: YouTubeDownloader | None = None, burn_subtitles: bool = True,
@@ -146,9 +147,9 @@ class FootballHighlightPipeline:
         per_frame = max(0.7, duration / 1000 / len(frames)); fade = min(self.FADE_MS / 1000, per_frame / 3)
         partial = target.with_name(f".{target.stem}.partial.mp4"); target.parent.mkdir(parents=True, exist_ok=True)
         args: list[str] = []
-        # Use a fixed input cadence.  zoompan with a single output frame for
-        # each input frame then has an exact, stable 30 fps timeline.
-        for frame in frames: args += ["-loop", "1", "-framerate", "30", "-t", f"{per_frame:.3f}", "-i", str(frame)]
+        # Loop at the delivery cadence so each zoompan output frame maps to one
+        # display frame; this keeps the configured motion smooth and predictable.
+        for frame in frames: args += ["-loop", "1", "-framerate", str(self.OUTPUT_FPS), "-t", f"{per_frame:.3f}", "-i", str(frame)]
         args += ["-i", str(audio)]
         chains: list[str] = []
         for i in range(len(frames)):
@@ -176,22 +177,26 @@ class FootballHighlightPipeline:
             partial.unlink(missing_ok=True)
 
     def _ken_burns_filter(self, index: int, duration_seconds: float) -> str:
-        """Build a frame-accurate 30 fps Ken Burns move with alternating pan."""
-        frames = max(1, round(duration_seconds * 30))
-        start, end = self.render_config.ken_burns_start_zoom, self.render_config.ken_burns_end_zoom
-        # `on` is zoompan's output-frame number.  d=1 and the 30 fps looping
-        # input avoid the old d=<segment frame count> burst/reset behaviour.
-        # The 2x working canvas makes crop-coordinate rounding sub-pixel after
-        # final Lanczos downsampling, removing the visible one-pixel stepping.
-        focus = ((0.25, 0.35), (0.75, 0.35), (0.70, 0.65), (0.30, 0.65))[index % 4]
+        """Build a configured centered 30 fps camera push-in without lateral shake."""
+        frames = max(1, round(duration_seconds * self.OUTPUT_FPS))
+        start = self.render_config.ken_burns_start_zoom
+        end = self.render_config.ken_burns_end_zoom
+        # `on` is zoompan's output-frame number. d=1 and a 30 fps looping input
+        # avoid the old d=<segment frame count> burst/reset behaviour. The cosine
+        # curve has zero velocity at both ends, so the move eases in and out.
+        # This deliberately operates at delivery resolution. It applies the full
+        # start/end range selected in the UI; a 4K intermediate adds cost without
+        # making the zoom smoother.
+        # Keep the crop at the image centre: changing focus for each frame made
+        # consecutive xfade transitions look like a lateral shake.
         denominator = max(1, frames - 1)
         return (
-            f"[{index}:v]scale=3840:2160:force_original_aspect_ratio=increase,"
-            "crop=3840:2160,setsar=1,"
-            f"zoompan=z='{start:.8f}+{end - start:.8f}*on/{denominator}':"
-            f"x='(iw-iw/zoom)*{focus[0]:.3f}':"
-            f"y='(ih-ih/zoom)*{focus[1]:.3f}':"
-            f"d=1:s=3840x2160:fps=30,scale=1920:1080:flags=lanczos,trim=duration={duration_seconds:.3f},"
+            f"[{index}:v]scale=1920:1080:force_original_aspect_ratio=increase,"
+            "crop=1920:1080,setsar=1,"
+            f"zoompan=z='{start:.8f}+{end - start:.8f}*(0.5-0.5*cos(PI*on/{denominator}))':"
+            "x='(iw-iw/zoom)/2':"
+            "y='(ih-ih/zoom)/2':"
+            f"d=1:s=1920x1080:fps={self.OUTPUT_FPS},trim=duration={duration_seconds:.3f},"
             f"setpts=PTS-STARTPTS[v{index}]"
         )
 
@@ -204,7 +209,7 @@ class FootballHighlightPipeline:
             args += ["-i", str(segment)]
         chains: list[str] = []
         for index in range(len(segments)):
-            chains.append(f"[{index}:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{index}]")
+            chains.append(f"[{index}:v]fps={self.OUTPUT_FPS},format=yuv420p,setpts=PTS-STARTPTS[v{index}]")
             chains.append(f"[{index}:a]aresample=48000,asetpts=PTS-STARTPTS[a{index}]")
         video, audio, cursor = "[v0]", "[a0]", durations[0]
         for index in range(1, len(segments)):

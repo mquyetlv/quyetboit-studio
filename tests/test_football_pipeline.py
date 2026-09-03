@@ -39,8 +39,12 @@ def test_football_pipeline_renders_playable_video_with_smooth_frame_fade(tmp_pat
     )
     config = FootballRenderConfig(1.00, 1.15, "Bàn thắng", 48, 24, "#FFFFFF", "#000000", 60, "bottom", 44, 56, "#FFFFFF", "#000000", 60)
     pipeline = FootballHighlightPipeline(content, output_folder=tmp_path / "output", workspace=tmp_path / "work", speech_factory=Speech, runner=runner, downloader=Downloader(), burn_subtitles=True, render_config=config)
-    assert "d=1:s=3840x2160:fps=30,scale=1920:1080:flags=lanczos" in pipeline._ken_burns_filter(0, 1.5)
-    assert "1.00000000+0.15000000*on/44" in pipeline._ken_burns_filter(0, 1.5)
+    assert "d=1:s=1920x1080:fps=30,trim=duration=1.500" in pipeline._ken_burns_filter(0, 1.5)
+    motion = pipeline._ken_burns_filter(0, 1.5)
+    # The renderer must honour the 1.00 -> 1.15 setting rather than silently
+    # capping it to a barely visible motion.
+    assert "1.00000000+0.15000000*(0.5-0.5*cos(PI*on/44))" in motion
+    assert "x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2'" in motion
     result = pipeline.run()
 
     artifact = runner.probe.video_artifact(result.output)
@@ -51,6 +55,7 @@ def test_football_pipeline_renders_playable_video_with_smooth_frame_fade(tmp_pat
     assert "Manchester United" in rendered_ass
     assert "Man-chét-tơ" not in rendered_ass
     assert (artifact.width, artifact.height) == (1920, 1080)
+    assert artifact.fps == 30
     assert artifact.duration_ms > 1_000
     stream = next(item for item in runner.probe.inspect(result.output)["streams"] if item["codec_type"] == "video")
     assert stream["pix_fmt"] == "yuv420p"

@@ -72,6 +72,7 @@ class HighlightFootballPage(QWidget):
         self.voice_family = ""
         self.voice_categories: list[str] = []
         self.voice_volume = 100
+        self.voice_rate = 1.0
         root = QVBoxLayout(self)
         root.setContentsMargins(34, 26, 34, 26)
         title = QLabel("Highlight bóng đá")
@@ -87,6 +88,7 @@ class HighlightFootballPage(QWidget):
         self.voice_summary = QLabel(); self.voice_summary.setObjectName("Subtitle"); self.voice_summary.setWordWrap(True)
         self.voice_config = QPushButton("Cấu hình voice…"); self.voice_config.clicked.connect(self._open_voice_dialog)
         voice_row = QWidget(); voice_layout = QHBoxLayout(voice_row); voice_layout.setContentsMargins(0, 0, 0, 0); voice_layout.addWidget(self.voice_summary, 1); voice_layout.addWidget(self.voice_config)
+        self.voice_rate_input = QDoubleSpinBox(); self.voice_rate_input.setRange(0.50, 2.00); self.voice_rate_input.setSingleStep(0.05); self.voice_rate_input.setDecimals(2); self.voice_rate_input.setValue(self.voice_rate); self.voice_rate_input.setSuffix("×")
         self.burn_subtitles = QCheckBox("Đốt phụ đề từ content"); self.burn_subtitles.setChecked(True)
         self.top_text = QLineEdit(); self.top_text.setPlaceholderText("Ví dụ: Highlight trận đấu")
         self.top_font_size = QSpinBox(); self.top_font_size.setRange(12, 200); self.top_font_size.setValue(48); self.top_font_size.setSuffix(" px")
@@ -106,7 +108,7 @@ class HighlightFootballPage(QWidget):
         self.output_folder = QLineEdit(); self.output_folder.setPlaceholderText("Chọn thư mục xuất")
         browse = QPushButton("Chọn thư mục…"); browse.clicked.connect(self._browse)
         output_row = QWidget(); output_layout = QHBoxLayout(output_row); output_layout.setContentsMargins(0, 0, 0, 0); output_layout.addWidget(self.output_folder, 1); output_layout.addWidget(browse)
-        form.addRow("Video YouTube", self.youtube_url); form.addRow("Giọng đọc", voice_row); form.addRow("Chữ đầu video", top_row); form.addRow("Màu/nền chữ đầu", self._style_row(self.top_font_color, self.top_background_color, self.top_background_opacity)); form.addRow("Phụ đề", self.burn_subtitles); form.addRow("Kiểu phụ đề", subtitle_row); form.addRow("Màu/nền phụ đề", self._style_row(self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity)); form.addRow("Zoom ảnh (Ken Burns)", zoom_row); form.addRow("Thư mục xuất", output_row)
+        form.addRow("Video YouTube", self.youtube_url); form.addRow("Giọng đọc", voice_row); form.addRow("Tốc độ đọc", self.voice_rate_input); form.addRow("Chữ đầu video", top_row); form.addRow("Màu/nền chữ đầu", self._style_row(self.top_font_color, self.top_background_color, self.top_background_opacity)); form.addRow("Phụ đề", self.burn_subtitles); form.addRow("Kiểu phụ đề", subtitle_row); form.addRow("Màu/nền phụ đề", self._style_row(self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity)); form.addRow("Zoom ảnh (Ken Burns)", zoom_row); form.addRow("Thư mục xuất", output_row)
         root.addWidget(card)
         json_heading = QLabel("Kịch bản JSON")
         json_heading.setObjectName("SectionTitle")
@@ -126,7 +128,7 @@ class HighlightFootballPage(QWidget):
         self.stop_button = QPushButton("■  Dừng"); self.stop_button.hide(); self.stop_button.clicked.connect(self.stop)
         job_layout.addWidget(self.progress, 1); job_layout.addWidget(self.start_button); job_layout.addWidget(self.stop_button); root.addWidget(job)
         self._update_voice_summary()
-        for widget in (self.youtube_url, self.burn_subtitles, self.ken_burns_start, self.ken_burns_end, self.output_folder, self.json_editor, self.top_text, self.top_font_size, self.top_margin, self.top_font_color, self.top_background_color, self.top_background_opacity, self.subtitle_position, self.subtitle_font_size, self.subtitle_margin, self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity):
+        for widget in (self.youtube_url, self.burn_subtitles, self.voice_rate_input, self.ken_burns_start, self.ken_burns_end, self.output_folder, self.json_editor, self.top_text, self.top_font_size, self.top_margin, self.top_font_color, self.top_background_color, self.top_background_opacity, self.subtitle_position, self.subtitle_font_size, self.subtitle_margin, self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity):
             signal = getattr(widget, "textChanged", None) or getattr(widget, "currentIndexChanged", None) or getattr(widget, "toggled", None)
             signal.connect(self._changed)
 
@@ -178,7 +180,7 @@ class HighlightFootballPage(QWidget):
     def _update_voice_summary(self) -> None:
         provider = "Google Cloud TTS" if self.voice_provider == "google" else "CapCut TTS"
         details = " · ".join(item for item in (self.voice_language, self.voice_gender, self.voice_family) if item)
-        self.voice_summary.setText(f"{provider}\n{self.voice_name}{f' · {details}' if details else ''}\nÂm lượng {self.voice_volume}%")
+        self.voice_summary.setText(f"{provider}\n{self.voice_name}{f' · {details}' if details else ''}\nÂm lượng {self.voice_volume}% · Tốc độ {self.voice_rate_input.value():.2f}×")
 
     def validate(self) -> FootballHighlightInput | None:
         try:
@@ -210,9 +212,9 @@ class HighlightFootballPage(QWidget):
         workspace = local / "QuyetBoITStudio" / "workspaces" / self.project_uuid / "football"
         def speech_factory():
             if self.voice_provider == "google":
-                return GoogleCloudSpeechService(Path.cwd() / "services-account.json", self.voice_id, language_code=self.voice_language, volume=self.voice_volume)
-            return CapCutEnglishSpeechService(self.voice_id, volume=self.voice_volume, categories=("vietnamese",))
-        self.pipeline = FootballHighlightPipeline(payload, output_folder=Path(self.output_folder.text()).expanduser(), workspace=workspace, speech_factory=speech_factory, burn_subtitles=self.burn_subtitles.isChecked(), cancel=CancellationToken(), tts_suffix=".wav" if self.voice_provider == "google" else ".mp3", voice_cache_key={"provider": self.voice_provider, "voice": self.voice_id, "language": self.voice_language, "volume": self.voice_volume}, render_config=self._render_config())
+                return GoogleCloudSpeechService(Path.cwd() / "services-account.json", self.voice_id, language_code=self.voice_language, volume=self.voice_volume, speaking_rate=self.voice_rate_input.value())
+            return CapCutEnglishSpeechService(self.voice_id, volume=self.voice_volume, rate=self.voice_rate_input.value(), categories=("vietnamese",))
+        self.pipeline = FootballHighlightPipeline(payload, output_folder=Path(self.output_folder.text()).expanduser(), workspace=workspace, speech_factory=speech_factory, burn_subtitles=self.burn_subtitles.isChecked(), cancel=CancellationToken(), tts_suffix=".wav" if self.voice_provider == "google" else ".mp3", voice_cache_key={"provider": self.voice_provider, "voice": self.voice_id, "language": self.voice_language, "volume": self.voice_volume, "rate": self.voice_rate_input.value()}, render_config=self._render_config())
         self.thread = QThread(self); self.worker = FootballWorker(self.pipeline); self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run); self.worker.progress.connect(self._progress); self.worker.succeeded.connect(self._succeeded); self.worker.failed.connect(self._failed)
         self.worker.finished.connect(self.thread.quit); self.worker.finished.connect(self.worker.deleteLater); self.thread.finished.connect(self._finished)
@@ -246,7 +248,7 @@ class HighlightFootballPage(QWidget):
         return self.thread is None or self.thread.wait(timeout_ms)
 
     def to_safe_dict(self) -> dict[str, object]:
-        return {"youtube_url": self.youtube_url.text().strip(), "json": self.json_editor.toPlainText(), "tts_provider": self.voice_provider, "voice": self.voice_id, "voice_name": self.voice_name, "voice_language": self.voice_language, "voice_gender": self.voice_gender, "voice_family": self.voice_family, "voice_categories": self.voice_categories, "voice_volume": self.voice_volume, "burn_subtitles": self.burn_subtitles.isChecked(), "ken_burns_start_zoom": self.ken_burns_start.value(), "ken_burns_end_zoom": self.ken_burns_end.value(), "top_text": self.top_text.text(), "top_font_size": self.top_font_size.value(), "top_margin": self.top_margin.value(), "top_font_color": self.top_font_color.text(), "top_background_color": self.top_background_color.text(), "top_background_opacity": self.top_background_opacity.value(), "subtitle_position": self.subtitle_position.text(), "subtitle_font_size": self.subtitle_font_size.value(), "subtitle_margin": self.subtitle_margin.value(), "subtitle_font_color": self.subtitle_font_color.text(), "subtitle_background_color": self.subtitle_background_color.text(), "subtitle_background_opacity": self.subtitle_background_opacity.value(), "output_folder": self.output_folder.text().strip()}
+        return {"youtube_url": self.youtube_url.text().strip(), "json": self.json_editor.toPlainText(), "tts_provider": self.voice_provider, "voice": self.voice_id, "voice_name": self.voice_name, "voice_language": self.voice_language, "voice_gender": self.voice_gender, "voice_family": self.voice_family, "voice_categories": self.voice_categories, "voice_volume": self.voice_volume, "voice_rate": self.voice_rate_input.value(), "burn_subtitles": self.burn_subtitles.isChecked(), "ken_burns_start_zoom": self.ken_burns_start.value(), "ken_burns_end_zoom": self.ken_burns_end.value(), "top_text": self.top_text.text(), "top_font_size": self.top_font_size.value(), "top_margin": self.top_margin.value(), "top_font_color": self.top_font_color.text(), "top_background_color": self.top_background_color.text(), "top_background_opacity": self.top_background_opacity.value(), "subtitle_position": self.subtitle_position.text(), "subtitle_font_size": self.subtitle_font_size.value(), "subtitle_margin": self.subtitle_margin.value(), "subtitle_font_color": self.subtitle_font_color.text(), "subtitle_background_color": self.subtitle_background_color.text(), "subtitle_background_opacity": self.subtitle_background_opacity.value(), "output_folder": self.output_folder.text().strip()}
 
     def set_settings(self, settings: dict, project_uuid: str | None = None) -> None:
         self._loading = True
@@ -259,7 +261,7 @@ class HighlightFootballPage(QWidget):
             self.voice_id = str(settings.get("voice", "")); self.voice_name = str(settings.get("voice_name", self.voice_id or "Chưa chọn giọng"))
             self.voice_language = str(settings.get("voice_language", "vi-VN")); self.voice_gender = str(settings.get("voice_gender", "")); self.voice_family = str(settings.get("voice_family", ""))
             categories = settings.get("voice_categories", []); self.voice_categories = [str(value) for value in categories] if isinstance(categories, list) else []
-            self.voice_volume = int(settings.get("voice_volume", 100)); self.burn_subtitles.setChecked(bool(settings.get("burn_subtitles", True))); self.ken_burns_start.setValue(float(settings.get("ken_burns_start_zoom", 1.00))); self.ken_burns_end.setValue(float(settings.get("ken_burns_end_zoom", 1.15))); self.top_text.setText(str(settings.get("top_text", ""))); self.top_font_size.setValue(int(settings.get("top_font_size", 48))); self.top_margin.setValue(int(settings.get("top_margin", 24))); self.top_font_color.setText(str(settings.get("top_font_color", "#FFFFFF"))); self.top_background_color.setText(str(settings.get("top_background_color", "#000000"))); self.top_background_opacity.setValue(int(settings.get("top_background_opacity", 60))); self.subtitle_position.setText(str(settings.get("subtitle_position", "bottom"))); self.subtitle_font_size.setValue(int(settings.get("subtitle_font_size", 44))); self.subtitle_margin.setValue(int(settings.get("subtitle_margin", 56))); self.subtitle_font_color.setText(str(settings.get("subtitle_font_color", "#FFFFFF"))); self.subtitle_background_color.setText(str(settings.get("subtitle_background_color", "#000000"))); self.subtitle_background_opacity.setValue(int(settings.get("subtitle_background_opacity", 60))); self.output_folder.setText(str(settings.get("output_folder", "")))
+            self.voice_volume = int(settings.get("voice_volume", 100)); self.voice_rate_input.setValue(float(settings.get("voice_rate", 1.0))); self.burn_subtitles.setChecked(bool(settings.get("burn_subtitles", True))); self.ken_burns_start.setValue(float(settings.get("ken_burns_start_zoom", 1.00))); self.ken_burns_end.setValue(float(settings.get("ken_burns_end_zoom", 1.15))); self.top_text.setText(str(settings.get("top_text", ""))); self.top_font_size.setValue(int(settings.get("top_font_size", 48))); self.top_margin.setValue(int(settings.get("top_margin", 24))); self.top_font_color.setText(str(settings.get("top_font_color", "#FFFFFF"))); self.top_background_color.setText(str(settings.get("top_background_color", "#000000"))); self.top_background_opacity.setValue(int(settings.get("top_background_opacity", 60))); self.subtitle_position.setText(str(settings.get("subtitle_position", "bottom"))); self.subtitle_font_size.setValue(int(settings.get("subtitle_font_size", 44))); self.subtitle_margin.setValue(int(settings.get("subtitle_margin", 56))); self.subtitle_font_color.setText(str(settings.get("subtitle_font_color", "#FFFFFF"))); self.subtitle_background_color.setText(str(settings.get("subtitle_background_color", "#000000"))); self.subtitle_background_opacity.setValue(int(settings.get("subtitle_background_opacity", 60))); self.output_folder.setText(str(settings.get("output_folder", "")))
             self._update_voice_summary()
         finally:
             self._loading = False

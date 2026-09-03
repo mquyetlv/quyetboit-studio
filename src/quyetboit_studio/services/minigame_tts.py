@@ -282,11 +282,13 @@ class GoogleCloudSpeechService:
         *,
         language_code: str = "en-US",
         volume: int = 100,
+        speaking_rate: float = 1.0,
     ) -> None:
         self.service_account_path = Path(service_account_path).expanduser().resolve()
         self.voice_name = voice_name.strip()
         self.language_code = language_code
         self.volume = max(0, min(150, int(volume)))
+        self.speaking_rate = max(0.5, min(2.0, float(speaking_rate)))
 
     def synthesize(
         self, text: str, output: Path, *, cancel: CancellationToken | None = None
@@ -315,6 +317,7 @@ class GoogleCloudSpeechService:
                     "audio_config": texttospeech.AudioConfig(
                         audio_encoding=texttospeech.AudioEncoding.LINEAR16,
                         volume_gain_db=self._volume_db(),
+                        speaking_rate=self.speaking_rate,
                     ),
                 },
                 timeout=60,
@@ -345,7 +348,8 @@ class GoogleCloudSpeechService:
 
 class CapCutEnglishSpeechService:
     def __init__(
-        self, voice_name: str, *, volume: int = 100, categories: tuple[str, ...] = ("english",)
+        self, voice_name: str, *, volume: int = 100, rate: float = 1.0,
+        categories: tuple[str, ...] = ("english",)
     ) -> None:
         store = CapCutSessionStore()
         session = store.load()
@@ -361,6 +365,7 @@ class CapCutEnglishSpeechService:
         voices = self.service.list_voices()
         self.voice = self._select_voice(voices, voice_name)
         self.volume = max(0, min(150, int(volume)))
+        self.rate = max(0.5, min(2.0, float(rate)))
 
     @staticmethod
     def _select_voice(voices: list[Voice], requested: str) -> Voice:
@@ -387,6 +392,6 @@ class CapCutEnglishSpeechService:
         self, text: str, output: Path, *, cancel: CancellationToken | None = None
     ) -> Path:
         self.service.synthesize(
-            text, self.voice, output, rate=1.0, volume=self.volume, cancel=cancel
+            text, self.voice, output, rate=self.rate, volume=self.volume, cancel=cancel
         )
         return output

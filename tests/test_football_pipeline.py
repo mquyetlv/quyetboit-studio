@@ -39,12 +39,12 @@ def test_football_pipeline_renders_playable_video_with_smooth_frame_fade(tmp_pat
     )
     config = FootballRenderConfig(1.00, 1.15, "Bàn thắng", 48, 24, "#FFFFFF", "#000000", 60, "bottom", 44, 56, "#FFFFFF", "#000000", 60)
     pipeline = FootballHighlightPipeline(content, output_folder=tmp_path / "output", workspace=tmp_path / "work", speech_factory=Speech, runner=runner, downloader=Downloader(), burn_subtitles=True, render_config=config)
-    assert "d=1:s=1920x1080:fps=30,trim=duration=1.500" in pipeline._ken_burns_filter(0, 1.5)
-    motion = pipeline._ken_burns_filter(0, 1.5)
+    assert "d=1:s=1920x1080:fps=30,trim=duration=1.500" in pipeline.media._ken_burns_filter(0, 1.5)
+    motion = pipeline.media._ken_burns_filter(0, 1.5)
     # The renderer must honour the 1.00 -> 1.15 setting rather than silently
     # capping it to a barely visible motion.
     assert "1.00000000+0.15000000*(0.5-0.5*cos(PI*on/44))" in motion
-    assert "x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2'" in motion
+    assert "x='(iw-iw/zoom)*0.5':y='(ih-ih/zoom)*0.5'" in motion
     result = pipeline.run()
 
     artifact = runner.probe.video_artifact(result.output)
@@ -100,11 +100,12 @@ def test_football_tts_retries_only_temporary_provider_errors(tmp_path: Path):
 def test_football_ass_uses_timed_single_line_dialogues(tmp_path: Path):
     content = FootballHighlightInput.from_json("https://youtu.be/fixture", FootballHighlightInput.example_json())
     pipeline = FootballHighlightPipeline(content, output_folder=tmp_path / "output", workspace=tmp_path / "work", speech_factory=lambda: None)  # type: ignore[arg-type]
-    ass = pipeline._write_ass(
+    ass = pipeline.media._write_ass(
         "Manchester United mở tỷ số. Bruno Fernandes thực hiện đường kiến tạo.",
         1,
         5_000,
         timing_text="Man-chét-tơ Yu-nai-tịt mở tỷ số. Bru-nô Phéc-nan-đét thực hiện đường kiến tạo.",
+        cues=[(0, 2000, "Manchester United mở tỷ số."), (2000, 5000, "Bruno Fernandes thực hiện đường kiến tạo.")],
     )
     dialogues = [line for line in ass.read_text(encoding="utf-8-sig").splitlines() if line.startswith("Dialogue:")]
     assert len(dialogues) >= 2

@@ -207,3 +207,21 @@ Trong Layer Studio, Video và Voice không có thuộc tính layer riêng. Subti
 đặt tại một trong bốn góc bằng margin X/Y và kích thước chiều cao. Chữ chạy hiển thị xuyên suốt video,
 di chuyển chéo và nảy tại bốn cạnh; hỗ trợ màu, opacity, tốc độ và chữ đậm. Cấu hình layer được lưu
 trong project và cấu hình dùng gần nhất; layer đang tắt giữ nguyên các giá trị đã nhập.
+
+
+## Highlight bóng đá
+
+Nhập URL YouTube HTTPS và JSON gồm `match_minute`, `situation_type`, `frames`, `content`,
+`tts_text`. Timestamp trong `frames` là thời gian video nguồn; phút trận đấu chỉ để hiển thị.
+Giữ dấu câu tương ứng giữa `content` và `tts_text` để phụ đề căn theo từng câu/cụm voice.
+
+- Hiện phút/loại tình huống, ưu tiên thời lượng ảnh finish/goal và điều chỉnh điểm focus.
+- Tùy chọn dùng clip tối đa 3 giây từ mỗi timestamp rồi giữ hình; audio nguồn luôn tắt.
+- Chọn file nhạc nền nếu cần; nhạc tự giảm khi có lời đọc.
+- **Xem thử tình huống #N** render một đoạn trước khi xuất toàn bộ. Preview dùng cùng cache.
+- Output gồm `highlight.mp4`, `cover.jpg` từ frame đã render và thumbnail YouTube nếu có.
+- Stop hủy worker/process của job; chạy lại tận dụng artifact đã kiểm tra checksum.
+
+Xem [tài liệu Highlight](feature/hightlight-bong-da.md) và
+[kế hoạch/kiểm chứng](plan-highlight-bong-da.md). Bản sửa ngày 2026-09-06 đã kiểm chứng bằng
+fixture FFmpeg; còn cần nghe/xem lại với YouTube và TTS thật.

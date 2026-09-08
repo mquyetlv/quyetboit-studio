@@ -31,6 +31,7 @@ def test_highlight_football_menu_and_json_validation(qtbot, tmp_path):
     window.highlight.youtube_url.setText("https://youtu.be/example")
     assert window.highlight.validate() is not None
     assert window.minigame.shutdown()
+    window.set_dirty(False)
 
 
 def test_highlight_football_keeps_non_sensitive_voice_configuration(qtbot, tmp_path):
@@ -61,6 +62,7 @@ def test_highlight_football_keeps_non_sensitive_voice_configuration(qtbot, tmp_p
     assert page.ken_burns_start.value() == 1.02
     assert page.ken_burns_end.value() == 1.20
     assert window.minigame.shutdown()
+    window.set_dirty(False)
 
 
 def test_english_menu_has_three_placeholder_pages(qtbot, tmp_path):

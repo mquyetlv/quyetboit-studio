@@ -35,9 +35,21 @@ class FootballRenderConfig:
     subtitle_background_color: str = "#000000"
     subtitle_background_opacity: int = 60
 
+    show_event: bool = True
+    emphasize_finish: bool = True
+    use_motion: bool = False
+    music_path: str = ""
+    focus_x: float = 0.5
+    focus_y: float = 0.5
+
     def __post_init__(self) -> None:
+        if not 0 <= self.focus_x <= 1 or not 0 <= self.focus_y <= 1:
+            raise ValueError("Điểm focus phải nằm trong khung hình.")
         if not 1.0 <= self.ken_burns_start_zoom < self.ken_burns_end_zoom <= 1.30:
             raise ValueError("Zoom Ken Burns phải nằm trong 1.00–1.30 và zoom kết thúc phải lớn hơn zoom bắt đầu.")
+        for name in ("top_font_color", "top_background_color", "subtitle_font_color", "subtitle_background_color"):
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", getattr(self, name)):
+                raise ValueError("Màu phải có định dạng #RRGGBB.")
         if self.subtitle_position not in {"top", "bottom"}:
             raise ValueError("Vị trí phụ đề chỉ có thể là trên hoặc dưới.")
         for name in ("top_font_size", "subtitle_font_size"):
@@ -46,6 +58,9 @@ class FootballRenderConfig:
         for name in ("top_margin", "subtitle_margin"):
             if not 0 <= getattr(self, name) <= 1000:
                 raise ValueError("Margin phải nằm trong 0–1000 px.")
+        for prefix in ("top", "subtitle"):
+            if getattr(self, prefix + "_margin") + round(getattr(self, prefix + "_font_size") * 1.5) > 1080:
+                raise ValueError("Margin và cỡ chữ làm chữ vượt khung hình 1080p.")
         for name in ("top_background_opacity", "subtitle_background_opacity"):
             if not 0 <= getattr(self, name) <= 100:
                 raise ValueError("Opacity nền phải nằm trong 0–100%.")
@@ -58,6 +73,14 @@ class FootballSegment:
     frames: dict[str, str | list[str]]
     content: str
     tts_text: str
+
+    def frame_weights(self) -> list[float]:
+        weights = []
+        for key, value in self.frames.items():
+            candidates = value if isinstance(value, list) else [value]
+            important = any(token in key.casefold() for token in ("finish", "goal", "celebration", "dứt", "bàn"))
+            weights.extend(1.6 if important else 1.0 for item in candidates if item.strip().casefold() not in _SKIP_FRAME)
+        return weights
 
     def timestamps(self) -> list[str]:
         values: list[str] = []
@@ -81,7 +104,7 @@ class FootballHighlightInput:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower().rstrip(".")
         accepted = {"youtube.com", "youtu.be", "youtube-nocookie.com"}
-        if parsed.scheme != "https" or not any(host == item or host.endswith(f".{item}") for item in accepted):
+        if parsed.username or parsed.password or parsed.scheme != "https" or not any(host == item or host.endswith(f".{item}") for item in accepted):
             raise ValueError("URL nguồn phải là liên kết HTTPS của YouTube hoặc youtu.be.")
         return url
 
@@ -124,7 +147,10 @@ class FootballHighlightInput:
                 raise ValueError(f"{label}.content không được để trống.")
             if not row["tts_text"].strip():
                 raise ValueError(f"{label}.tts_text không được để trống.")
-            segments.append(FootballSegment(row["match_minute"].strip(), row["situation_type"].strip(), clean_frames, row["content"].strip(), row["tts_text"].strip()))
+            segment = FootballSegment(row["match_minute"].strip(), row["situation_type"].strip(), clean_frames, row["content"].strip(), row["tts_text"].strip())
+            if not segment.timestamps():
+                raise ValueError(f"{label} không có timestamp ảnh; hãy bổ sung frames.")
+            segments.append(segment)
         return cls(source, tuple(segments))
 
     def to_dict(self) -> dict[str, object]:

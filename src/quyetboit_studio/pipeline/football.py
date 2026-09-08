@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
-
-from PIL import Image
 
 from ..core.football import FootballHighlightInput, FootballRenderConfig, FootballSegment
 from ..core.models import (
@@ -15,15 +12,20 @@ from ..core.models import (
     PipelineError,
     ProgressCallback,
     ProgressEvent,
-    VideoArtifact,
+    sha256_file,
     stable_hash,
 )
-from ..services.media.ffmpeg import FFmpegRunner, FilterGraphBuilder
+from ..services.media.ffmpeg import FFmpegRunner
+from ..services.media.football import FootballMediaService
+from ..services.media.football_cache import cache_record, cache_valid
+from ..services.subtitles.football import paired_clauses
 from ..services.youtube import YouTubeDownload, YouTubeDownloader
 
 
 class FootballSpeechService(Protocol):
-    def synthesize(self, text: str, output: Path, *, cancel: CancellationToken | None = None) -> Path: ...
+    def synthesize(
+        self, text: str, output: Path, *, cancel: CancellationToken | None = None
+    ) -> Path: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,27 +40,64 @@ class FootballHighlightPipeline:
 
     FADE_MS = 450
     OUTPUT_FPS = 30
-    def __init__(self, content: FootballHighlightInput, *, output_folder: Path, workspace: Path,
-                 speech_factory: Callable[[], FootballSpeechService], runner: FFmpegRunner | None = None,
-                 downloader: YouTubeDownloader | None = None, burn_subtitles: bool = True,
-                 cancel: CancellationToken | None = None, tts_suffix: str = ".wav",
-                 voice_cache_key: dict[str, object] | None = None,
-                 render_config: FootballRenderConfig | None = None) -> None:
+
+    def __init__(
+        self,
+        content: FootballHighlightInput,
+        *,
+        output_folder: Path,
+        workspace: Path,
+        speech_factory: Callable[[], FootballSpeechService],
+        runner: FFmpegRunner | None = None,
+        downloader: YouTubeDownloader | None = None,
+        burn_subtitles: bool = True,
+        cancel: CancellationToken | None = None,
+        tts_suffix: str = ".wav",
+        voice_cache_key: dict[str, object] | None = None,
+        render_config: FootballRenderConfig | None = None,
+    ) -> None:
         self.content, self.output_folder, self.workspace = content, output_folder, workspace
         self.speech_factory, self.runner = speech_factory, runner or FFmpegRunner()
-        self.downloader, self.burn_subtitles, self.cancel = downloader or YouTubeDownloader(self.runner), burn_subtitles, cancel or CancellationToken()
+        self.downloader, self.burn_subtitles, self.cancel = (
+            downloader or YouTubeDownloader(self.runner),
+            burn_subtitles,
+            cancel or CancellationToken(),
+        )
         self.tts_suffix = tts_suffix if tts_suffix.startswith(".") else f".{tts_suffix}"
         self.voice_cache_key = voice_cache_key or {}
         self.render_config = render_config or FootballRenderConfig()
+        self.media = FootballMediaService(
+            self.workspace, self.runner, self.render_config, self.cancel
+        )
 
     def cancel_run(self) -> None:
         self.cancel.cancel()
 
     def run(self, progress: ProgressCallback | None = None) -> FootballResult:
         self.cancel.raise_if_cancelled()
-        self.workspace.mkdir(parents=True, exist_ok=True); self.output_folder.mkdir(parents=True, exist_ok=True)
-        self._emit(progress, .02, "Đang tải video YouTube")
-        downloaded = self.downloader.download(self.content.youtube_url, self.workspace / "source", cancel=self.cancel)
+        if self.render_config.music_path:
+            self.runner.probe.audio_artifact(Path(self.render_config.music_path))
+        callback = progress
+        last = 0.0
+
+        def report(event: ProgressEvent) -> None:
+            nonlocal last
+            last = max(last, event.fraction)
+            if callback:
+                callback(ProgressEvent(event.step, last, event.message))
+
+        progress = report
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+        self._emit(progress, 0.02, "Đang tải video YouTube")
+        options = {"cancel": self.cancel}
+        if isinstance(self.downloader, YouTubeDownloader):
+            options["progress"] = lambda event: self._emit(
+                progress, 0.02 + 0.09 * event.fraction, event.message
+            )
+        downloaded = self.downloader.download(
+            self.content.youtube_url, self.workspace / "source", **options
+        )
         # Compatibility with narrow test/provider doubles retained during the public API transition.
         if isinstance(downloaded, tuple):
             title, source = downloaded
@@ -66,67 +105,107 @@ class FootballHighlightPipeline:
         title, source = downloaded.title, downloaded.source
         output_directory = self._available_output_directory(title)
         self._copy_thumbnail(downloaded.thumbnail, output_directory)
-        speech = self.speech_factory(); rendered: list[Path] = []
+        speech = self.speech_factory()
+        rendered: list[Path] = []
         total = len(self.content.segments)
         for index, segment in enumerate(self.content.segments):
             self.cancel.raise_if_cancelled()
-            base = .12 + .76 * index / total
+            base = 0.12 + 0.76 * index / total
             self._emit(progress, base, f"Đang tạo voice {index + 1}/{total}")
-            audio_key = stable_hash({"text": segment.tts_text, "voice": self.voice_cache_key})[:20]
-            audio = self.workspace / "audio" / f"segment-{index + 1:03d}-{audio_key}.wav"
-            if not audio.is_file():
-                raw = audio.with_name(f"{audio.stem}.source{self.tts_suffix}")
-                self._synthesize_with_retry(speech, segment.tts_text, raw)
-                self._normalize_audio(raw, audio)
-            audio_artifact = self.runner.probe.audio_artifact(audio)
-            frames = self._extract_frames(source, segment, index)
-            ass = (
-                self._write_ass(
-                    segment.content,
-                    index,
-                    audio_artifact.duration_ms,
-                    timing_text=segment.tts_text,
-                )
-                if self.burn_subtitles
-                else None
+            frames = self.media._extract_frames(source, segment, index)
+            audio, cues = self._segment_speech(speech, segment, index)
+            ass = self.media._write_ass(
+                segment.content,
+                index,
+                self.runner.probe.audio_artifact(audio).duration_ms,
+                timing_text=segment.tts_text,
+                cues=cues if self.burn_subtitles else [],
+                event=f"{segment.match_minute} • {segment.situation_type}"
+                if self.render_config.show_event
+                else "",
             )
-            target = self.workspace / "segments" / f"segment-{index + 1:03d}.mp4"
-            self._render_segment(frames, audio, ass, target, progress, base, .76 / total)
+            visual_config = asdict(self.render_config)
+            visual_config.pop("music_path")
+            key = stable_hash(
+                {
+                    "frames": [sha256_file(path, self.cancel) for path in frames],
+                    "audio": sha256_file(audio, self.cancel),
+                    "ass": sha256_file(ass, self.cancel),
+                    "config": visual_config,
+                    "weights": segment.frame_weights(),
+                    "source": source.checksum,
+                    "timestamps": segment.timestamps(),
+                    "version": 4,
+                }
+            )
+            target = self.workspace / "segments" / f"segment-{index + 1:03d}-{key[:20]}.mp4"
+            if not cache_valid(target, key, self.cancel):
+                self.media._render_segment(
+                    frames,
+                    audio,
+                    ass,
+                    target,
+                    progress,
+                    base,
+                    0.76 / total,
+                    weights=segment.frame_weights()
+                    if self.render_config.emphasize_finish
+                    else None,
+                    source=source,
+                    timestamps=segment.timestamps(),
+                )
+                cache_record(target, key, self.cancel)
             rendered.append(target)
-        self._emit(progress, .90, "Đang ghép các phân đoạn")
+        self._emit(progress, 0.90, "Đang ghép các phân đoạn")
         output = self._available_output(output_directory)
-        self._concat(rendered, output, progress)
+        if self.render_config.music_path:
+            intermediate = self.workspace / "joined.mp4"
+            self.media._concat(rendered, intermediate, progress)
+            self.media._mix_music(intermediate, Path(self.render_config.music_path), output)
+        else:
+            self.media._concat(rendered, output, progress)
         artifact = self.runner.probe.video_artifact(output)
+        self.media.write_cover(output, output_directory)
         self._emit(progress, 1, "Đã tạo video Highlight bóng đá")
         return FootballResult(output, artifact.duration_ms, total)
 
-    def _extract_frames(self, source: VideoArtifact, segment: FootballSegment, index: int) -> list[Path]:
-        directory = self.workspace / "frames" / f"segment-{index + 1:03d}"; directory.mkdir(parents=True, exist_ok=True)
-        frames: list[Path] = []
-        for position, timestamp in enumerate(segment.timestamps()):
-            target = directory / f"frame-{position:03d}.jpg"
-            if not target.is_file():
+    def _segment_speech(
+        self, speech: FootballSpeechService, segment: FootballSegment, index: int
+    ) -> tuple[Path, list[tuple[int, int, str]]]:
+        clips, cues, cursor = [], [], 0
+        for display, spoken in paired_clauses(segment.content, segment.tts_text):
+            self.cancel.raise_if_cancelled()
+            key = stable_hash({"text": spoken, "voice": self.voice_cache_key, "normalizer": 3})
+            audio = self.workspace / "audio" / f"{key[:24]}.wav"
+            audio.parent.mkdir(parents=True, exist_ok=True)
+            if not cache_valid(audio, key, self.cancel):
+                raw = audio.with_name(f".{audio.stem}.source.partial{self.tts_suffix}")
                 try:
-                    self.runner.run(["-ss", timestamp, "-i", str(source.path), "-frames:v", "1", "-q:v", "2", str(target)], cancel=self.cancel)
-                except PipelineError:
-                    target.unlink(missing_ok=True)
-            if target.is_file(): frames.append(target)
-        if not frames:
-            fallback = directory / "fallback.jpg"
-            Image.new("RGB", (1920, 1080), "#0f172a").save(fallback, quality=92)
-            frames.append(fallback)
-        return frames
+                    self._synthesize_with_retry(speech, spoken, raw)
+                    self.media._normalize_audio(
+                        raw, audio, volume=float(self.voice_cache_key.get("volume", 100)) / 100
+                    )
+                    cache_record(audio, key, self.cancel)
+                finally:
+                    raw.unlink(missing_ok=True)
+                    raw.with_suffix(raw.suffix + ".partial").unlink(missing_ok=True)
+                    raw.with_name(f".{raw.stem}.partial{raw.suffix}").unlink(missing_ok=True)
+            duration = self.runner.probe.audio_artifact(audio).duration_ms
+            cues.append((cursor, cursor + duration, display))
+            cursor += duration
+            clips.append(audio)
+        if len(clips) == 1:
+            return clips[0], cues
+        key = stable_hash([sha256_file(path, self.cancel) for path in clips])
+        audio = self.workspace / "audio" / f"joined-{key[:24]}.wav"
+        if not cache_valid(audio, key, self.cancel):
+            self.media._join_voice(clips, audio)
+            cache_record(audio, key, self.cancel)
+        return audio, cues
 
-    def _normalize_audio(self, source: Path, target: Path) -> None:
-        partial = target.with_name(f".{target.stem}.partial.wav")
-        try:
-            self.runner.run(["-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(partial)], cancel=self.cancel)
-            self.runner.probe.audio_artifact(partial)
-            os.replace(partial, target)
-        finally:
-            partial.unlink(missing_ok=True)
-
-    def _synthesize_with_retry(self, speech: FootballSpeechService, text: str, output: Path) -> None:
+    def _synthesize_with_retry(
+        self, speech: FootballSpeechService, text: str, output: Path
+    ) -> None:
         """Retry only provider-declared temporary TTS failures; cancellation is immediate."""
         for attempt in range(3):
             self.cancel.raise_if_cancelled()
@@ -141,188 +220,24 @@ class FootballHighlightPipeline:
                     self.cancel.raise_if_cancelled()
         raise AssertionError("TTS retry loop must return or raise.")
 
-    def _render_segment(self, frames: list[Path], audio: Path, ass: Path | None, target: Path,
-                        progress: ProgressCallback | None, base: float, span: float) -> None:
-        duration = self.runner.probe.audio_artifact(audio).duration_ms
-        per_frame = max(0.7, duration / 1000 / len(frames)); fade = min(self.FADE_MS / 1000, per_frame / 3)
-        partial = target.with_name(f".{target.stem}.partial.mp4"); target.parent.mkdir(parents=True, exist_ok=True)
-        args: list[str] = []
-        # Loop at the delivery cadence so each zoompan output frame maps to one
-        # display frame; this keeps the configured motion smooth and predictable.
-        for frame in frames: args += ["-loop", "1", "-framerate", str(self.OUTPUT_FPS), "-t", f"{per_frame:.3f}", "-i", str(frame)]
-        args += ["-i", str(audio)]
-        chains: list[str] = []
-        for i in range(len(frames)):
-            chains.append(self._ken_burns_filter(i, per_frame))
-        label = "[v0]"
-        for i in range(1, len(frames)):
-            offset = i * per_frame - i * fade
-            chains.append(f"{label}[v{i}]xfade=transition=fade:duration={fade:.3f}:offset={offset:.3f}[x{i}]")
-            label = f"[x{i}]"
-        if ass:
-            label = self._subtitle_background_filter(chains, label)
-            escaped = str(ass.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-            chains.append(f"{label}subtitles='{escaped}'[outv]"); label = "[outv]"
-        if self.render_config.top_text.strip():
-            chains.append(self._top_text_filter(label)); label = "[title]"
-        # libass/JPEG inputs can otherwise leave the final MP4 tagged yuvj444p,
-        # which Windows Media Player does not decode on many installations.
-        chains.append(f"{label}scale=in_range=full:out_range=tv,format=yuv420p[compat]")
-        label = "[compat]"
-        args += ["-filter_complex", ";".join(chains), "-map", label, "-map", f"{len(frames)}:a", "-c:v", "libx264", "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(partial)]
-        try:
-            self.runner.run(args, duration_ms=duration, progress=lambda event: self._emit(progress, base + span * event.fraction, f"Render segment — {event.message}"), cancel=self.cancel)
-            self.runner.probe.video_artifact(partial); os.replace(partial, target)
-        finally:
-            partial.unlink(missing_ok=True)
-
-    def _ken_burns_filter(self, index: int, duration_seconds: float) -> str:
-        """Build a configured centered 30 fps camera push-in without lateral shake."""
-        frames = max(1, round(duration_seconds * self.OUTPUT_FPS))
-        start = self.render_config.ken_burns_start_zoom
-        end = self.render_config.ken_burns_end_zoom
-        # `on` is zoompan's output-frame number. d=1 and a 30 fps looping input
-        # avoid the old d=<segment frame count> burst/reset behaviour. The cosine
-        # curve has zero velocity at both ends, so the move eases in and out.
-        # This deliberately operates at delivery resolution. It applies the full
-        # start/end range selected in the UI; a 4K intermediate adds cost without
-        # making the zoom smoother.
-        # Keep the crop at the image centre: changing focus for each frame made
-        # consecutive xfade transitions look like a lateral shake.
-        denominator = max(1, frames - 1)
-        return (
-            f"[{index}:v]scale=1920:1080:force_original_aspect_ratio=increase,"
-            "crop=1920:1080,setsar=1,"
-            f"zoompan=z='{start:.8f}+{end - start:.8f}*(0.5-0.5*cos(PI*on/{denominator}))':"
-            "x='(iw-iw/zoom)/2':"
-            "y='(ih-ih/zoom)/2':"
-            f"d=1:s=1920x1080:fps={self.OUTPUT_FPS},trim=duration={duration_seconds:.3f},"
-            f"setpts=PTS-STARTPTS[v{index}]"
-        )
-
-    def _concat(self, segments: list[Path], output: Path, progress: ProgressCallback | None) -> None:
-        partial = output.with_name(f".{output.stem}.partial.mp4")
-        durations = [self.runner.probe.video_artifact(path).duration_ms / 1000 for path in segments]
-        fade = min(self.FADE_MS / 1000, *(duration / 3 for duration in durations))
-        args: list[str] = []
-        for segment in segments:
-            args += ["-i", str(segment)]
-        chains: list[str] = []
-        for index in range(len(segments)):
-            chains.append(f"[{index}:v]fps={self.OUTPUT_FPS},format=yuv420p,setpts=PTS-STARTPTS[v{index}]")
-            chains.append(f"[{index}:a]aresample=48000,asetpts=PTS-STARTPTS[a{index}]")
-        video, audio, cursor = "[v0]", "[a0]", durations[0]
-        for index in range(1, len(segments)):
-            offset = max(0, cursor - fade)
-            chains.append(f"{video}[v{index}]xfade=transition=fade:duration={fade:.3f}:offset={offset:.3f}[vx{index}]")
-            chains.append(f"{audio}[a{index}]acrossfade=d={fade:.3f}:c1=tri:c2=tri[ax{index}]")
-            video, audio, cursor = f"[vx{index}]", f"[ax{index}]", cursor + durations[index] - fade
-        args += ["-filter_complex", ";".join(chains), "-map", video, "-map", audio, "-c:v", "libx264", "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(partial)]
-        try:
-            self.runner.run(args, duration_ms=round(cursor * 1000), progress=lambda event: self._emit(progress, .90 + .10 * event.fraction, event.message), cancel=self.cancel)
-            self.runner.probe.video_artifact(partial); os.replace(partial, output)
-        finally: partial.unlink(missing_ok=True)
-
-    def _write_ass(
-        self,
-        text: str,
-        index: int,
-        duration_ms: int,
-        *,
-        timing_text: str | None = None,
-    ) -> Path:
-        path = self.workspace / "subtitles" / f"segment-{index + 1:03d}.ass"; path.parent.mkdir(parents=True, exist_ok=True)
-        cues = self._subtitle_cues(text, duration_ms, timing_text=timing_text)
-        dialogues = "".join(
-            "Dialogue: 0,"
-            f"{self._ass_time(start_ms)},{self._ass_time(end_ms)},Default,,0,0,0,,"
-            f"{{\\an5\\pos(960,{self._subtitle_box_center_y()})}}{self._escape_ass(cue)}\n"
-            for start_ms, end_ms, cue in cues
-        )
-        font_name = FilterGraphBuilder._font_family(self._font_path())
-        path.write_text(
-            "[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\n"
-            "WrapStyle: 0\nScaledBorderAndShadow: yes\n[V4+ Styles]\n"
-            "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,"
-            "BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
-            "BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
-            f"Style: Default,{font_name},{self.render_config.subtitle_font_size},&H{self._ass_color(self.render_config.subtitle_font_color)},&H000000FF,&H00101010,&HFF000000,"
-            # Spacing -0.5 tightens the otherwise visibly loose libass tracking.
-            "-1,0,0,0,100,100,-0.5,0,1,2,1,5,90,90,0,1\n[Events]\n"
-            "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
-            + dialogues,
-            encoding="utf-8-sig",
-        )
-        return path
-
-    @staticmethod
-    def _ass_time(value_ms: int) -> str:
-        hours, remainder = divmod(max(0, value_ms), 3_600_000)
-        minutes, remainder = divmod(remainder, 60_000)
-        seconds, milliseconds = divmod(remainder, 1_000)
-        return f"{hours}:{minutes:02d}:{seconds:02d}.{milliseconds // 10:02d}"
-
-    @staticmethod
-    def _escape_ass(value: str) -> str:
-        return value.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-
-    @classmethod
-    def _subtitle_cues(
-        cls,
-        text: str,
-        duration_ms: int,
-        limit: int = 42,
-        *,
-        timing_text: str | None = None,
-    ) -> list[tuple[int, int, str]]:
-        """Display content while deriving cue timing weights from the spoken TTS text."""
-        chunks = cls._subtitle_chunks(text, limit)
-        timing_chunks = cls._subtitle_chunks(timing_text or text, limit)
-        if not chunks:
-            return [(0, max(1, duration_ms), "")]
-        weights = (
-            [max(1, len(chunk)) for chunk in timing_chunks]
-            if len(timing_chunks) == len(chunks)
-            else [max(1, len(chunk)) for chunk in chunks]
-        )
-        total_weight = sum(weights)
-        cursor, output = 0, []
-        for index, chunk in enumerate(chunks):
-            remaining = max(1, duration_ms - cursor)
-            allocated = remaining if index == len(chunks) - 1 else max(
-                500, round(duration_ms * weights[index] / total_weight)
-            )
-            end = min(duration_ms, cursor + allocated)
-            if end <= cursor:
-                end = cursor + 1
-            output.append((cursor, end, chunk))
-            cursor = end
-        return output
-
-    @staticmethod
-    def _subtitle_chunks(text: str, limit: int) -> list[str]:
-        sentences = [item.strip() for item in re.split(r"(?<=[.!?…])\s+", text.replace("\n", " ")) if item.strip()]
-        chunks: list[str] = []
-        for sentence in sentences or [text.strip()]:
-            # Prefer natural clause boundaries before falling back to word boundaries.
-            clauses = [item.strip(" ,") for item in re.split(r"(?<=[,;:])\s+", sentence) if item.strip(" ,")]
-            for clause in clauses:
-                words = clause.split(); current = ""
-                for word in words:
-                    candidate = f"{current} {word}".strip()
-                    if current and len(candidate) > limit:
-                        chunks.append(current); current = word
-                    else:
-                        current = candidate
-                if current:
-                    chunks.append(current)
-        return chunks
-
     def _available_output_directory(self, title: str) -> Path:
-        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .") or "football_highlight"
-        target = self.output_folder / safe; n = 2
+        safe = (
+            re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .")[:100] or "football_highlight"
+        )
+        if safe.split(".")[0].upper() in {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            *(f"COM{i}" for i in range(1, 10)),
+            *(f"LPT{i}" for i in range(1, 10)),
+        }:
+            safe = "_" + safe
+        target = self.output_folder / safe
+        n = 2
         while target.exists() and (not target.is_dir() or any(target.iterdir())):
-            target = self.output_folder / f"{safe}_{n}"; n += 1
+            target = self.output_folder / f"{safe}_{n}"
+            n += 1
         target.mkdir(parents=True, exist_ok=True)
         return target
 
@@ -337,57 +252,14 @@ class FootballHighlightPipeline:
         target.write_bytes(thumbnail.read_bytes())
 
     def _available_output(self, directory: Path) -> Path:
-        target = directory / "highlight.mp4"; n = 2
-        while target.exists(): target = directory / f"highlight_{n}.mp4"; n += 1
+        target = directory / "highlight.mp4"
+        n = 2
+        while target.exists():
+            target = directory / f"highlight_{n}.mp4"
+            n += 1
         return target
 
     @staticmethod
-    def _ass_color(value: str) -> str:
-        clean = value.strip().lstrip("#")
-        if len(clean) != 6 or not all(char in "0123456789abcdefABCDEF" for char in clean):
-            clean = "FFFFFF"
-        return f"00{clean[4:6]}{clean[2:4]}{clean[:2]}"
-
-    def _subtitle_background_filter(self, chains: list[str], label: str) -> str:
-        config = self.render_config
-        if config.subtitle_background_opacity <= 0:
-            return label
-        height = round(config.subtitle_font_size * 1.5)
-        y = config.subtitle_margin if config.subtitle_position == "top" else 1080 - config.subtitle_margin - height
-        color = config.subtitle_background_color.strip() or "#000000"
-        chains.append(f"{label}drawbox=x=0:y={y}:w=iw:h={height}:color={color}@{config.subtitle_background_opacity / 100:.4g}:t=fill[subbg]")
-        return "[subbg]"
-
-    def _subtitle_box_center_y(self) -> int:
-        config = self.render_config
-        height = round(config.subtitle_font_size * 1.5)
-        y = config.subtitle_margin if config.subtitle_position == "top" else 1080 - config.subtitle_margin - height
-        return y + height // 2
-
-    @staticmethod
-    def _font_path() -> Path | None:
-        """One font source for the title drawtext and subtitle libass style."""
-        return FilterGraphBuilder._font_path(False)
-
-    def _top_text_filter(self, label: str) -> str:
-        config = self.render_config
-        height = round(config.top_font_size * 1.5); y = config.top_margin
-        color = config.top_background_color.strip() or "#000000"
-        escaped = self._escape_drawtext(config.top_text.strip())
-        font = self._font_path()
-        font_option = (
-            f"fontfile='{FilterGraphBuilder.escape_path(str(font))}':" if font else ""
-        )
-        return (
-            f"{label}drawbox=x=0:y={y}:w=iw:h={height}:color={color}@{config.top_background_opacity / 100:.4g}:t=fill[titlebg];"
-            f"[titlebg]drawtext={font_option}text='{escaped}':fontsize={config.top_font_size}:fontcolor={config.top_font_color}:"
-            f"x=(w-text_w)/2:y={y}+({height}-text_h)/2:fix_bounds=1[title]"
-        )
-
-    @staticmethod
-    def _escape_drawtext(value: str) -> str:
-        return value.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "\\%").replace("\n", " ")
-
-    @staticmethod
     def _emit(callback: ProgressCallback | None, fraction: float, message: str) -> None:
-        if callback: callback(ProgressEvent(0, max(0, min(1, fraction)), message))
+        if callback:
+            callback(ProgressEvent(0, max(0, min(1, fraction)), message))

@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -27,8 +28,9 @@ from PySide6.QtWidgets import (
 from .core.football import FootballHighlightInput, FootballRenderConfig
 from .core.models import CancellationToken, ProgressEvent
 from .minigame_voice import MinigameVoiceDialog
+from .persistence import redact_text
 from .pipeline.football import FootballHighlightPipeline
-from .services.minigame_tts import CapCutEnglishSpeechService, GoogleCloudSpeechService
+from .services.football_worker import FootballSpeechAdapter
 
 
 class FootballWorker(QObject):
@@ -64,6 +66,7 @@ class HighlightFootballPage(QWidget):
         self.thread: QThread | None = None
         self.worker: FootballWorker | None = None
         self.pipeline: FootballHighlightPipeline | None = None
+        self.service_account_path = ""
         self.voice_provider = "capcut"
         self.voice_id = ""
         self.voice_name = "Chưa chọn giọng"
@@ -78,17 +81,29 @@ class HighlightFootballPage(QWidget):
         title = QLabel("Highlight bóng đá")
         title.setObjectName("Title")
         root.addWidget(title)
-        subtitle = QLabel("Tạo video 16:9 từ frame YouTube, kịch bản JSON và lời đọc TTS.")
+        subtitle = QLabel("Tạo video 16:9 từ ảnh hoặc clip YouTube, kịch bản JSON và lời đọc.")
         subtitle.setObjectName("Subtitle")
         root.addWidget(subtitle)
 
-        card = QFrame(); card.setObjectName("Card")
+        card = QFrame(); self.config_card = card; card.setObjectName("Card")
         form = QFormLayout(card); form.setContentsMargins(20, 18, 20, 18); form.setSpacing(12)
         self.youtube_url = QLineEdit(); self.youtube_url.setPlaceholderText("https://www.youtube.com/watch?v=…")
         self.voice_summary = QLabel(); self.voice_summary.setObjectName("Subtitle"); self.voice_summary.setWordWrap(True)
         self.voice_config = QPushButton("Cấu hình voice…"); self.voice_config.clicked.connect(self._open_voice_dialog)
         voice_row = QWidget(); voice_layout = QHBoxLayout(voice_row); voice_layout.setContentsMargins(0, 0, 0, 0); voice_layout.addWidget(self.voice_summary, 1); voice_layout.addWidget(self.voice_config)
         self.voice_rate_input = QDoubleSpinBox(); self.voice_rate_input.setRange(0.50, 2.00); self.voice_rate_input.setSingleStep(0.05); self.voice_rate_input.setDecimals(2); self.voice_rate_input.setValue(self.voice_rate); self.voice_rate_input.setSuffix("×")
+        self.show_event = QCheckBox("Hiện phút thi đấu và loại tình huống"); self.show_event.setChecked(True)
+        self.emphasize_finish = QCheckBox("Giữ ảnh finish/goal lâu hơn"); self.emphasize_finish.setChecked(True)
+        self.use_motion = QCheckBox("Dùng clip tối đa 3 giây từ mỗi timestamp, sau đó giữ hình")
+        self.music_path = QLineEdit(); self.music_path.setPlaceholderText("Không chọn: chỉ có lời đọc")
+        music_browse = QPushButton("Chọn nhạc…"); music_browse.clicked.connect(self._browse_music)
+        music_row = QWidget(); music_layout = QHBoxLayout(music_row); music_layout.setContentsMargins(0, 0, 0, 0)
+        music_layout.addWidget(self.music_path, 1); music_layout.addWidget(music_browse)
+        self.focus_x = QDoubleSpinBox(); self.focus_y = QDoubleSpinBox()
+        focus_row = QWidget(); focus_layout = QHBoxLayout(focus_row); focus_layout.setContentsMargins(0, 0, 0, 0)
+        for label, field in (("Ngang", self.focus_x), ("Dọc", self.focus_y)):
+            field.setRange(0, 100); field.setValue(50); field.setSuffix("%")
+            focus_layout.addWidget(QLabel(label)); focus_layout.addWidget(field)
         self.burn_subtitles = QCheckBox("Đốt phụ đề từ content"); self.burn_subtitles.setChecked(True)
         self.top_text = QLineEdit(); self.top_text.setPlaceholderText("Ví dụ: Highlight trận đấu")
         self.top_font_size = QSpinBox(); self.top_font_size.setRange(12, 200); self.top_font_size.setValue(48); self.top_font_size.setSuffix(" px")
@@ -109,26 +124,38 @@ class HighlightFootballPage(QWidget):
         browse = QPushButton("Chọn thư mục…"); browse.clicked.connect(self._browse)
         output_row = QWidget(); output_layout = QHBoxLayout(output_row); output_layout.setContentsMargins(0, 0, 0, 0); output_layout.addWidget(self.output_folder, 1); output_layout.addWidget(browse)
         form.addRow("Video YouTube", self.youtube_url); form.addRow("Giọng đọc", voice_row); form.addRow("Tốc độ đọc", self.voice_rate_input); form.addRow("Chữ đầu video", top_row); form.addRow("Màu/nền chữ đầu", self._style_row(self.top_font_color, self.top_background_color, self.top_background_opacity)); form.addRow("Phụ đề", self.burn_subtitles); form.addRow("Kiểu phụ đề", subtitle_row); form.addRow("Màu/nền phụ đề", self._style_row(self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity)); form.addRow("Zoom ảnh (Ken Burns)", zoom_row); form.addRow("Thư mục xuất", output_row)
-        root.addWidget(card)
+        form.addRow("Thông tin tình huống", self.show_event)
+        form.addRow("Nhịp dựng", self.emphasize_finish)
+        form.addRow("Clip chuyển động", self.use_motion)
+        form.addRow("Điểm focus", focus_row)
+        form.addRow("Nhạc nền (tự giảm khi đọc)", music_row)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(card)
+        scroll.setMinimumHeight(180); scroll.setMaximumHeight(420)
+        root.addWidget(scroll)
         json_heading = QLabel("Kịch bản JSON")
         json_heading.setObjectName("SectionTitle")
         root.addWidget(json_heading)
         self.json_editor = QPlainTextEdit(); self.json_editor.setPlaceholderText("Mỗi phần tử chứa match_minute, situation_type, frames, content và tts_text."); self.json_editor.setMinimumHeight(250); self.json_editor.setPlainText(FootballHighlightInput.example_json())
         root.addWidget(self.json_editor, 1)
-        actions = QHBoxLayout(); sample = QPushButton("Dùng JSON mẫu"); sample.clicked.connect(lambda: self.json_editor.setPlainText(FootballHighlightInput.example_json()))
+        actions = QHBoxLayout(); sample = QPushButton("Dùng JSON mẫu"); self.sample_button = sample; sample.clicked.connect(lambda: self.json_editor.setPlainText(FootballHighlightInput.example_json()))
         copy = QPushButton("Sao chép JSON mẫu"); copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(FootballHighlightInput.example_json()))
         self.validate_button = QPushButton("Kiểm tra dữ liệu"); self.validate_button.clicked.connect(self.validate)
         actions.addWidget(sample); actions.addWidget(copy); actions.addStretch(); actions.addWidget(self.validate_button); root.addLayout(actions)
-        self.status = QLabel("Bước render chưa kích hoạt: hãy kiểm tra dữ liệu trước khi lập job.")
+        self.status = QLabel("Chọn giọng đọc, nhập URL và JSON; có thể xem thử một tình huống trước khi tạo toàn bộ video.")
         self.status.setObjectName("Subtitle"); self.status.setWordWrap(True); root.addWidget(self.status)
         job = QFrame(); job.setObjectName("Card")
         job_layout = QHBoxLayout(job); job_layout.setContentsMargins(16, 12, 16, 12); job_layout.setSpacing(10)
         self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0); self.progress.setFormat("Sẵn sàng tạo video")
-        self.start_button = QPushButton("▶  Tạo video"); self.start_button.setObjectName("PrimaryButton"); self.start_button.clicked.connect(self.start)
+        self.preview_button = QPushButton("Xem thử tình huống")
+        self.preview_index = QSpinBox(); self.preview_index.setRange(1, 10000); self.preview_index.setPrefix("#")
+        self.preview_button.clicked.connect(lambda: self.start(preview=True))
+        self._preview_run = False
+        self.start_button = QPushButton("▶  Tạo video"); self.start_button.setObjectName("PrimaryButton"); self.start_button.clicked.connect(lambda: self.start())
         self.stop_button = QPushButton("■  Dừng"); self.stop_button.hide(); self.stop_button.clicked.connect(self.stop)
-        job_layout.addWidget(self.progress, 1); job_layout.addWidget(self.start_button); job_layout.addWidget(self.stop_button); root.addWidget(job)
+        job_layout.addWidget(self.progress, 1); job_layout.addWidget(self.preview_index); job_layout.addWidget(self.preview_button); job_layout.addWidget(self.start_button); job_layout.addWidget(self.stop_button); root.addWidget(job)
         self._update_voice_summary()
-        for widget in (self.youtube_url, self.burn_subtitles, self.voice_rate_input, self.ken_burns_start, self.ken_burns_end, self.output_folder, self.json_editor, self.top_text, self.top_font_size, self.top_margin, self.top_font_color, self.top_background_color, self.top_background_opacity, self.subtitle_position, self.subtitle_font_size, self.subtitle_margin, self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity):
+        self.voice_rate_input.valueChanged.connect(self._update_voice_summary)
+        for widget in (self.use_motion, self.music_path, self.focus_x, self.focus_y, self.show_event, self.emphasize_finish, self.youtube_url, self.burn_subtitles, self.voice_rate_input, self.ken_burns_start, self.ken_burns_end, self.output_folder, self.json_editor, self.top_text, self.top_font_size, self.top_margin, self.top_font_color, self.top_background_color, self.top_background_opacity, self.subtitle_position, self.subtitle_font_size, self.subtitle_margin, self.subtitle_font_color, self.subtitle_background_color, self.subtitle_background_opacity):
             signal = getattr(widget, "textChanged", None) or getattr(widget, "currentIndexChanged", None) or getattr(widget, "toggled", None)
             signal.connect(self._changed)
 
@@ -139,7 +166,12 @@ class HighlightFootballPage(QWidget):
         return row
 
     def _render_config(self) -> FootballRenderConfig:
-        return FootballRenderConfig(self.ken_burns_start.value(), self.ken_burns_end.value(), self.top_text.text(), self.top_font_size.value(), self.top_margin.value(), self.top_font_color.text(), self.top_background_color.text(), self.top_background_opacity.value(), self.subtitle_position.text().strip().lower(), self.subtitle_font_size.value(), self.subtitle_margin.value(), self.subtitle_font_color.text(), self.subtitle_background_color.text(), self.subtitle_background_opacity.value())
+        return FootballRenderConfig(self.ken_burns_start.value(), self.ken_burns_end.value(), self.top_text.text(), self.top_font_size.value(), self.top_margin.value(), self.top_font_color.text(), self.top_background_color.text(), self.top_background_opacity.value(), self.subtitle_position.text().strip().lower(), self.subtitle_font_size.value(), self.subtitle_margin.value(), self.subtitle_font_color.text(), self.subtitle_background_color.text(), self.subtitle_background_opacity.value(), self.show_event.isChecked(), self.emphasize_finish.isChecked(), self.use_motion.isChecked(), self.music_path.text().strip(), self.focus_x.value() / 100, self.focus_y.value() / 100)
+
+    def _browse_music(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn nhạc nền", self.music_path.text(), "Audio (*.mp3 *.wav *.m4a *.flac *.ogg)")
+        if path:
+            self.music_path.setText(path)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Chọn thư mục xuất", self.output_folder.text())
@@ -154,7 +186,7 @@ class HighlightFootballPage(QWidget):
         default_account = Path.cwd() / "services-account.json"
         dialog = MinigameVoiceDialog(
             provider=self.voice_provider,
-            service_account_path=str(default_account) if default_account.is_file() else "",
+            service_account_path=self.service_account_path or (str(default_account) if default_account.is_file() else ""),
             selected_voice_id=self.voice_id,
             selected_language=self.voice_language,
             volume=self.voice_volume,
@@ -166,6 +198,7 @@ class HighlightFootballPage(QWidget):
         config = dialog.configuration()
         if not config:
             return
+        self.service_account_path = str(config.get("service_account_path", ""))
         self.voice_provider = str(config["provider"])
         self.voice_id = str(config["voice"])
         self.voice_name = str(config["voice_name"])
@@ -186,14 +219,14 @@ class HighlightFootballPage(QWidget):
         try:
             payload = FootballHighlightInput.from_json(self.youtube_url.text(), self.json_editor.toPlainText())
             self._render_config()
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
             self.status.setText(f"Dữ liệu chưa hợp lệ: {exc}")
             return None
         timestamps = sum(len(item.timestamps()) for item in payload.segments)
         self.status.setText(f"Dữ liệu hợp lệ: {len(payload.segments)} phân đoạn, {timestamps} frame. Sẵn sàng cho pipeline nền.")
         return payload
 
-    def start(self) -> None:
+    def start(self, *, preview: bool = False) -> None:
         """Validate the job then hand all long-running media work to a QThread."""
         if self.thread is not None:
             self._show_problem("Video đang được tạo. Hãy chờ hoàn tất hoặc bấm Dừng.")
@@ -205,21 +238,39 @@ class HighlightFootballPage(QWidget):
         if not self.voice_id:
             self._show_problem("Chưa thể tạo video: hãy mở Cấu hình voice và chọn một giọng đọc.")
             return
-        if not self.output_folder.text().strip():
+        if not preview and not self.output_folder.text().strip():
             self._show_problem("Chưa thể tạo video: hãy chọn thư mục xuất.")
             return
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         workspace = local / "QuyetBoITStudio" / "workspaces" / self.project_uuid / "football"
-        def speech_factory():
-            if self.voice_provider == "google":
-                return GoogleCloudSpeechService(Path.cwd() / "services-account.json", self.voice_id, language_code=self.voice_language, volume=self.voice_volume, speaking_rate=self.voice_rate_input.value())
-            return CapCutEnglishSpeechService(self.voice_id, volume=self.voice_volume, rate=self.voice_rate_input.value(), categories=("vietnamese",))
-        self.pipeline = FootballHighlightPipeline(payload, output_folder=Path(self.output_folder.text()).expanduser(), workspace=workspace, speech_factory=speech_factory, burn_subtitles=self.burn_subtitles.isChecked(), cancel=CancellationToken(), tts_suffix=".wav" if self.voice_provider == "google" else ".mp3", voice_cache_key={"provider": self.voice_provider, "voice": self.voice_id, "language": self.voice_language, "volume": self.voice_volume, "rate": self.voice_rate_input.value()}, render_config=self._render_config())
+        voice = {"provider": self.voice_provider, "voice": self.voice_id, "language": self.voice_language,
+                 "volume": self.voice_volume, "rate": self.voice_rate_input.value()}
+        if preview:
+            index = self.preview_index.value() - 1
+            if index >= len(payload.segments):
+                self._show_problem("Số tình huống xem thử vượt số phân đoạn trong JSON.")
+                return
+            payload = FootballHighlightInput(payload.youtube_url, (payload.segments[index],))
+        self._preview_run = preview
+        output = Path(self.output_folder.text()).expanduser()
+        if preview:
+            output = workspace / "previews"
+        account_path = self.service_account_path
+        self.pipeline = FootballHighlightPipeline(payload, output_folder=output, workspace=workspace,
+            speech_factory=lambda: FootballSpeechAdapter(voice, account_path), burn_subtitles=self.burn_subtitles.isChecked(),
+            cancel=CancellationToken(), tts_suffix=".wav" if voice["provider"] == "google" else ".mp3",
+            voice_cache_key=voice, render_config=self._render_config())
         self.thread = QThread(self); self.worker = FootballWorker(self.pipeline); self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run); self.worker.progress.connect(self._progress); self.worker.succeeded.connect(self._succeeded); self.worker.failed.connect(self._failed)
-        self.worker.finished.connect(self.thread.quit); self.worker.finished.connect(self.worker.deleteLater); self.thread.finished.connect(self._finished)
+        self.worker.finished.connect(self.thread.quit, Qt.ConnectionType.DirectConnection); self.worker.finished.connect(self.worker.deleteLater); self.thread.finished.connect(self._finished)
+        self._set_job_controls(False)
         self.start_button.hide(); self.stop_button.show(); self.stop_button.setEnabled(True); self.progress.setValue(0); self.progress.setFormat("Đang khởi tạo…"); self.status.setText(f"Đang tạo {len(payload.segments)} phân đoạn ở worker nền…"); self.thread.start()
         self.window().statusBar().showMessage("Highlight bóng đá đã bắt đầu chạy nền.", 5_000) if hasattr(self.window(), "statusBar") else None
+
+    def _set_job_controls(self, enabled: bool) -> None:
+        for widget in (self.config_card, self.json_editor, self.sample_button, self.validate_button,
+                       self.preview_button, self.preview_index):
+            widget.setEnabled(enabled)
 
     def _show_problem(self, message: str) -> None:
         self.status.setText(message)
@@ -234,11 +285,19 @@ class HighlightFootballPage(QWidget):
     def _succeeded(self, result: object) -> None:
         self.progress.setValue(100); self.progress.setFormat("Hoàn thành"); self.status.setText(f"Đã tạo video: {result.output}")
 
+        if self._preview_run:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.output.resolve())))
+
     def _failed(self, error: object) -> None:
-        message = getattr(error, "user_message", str(error)); self.status.setText(f"Không thể tạo video: {message}")
+        if getattr(error, "error_code", "") == "cancelled":
+            self.status.setText("Đã dừng. Artifact hợp lệ được giữ để chạy tiếp.")
+            self.progress.setFormat("Đã dừng")
+            return
+        message = redact_text(getattr(error, "user_message", str(error))); self.status.setText(f"Không thể tạo video: {message}")
         QMessageBox.critical(self, "Tạo Highlight bóng đá thất bại", message)
 
     def _finished(self) -> None:
+        self._set_job_controls(True)
         if self.thread: self.thread.deleteLater()
         self.thread = None; self.worker = None; self.pipeline = None; self.stop_button.hide(); self.start_button.show(); self.start_button.setEnabled(True)
 
@@ -248,13 +307,19 @@ class HighlightFootballPage(QWidget):
         return self.thread is None or self.thread.wait(timeout_ms)
 
     def to_safe_dict(self) -> dict[str, object]:
-        return {"youtube_url": self.youtube_url.text().strip(), "json": self.json_editor.toPlainText(), "tts_provider": self.voice_provider, "voice": self.voice_id, "voice_name": self.voice_name, "voice_language": self.voice_language, "voice_gender": self.voice_gender, "voice_family": self.voice_family, "voice_categories": self.voice_categories, "voice_volume": self.voice_volume, "voice_rate": self.voice_rate_input.value(), "burn_subtitles": self.burn_subtitles.isChecked(), "ken_burns_start_zoom": self.ken_burns_start.value(), "ken_burns_end_zoom": self.ken_burns_end.value(), "top_text": self.top_text.text(), "top_font_size": self.top_font_size.value(), "top_margin": self.top_margin.value(), "top_font_color": self.top_font_color.text(), "top_background_color": self.top_background_color.text(), "top_background_opacity": self.top_background_opacity.value(), "subtitle_position": self.subtitle_position.text(), "subtitle_font_size": self.subtitle_font_size.value(), "subtitle_margin": self.subtitle_margin.value(), "subtitle_font_color": self.subtitle_font_color.text(), "subtitle_background_color": self.subtitle_background_color.text(), "subtitle_background_opacity": self.subtitle_background_opacity.value(), "output_folder": self.output_folder.text().strip()}
+        return {"use_motion": self.use_motion.isChecked(), "music_path": self.music_path.text().strip(), "focus_x": self.focus_x.value() / 100, "focus_y": self.focus_y.value() / 100, "show_event": self.show_event.isChecked(), "emphasize_finish": self.emphasize_finish.isChecked(), "youtube_url": self.youtube_url.text().strip(), "json": self.json_editor.toPlainText(), "tts_provider": self.voice_provider, "voice": self.voice_id, "voice_name": self.voice_name, "voice_language": self.voice_language, "voice_gender": self.voice_gender, "voice_family": self.voice_family, "voice_categories": self.voice_categories, "voice_volume": self.voice_volume, "voice_rate": self.voice_rate_input.value(), "burn_subtitles": self.burn_subtitles.isChecked(), "ken_burns_start_zoom": self.ken_burns_start.value(), "ken_burns_end_zoom": self.ken_burns_end.value(), "top_text": self.top_text.text(), "top_font_size": self.top_font_size.value(), "top_margin": self.top_margin.value(), "top_font_color": self.top_font_color.text(), "top_background_color": self.top_background_color.text(), "top_background_opacity": self.top_background_opacity.value(), "subtitle_position": self.subtitle_position.text(), "subtitle_font_size": self.subtitle_font_size.value(), "subtitle_margin": self.subtitle_margin.value(), "subtitle_font_color": self.subtitle_font_color.text(), "subtitle_background_color": self.subtitle_background_color.text(), "subtitle_background_opacity": self.subtitle_background_opacity.value(), "output_folder": self.output_folder.text().strip()}
 
     def set_settings(self, settings: dict, project_uuid: str | None = None) -> None:
         self._loading = True
         try:
             if project_uuid:
                 self.project_uuid = project_uuid
+            self.use_motion.setChecked(bool(settings.get("use_motion", False)))
+            self.music_path.setText(str(settings.get("music_path", "")))
+            self.focus_x.setValue(float(settings.get("focus_x", .5)) * 100)
+            self.focus_y.setValue(float(settings.get("focus_y", .5)) * 100)
+            self.show_event.setChecked(bool(settings.get("show_event", True)))
+            self.emphasize_finish.setChecked(bool(settings.get("emphasize_finish", True)))
             self.youtube_url.setText(str(settings.get("youtube_url", "")))
             self.json_editor.setPlainText(str(settings.get("json", FootballHighlightInput.example_json())))
             self.voice_provider = str(settings.get("tts_provider", "capcut"))

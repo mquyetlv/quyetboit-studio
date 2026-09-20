@@ -143,6 +143,14 @@ class HighlightFootballPage(QWidget):
         actions.addWidget(sample); actions.addWidget(copy); actions.addStretch(); actions.addWidget(self.validate_button); root.addLayout(actions)
         self.status = QLabel("Chọn giọng đọc, nhập URL và JSON; có thể xem thử một tình huống trước khi tạo toàn bộ video.")
         self.status.setObjectName("Subtitle"); self.status.setWordWrap(True); root.addWidget(self.status)
+        self.diagnostics = QPlainTextEdit()
+        self.diagnostics.setObjectName("FootballDiagnostics")
+        self.diagnostics.setReadOnly(True)
+        self.diagnostics.setMaximumBlockCount(100)
+        self.diagnostics.setFixedHeight(92)
+        self.diagnostics.setPlaceholderText("Nhật ký an toàn sẽ hiển thị tiến trình và mã lỗi đã lọc bí mật.")
+        root.addWidget(self.diagnostics)
+        self._last_log_message = ""
         job = QFrame(); job.setObjectName("Card")
         job_layout = QHBoxLayout(job); job_layout.setContentsMargins(16, 12, 16, 12); job_layout.setSpacing(10)
         self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0); self.progress.setFormat("Sẵn sàng tạo video")
@@ -210,6 +218,12 @@ class HighlightFootballPage(QWidget):
         self._update_voice_summary()
         self._changed()
 
+    def _google_service_account_path(self) -> str:
+        """Resolve a session-only Google credential path without persisting it."""
+        candidates = [Path(self.service_account_path).expanduser()] if self.service_account_path else []
+        candidates.append(Path.cwd() / "services-account.json")
+        return next((str(path.resolve()) for path in candidates if path.is_file()), "")
+
     def _update_voice_summary(self) -> None:
         provider = "Google Cloud TTS" if self.voice_provider == "google" else "CapCut TTS"
         details = " · ".join(item for item in (self.voice_language, self.voice_gender, self.voice_family) if item)
@@ -241,6 +255,15 @@ class HighlightFootballPage(QWidget):
         if not preview and not self.output_folder.text().strip():
             self._show_problem("Chưa thể tạo video: hãy chọn thư mục xuất.")
             return
+        account_path = ""
+        if self.voice_provider == "google":
+            account_path = self._google_service_account_path()
+            if not account_path:
+                self._show_problem(
+                    "Google TTS cần file service account hợp lệ cho phiên này. "
+                    "Mở Cấu hình voice, chọn lại file JSON rồi lưu."
+                )
+                return
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         workspace = local / "QuyetBoITStudio" / "workspaces" / self.project_uuid / "football"
         voice = {"provider": self.voice_provider, "voice": self.voice_id, "language": self.voice_language,
@@ -255,7 +278,6 @@ class HighlightFootballPage(QWidget):
         output = Path(self.output_folder.text()).expanduser()
         if preview:
             output = workspace / "previews"
-        account_path = self.service_account_path
         self.pipeline = FootballHighlightPipeline(payload, output_folder=output, workspace=workspace,
             speech_factory=lambda: FootballSpeechAdapter(voice, account_path), burn_subtitles=self.burn_subtitles.isChecked(),
             cancel=CancellationToken(), tts_suffix=".wav" if voice["provider"] == "google" else ".mp3",
@@ -264,7 +286,7 @@ class HighlightFootballPage(QWidget):
         self.thread.started.connect(self.worker.run); self.worker.progress.connect(self._progress); self.worker.succeeded.connect(self._succeeded); self.worker.failed.connect(self._failed)
         self.worker.finished.connect(self.thread.quit, Qt.ConnectionType.DirectConnection); self.worker.finished.connect(self.worker.deleteLater); self.thread.finished.connect(self._finished)
         self._set_job_controls(False)
-        self.start_button.hide(); self.stop_button.show(); self.stop_button.setEnabled(True); self.progress.setValue(0); self.progress.setFormat("Đang khởi tạo…"); self.status.setText(f"Đang tạo {len(payload.segments)} phân đoạn ở worker nền…"); self.thread.start()
+        self.start_button.hide(); self.stop_button.show(); self.stop_button.setEnabled(True); self.progress.setValue(0); self.progress.setFormat("Đang khởi tạo…"); self.status.setText(f"Đang tạo {len(payload.segments)} phân đoạn ở worker nền…"); self.diagnostics.clear(); self._last_log_message = ""; self._append_log(f"Bắt đầu: {len(payload.segments)} phân đoạn."); self.thread.start()
         self.window().statusBar().showMessage("Highlight bóng đá đã bắt đầu chạy nền.", 5_000) if hasattr(self.window(), "statusBar") else None
 
     def _set_job_controls(self, enabled: bool) -> None:
@@ -281,9 +303,17 @@ class HighlightFootballPage(QWidget):
 
     def _progress(self, value: int, message: str) -> None:
         self.progress.setValue(value); self.progress.setFormat(f"{value}%"); self.status.setText(message)
+        if message != self._last_log_message:
+            self._append_log(f"{value}% — {message}")
+
+    def _append_log(self, message: str) -> None:
+        safe = redact_text(message)
+        self.diagnostics.appendPlainText(safe)
+        self._last_log_message = message
 
     def _succeeded(self, result: object) -> None:
         self.progress.setValue(100); self.progress.setFormat("Hoàn thành"); self.status.setText(f"Đã tạo video: {result.output}")
+        self._append_log("Hoàn thành: video đã được kiểm tra trước khi xuất.")
 
         if self._preview_run:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.output.resolve())))
@@ -293,7 +323,11 @@ class HighlightFootballPage(QWidget):
             self.status.setText("Đã dừng. Artifact hợp lệ được giữ để chạy tiếp.")
             self.progress.setFormat("Đã dừng")
             return
-        message = redact_text(getattr(error, "user_message", str(error))); self.status.setText(f"Không thể tạo video: {message}")
+        message = redact_text(getattr(error, "user_message", str(error)))
+        code = redact_text(str(getattr(error, "error_code", type(error).__name__)))
+        detail = redact_text(str(getattr(error, "log_detail", "")))
+        self._append_log(f"LỖI [{code}]: {message}{f' ({detail})' if detail else ''}")
+        self.status.setText(f"Không thể tạo video [{code}]: {message}")
         QMessageBox.critical(self, "Tạo Highlight bóng đá thất bại", message)
 
     def _finished(self) -> None:

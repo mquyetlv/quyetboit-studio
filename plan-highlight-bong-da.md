@@ -1,11 +1,11 @@
 # Kế hoạch triển khai Highlight bóng đá
 
-## Tiến độ cập nhật ngày 2026-09-06
+## Tiến độ cập nhật ngày 2026-09-08
 
-- Hoàn thành: **23/26 task (88,46%)**.
-- Đang làm/đã có một phần: **2/26 task (7,69%)**.
-- Chưa triển khai: **0/26 task (0,00%)**.
-- Chờ credential/live test: **1/26 task (3,85%)**.
+- Hoàn thành: **24/27 task (88,89%)**.
+- Đang làm/đã có một phần: **2/27 task (7,41%)**.
+- Chưa triển khai: **0/27 task (0,00%)**.
+- Chờ credential/live test: **1/27 task (3,70%)**.
 
 ## Mốc 1 — Nền tảng UI và dữ liệu
 
@@ -44,6 +44,10 @@
 - [x] Xem thử tình huống theo số thứ tự ngoài Qt main thread; snapshot voice/config khi bắt đầu và khóa form trong lúc chạy; validate màu/margin, xử lý JSON sai type.
 - [x] Xuất `cover.jpg` từ frame đã render, cùng `highlight.mp4` và thumbnail nguồn; validate media trước rename atomic, font/path escape và GPU→CPU fallback có test.
 - [!] Live-test lại YouTube + CapCut/Google trên implementation mới: chưa gọi dịch vụ thật trong phiên sửa này; cần nghe đánh giá độ tự nhiên của voice chia cụm bằng video thật.
+
+## Mốc 5 — Chẩn đoán provider ngày 2026-09-08
+
+- [x] Sửa worker provider trên Windows bị crash khi in/đọc JSON tiếng Việt qua stdout/stdin cp1252: ép UTF-8 cho IPC hai chiều và đặt rõ import root khi khởi chạy process con. Highlight kiểm tra sớm service-account Google trong chính phiên của nó (không dùng/ghi credential từ Mini game), còn lỗi provider trả loại exception đã redact. Drain stderr không gây deadlock, chỉ trả mã thoát và phân loại an toàn (ví dụ thiếu module), không ghi/lộ stderr thô hay credential. Trang Highlight có nhật ký phiên đã redact và hiển thị error code. Regression kiểm tra IPC UTF-8, process lỗi, credential path và redaction.
 
 ### Kết quả kiểm thử phiên 2026-09-06
 

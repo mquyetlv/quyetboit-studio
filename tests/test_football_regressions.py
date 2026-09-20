@@ -321,6 +321,71 @@ def test_stop_kills_owned_blocking_provider_process(tmp_path, monkeypatch):
     assert not any(thread.name == "football-provider-cancel" for thread in threading.enumerate())
 
 
+def test_provider_process_failure_reports_safe_stderr_diagnostic(monkeypatch):
+    import io
+
+    import quyetboit_studio.services.football_worker as worker
+
+    class FailedProcess:
+        returncode = 1
+        stdin = io.StringIO()
+        stdout = io.StringIO()
+        stderr = io.StringIO("ModuleNotFoundError: No module named 'yt_dlp'\napi_key=must-not-appear")
+
+        def wait(self):
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+    captured = {}
+
+    def popen(_command, **kwargs):
+        captured.update(kwargs)
+        return FailedProcess()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", popen)
+    with pytest.raises(PipelineError) as raised:
+        worker.run_provider({"operation": "download"})
+
+    assert raised.value.error_code == "football_provider_process_failed"
+    assert raised.value.log_detail == "exit_code=1; missing_module=yt_dlp"
+    assert "must-not-appear" not in raised.value.log_detail
+    assert str(Path(worker.__file__).resolve().parents[2]) in captured["env"]["PYTHONPATH"]
+
+
+def test_provider_child_uses_utf8_for_vietnamese_json(tmp_path):
+    import os
+
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    result = subprocess.run(
+        [sys.executable, "-m", "quyetboit_studio.services.football_worker"],
+        input='{"operation":"invalid"}',
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=environment,
+        cwd=tmp_path,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["error"] == "football_provider_failed"
+
+
+def test_highlight_requires_a_google_service_account_for_its_own_session(qtbot, tmp_path, monkeypatch):
+    from quyetboit_studio.football import HighlightFootballPage
+
+    monkeypatch.chdir(tmp_path)
+    page = HighlightFootballPage()
+    qtbot.addWidget(page)
+    page.voice_provider = "google"
+    page.service_account_path = str(tmp_path / "missing-service-account.json")
+
+    assert page._google_service_account_path() == ""
+
+
 def test_render_stop_preserves_old_output_and_cleans_partial(media, tmp_path, monkeypatch):
     frames = pictures(tmp_path, 1)
     audio = tone(tmp_path / "voice.wav", duration=60)

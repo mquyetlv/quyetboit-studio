@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -11,6 +12,21 @@ import threading
 from pathlib import Path
 
 from ..core.models import CancellationToken, PipelineError, ProgressCallback, ProgressEvent
+from ..persistence import redact_text
+
+
+def _safe_stderr_detail(lines: list[str]) -> str:
+    """Summarize child stderr without retaining provider responses or credentials."""
+    value = "\n".join(lines)[-4_096:]
+    missing = re.search(r"(?:ModuleNotFoundError|ImportError): No module named ['\"]([^'\"]+)", value)
+    if missing:
+        module = re.sub(r"[^A-Za-z0-9_.-]", "", missing.group(1))[:120]
+        return f"missing_module={module}" if module else "missing_module"
+    if "DLL load failed" in value or "cannot open shared object file" in value:
+        return "native_dependency_load_failed"
+    if "FileNotFoundError" in value:
+        return "missing_file_or_executable"
+    return "stderr_present=true" if value else "stderr_present=false"
 
 
 def run_provider(
@@ -19,12 +35,17 @@ def run_provider(
     if cancel:
         cancel.raise_if_cancelled()
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(str(Path(p).resolve()) for p in sys.path if p)
+    # Do not rely on the GUI launcher's current directory or sys.path.  The
+    # child imports this module from <repo>/src/quyetboit_studio/services, so
+    # its grandparent is the import root needed by ``python -m``.
+    source_root = Path(__file__).resolve().parents[2]
+    inherited_paths = [str(Path(p).resolve()) for p in sys.path if p]
+    env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys([str(source_root), *inherited_paths]))
     process = subprocess.Popen(
         [sys.executable, "-m", "quyetboit_studio.services.football_worker"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         env=env,
@@ -32,6 +53,22 @@ def run_provider(
         start_new_session=os.name != "nt",
     )
     finished = threading.Event()
+    stderr_lines: list[str] = []
+
+    def drain_stderr() -> None:
+        if process.stderr is None:
+            return
+        for line in process.stderr:
+            # Keep a bounded in-memory tail only.  Raw stderr is never shown
+            # or persisted because it can contain provider URLs/tokens.
+            stderr_lines.append(line)
+            if len(stderr_lines) > 32:
+                del stderr_lines[:-32]
+
+    stderr_reader = threading.Thread(
+        target=drain_stderr, name="football-provider-stderr", daemon=True
+    )
+    stderr_reader.start()
 
     def terminate_tree() -> None:
         if process.poll() is not None:
@@ -74,16 +111,21 @@ def run_provider(
             else:
                 result = item
         process.wait()
+        stderr_reader.join(timeout=5)
         if cancel:
             cancel.raise_if_cancelled()
         if result and "error" in result:
             raise PipelineError(
-                result["error"], result["message"], retryable=result.get("retryable", False)
+                result["error"], result["message"], retryable=result.get("retryable", False),
+                debug_detail=result.get("detail", ""), log_detail=result.get("detail", ""),
             )
         if process.returncode or not result:
+            detail = f"exit_code={process.returncode}; {_safe_stderr_detail(stderr_lines)}"
             raise PipelineError(
-                "football_provider_failed",
-                "Dịch vụ không hoàn tất. Hãy kiểm tra kết nối và thử lại.",
+                "football_provider_process_failed",
+                "Tiến trình tải nguồn hoặc tạo voice đã dừng bất thường. Xem nhật ký an toàn bên dưới.",
+                debug_detail=detail,
+                log_detail=detail,
             )
         return result
     except OSError as exc:
@@ -99,6 +141,9 @@ def run_provider(
         watcher.join(timeout=5)
         if process.stdout:
             process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+        stderr_reader.join(timeout=5)
         if process.stdin and not process.stdin.closed:
             process.stdin.close()
 
@@ -107,8 +152,12 @@ def main() -> None:
     # Only whitelisted operations. Credentials are loaded inside the child from
     # their existing secure stores. Only an optional filename travels through IPC;
     # credential contents never travel through JSON or command lines.
-    from ..persistence import redact_text
-
+    # A Windows process started outside an UTF-8 terminal otherwise inherits
+    # cp1252.  Both IPC directions carry Vietnamese title/TTS text.
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     try:
         payload = json.load(sys.stdin)
         if payload["operation"] == "download":
@@ -155,11 +204,13 @@ def main() -> None:
             "error": exc.error_code,
             "message": redact_text(exc.user_message),
             "retryable": exc.retryable,
+            "detail": redact_text(exc.log_detail or f"code={exc.error_code}"),
         }
     except Exception:  # noqa: BLE001 - never expose provider diagnostics across IPC
         result = {
             "error": "football_provider_failed",
             "message": "Dịch vụ không hoàn tất. Hãy kiểm tra kết nối và cấu hình.",
+            "detail": "unexpected_provider_exception",
         }
     print(json.dumps(result, ensure_ascii=False), flush=True)
 

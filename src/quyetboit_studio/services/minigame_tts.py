@@ -329,6 +329,7 @@ class GoogleCloudSpeechService:
                 provider="google_tts",
                 retryable=False,
                 debug_detail=type(exc).__name__,
+                log_detail=f"exception_type={type(exc).__name__}",
             ) from exc
         if cancel:
             cancel.raise_if_cancelled()
